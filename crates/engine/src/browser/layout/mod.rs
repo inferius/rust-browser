@@ -796,6 +796,10 @@ pub struct LayoutBox {
     /// (real italic font variant je TODO).
     pub italic: bool,
     pub border_radius: f32,
+    /// border-radius zadany v % (frakce 0..1). Resolvuje se proti min(rect.w,h)
+    /// PO layoutu (box rozmery zname az tehdy). 0 = neni %. POZN: per-corner
+    /// (asym/blob) zatim aproximovan uniform max hodnotou (jeden f32).
+    pub border_radius_pct: f32,
     pub line_height: f32,
     /// True kdyz line_height byl explicitly set z cascade (analogicky
     /// font_size_explicit). Drive `(lh - 1.2).abs() < 0.001` sentinel test
@@ -1214,6 +1218,7 @@ impl LayoutBox {
             font_weight: 400,
             italic: false,
             border_radius: 0.0,
+            border_radius_pct: 0.0,
             line_height: 1.2,
             line_height_explicit: false,
             position: Position::Static,
@@ -2509,6 +2514,25 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     r
 }
 
+/// Parse border-radius value -> (radius, is_pct). Podporuje "12px", "50%",
+/// multi-value "a b c d" (4 corners) a slash "x-radii / y-radii". Per-corner
+/// SDF zatim neni - bereme MAX hodnotu jako uniform aproximaci (lepsi nez 0).
+/// % vraci frakci (0..1, resolve proti rect po layoutu); px vraci pixely.
+fn parse_border_radius_max(s: &str) -> (f32, bool) {
+    // Slash deli horizontal / vertical radii - pro uniform staci horizontal cast.
+    let xpart = s.split('/').next().unwrap_or(s);
+    let mut max_px = 0.0_f32;
+    let mut max_pct = 0.0_f32;
+    for tok in xpart.split_whitespace() {
+        if let Some(p) = tok.strip_suffix('%') {
+            if let Ok(v) = p.trim().parse::<f32>() { max_pct = max_pct.max(v); }
+        } else {
+            max_px = max_px.max(parse_length(tok));
+        }
+    }
+    if max_pct > 0.0 { (max_pct / 100.0, true) } else { (max_px, false) }
+}
+
 fn build_box_inner_impl(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::cascade::PseudoStyleMap, counters: &mut HashMap<String, i32>) -> LayoutBox {
     // Debug breakpoint hook: BP_TAG/BP_ID/BP_CLASS env vars + IDE breakpoint na
     // `breakpoint_build` v src/debug_bp.rs.
@@ -3260,9 +3284,18 @@ fn build_box_inner_impl(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &supe
         let v = fs.trim();
         bx.italic = v == "italic" || v == "oblique";
     }
-    // Border radius
+    // Border radius - podporuje px, %, multi-value ("a b c d"), slash ("x / y").
+    // % se resolvuje az po layoutu (border_radius_pct). Per-corric aproximace:
+    // bereme MAX hodnotu jako uniform radius (per-corner SDF je TODO).
     if let Some(br) = s.get("border-radius") {
-        bx.border_radius = parse_length(br);
+        let (val, is_pct) = parse_border_radius_max(br);
+        if is_pct {
+            bx.border_radius_pct = val;
+            bx.border_radius = 0.0;
+        } else {
+            bx.border_radius = val;
+            bx.border_radius_pct = 0.0;
+        }
     }
     // Explicit width / height z CSS (auto = None, min/max-content = special).
     // min-content: shrink-to-fit odhadem z textu. max-content: max-intrinsic.

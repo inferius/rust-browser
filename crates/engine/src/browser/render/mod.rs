@@ -889,6 +889,12 @@ fn apply_paint_animations_inner(box_: &mut crate::browser::layout::LayoutBox,
                                  parent_layout_dx: f32,
                                  parent_layout_dy: f32) {
     let node_id = box_.node.as_ref().map(|n| Rc::as_ptr(n) as usize).unwrap_or(0);
+    // Resolve % border-radius proti finalnim rozmerum boxu (zname az po layoutu).
+    // border-radius:50% na 90px boxu = 45px = kruh. Driv % bylo jen u pseudo-elem.
+    if box_.border_radius_pct > 0.0 {
+        box_.border_radius = box_.border_radius_pct
+            * box_.rect.width.min(box_.rect.height);
+    }
     let original_width = box_.rect.width;
     // Baseline rect: pri prvni apply zachyti pozici PRED jakoukoli animaci.
     // Dalsi frames cti baseline misto current rect aby se animace neakumulovala.
@@ -4364,11 +4370,18 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // Slouci desitky CursorMoved/frame do jednoho = bez hover lagu.
             if let Some((hx, hy)) = self.pending_hover.take() {
                 if let Some(wv) = self.webview.as_mut() {
+                    let _t0 = std::time::Instant::now();
                     let _ = wv.handle_input(crate::embed::InputEvent::MouseMove {
                         x: hx, y: hy,
                         modifiers: Default::default(),
                         coalesced: Vec::new(),
                     });
+                    if std::env::var("RWE_PROF").is_ok() {
+                        let ms = _t0.elapsed().as_secs_f32() * 1000.0;
+                        if ms > 1.0 {
+                            eprintln!("[INPUT] handle_input(hover MouseMove) = {:.1}ms (hit-test + DOM eventy + JS)", ms);
+                        }
+                    }
                 }
             }
             self.sync_devtools_from_interp();
