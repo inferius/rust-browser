@@ -1928,8 +1928,20 @@ fn parse_transform_funcs(s: &str) -> Vec<(String, Vec<(f32, String)>)> {
 /// Per-function interpolace transform stringu. None pokud se funkce neshoduji
 /// (pocet/jmena/pocet args) - caller pak snapne.
 fn interpolate_transform_value(from: &str, to: &str, t: f32) -> Option<String> {
-    let f = parse_transform_funcs(from);
-    let g = parse_transform_funcs(to);
+    let mut f = parse_transform_funcs(from);
+    let mut g = parse_transform_funcs(to);
+    // "none"/prazdny -> synthesize IDENTITY matching druhe strany (scale->1,
+    // translate/rotate/skew->0 se stejnymi jednotkami). Bez tohoto hover transform
+    // z none na scale(2) snapnul (ruzny pocet funkci) = "transform na hover
+    // neanimuje".
+    let ident = |funcs: &[(String, Vec<(f32, String)>)]| -> Vec<(String, Vec<(f32, String)>)> {
+        funcs.iter().map(|(n, args)| {
+            let iv = if n.starts_with("scale") { 1.0 } else { 0.0 };
+            (n.clone(), args.iter().map(|(_, u)| (iv, u.clone())).collect())
+        }).collect()
+    };
+    if f.is_empty() && !g.is_empty() { f = ident(&g); }
+    if g.is_empty() && !f.is_empty() { g = ident(&f); }
     if f.is_empty() || f.len() != g.len() { return None; }
     let mut parts = Vec::with_capacity(f.len());
     for (a, c) in f.iter().zip(g.iter()) {

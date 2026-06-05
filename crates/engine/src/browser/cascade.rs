@@ -4070,7 +4070,19 @@ pub fn detect_transitions(
 
             for prop in props_to_check {
                 let cur_val = cur.get(prop).map(|s| s.as_str()).unwrap_or("");
-                let prev_val = prev.get(prop).map(|s| s.as_str()).unwrap_or("");
+                let prev_val_raw = prev.get(prop).map(|s| s.as_str()).unwrap_or("");
+                // Prazdny prev = property na INITIAL value. Bez tohoto hover co
+                // PRIDA transform/opacity (base nema) = transition se nedetekoval
+                // (`!prev_val.is_empty()`) = skok bez animace. CSS: transition z
+                // initial (transform:none, opacity:1) na hover hodnotu animuje.
+                let prev_val = if prev_val_raw.is_empty() {
+                    match prop.as_str() {
+                        "transform" => "none",
+                        "opacity" => "1",
+                        "filter" | "backdrop-filter" => "none",
+                        _ => prev_val_raw,
+                    }
+                } else { prev_val_raw };
                 if cur_val != prev_val && !prev_val.is_empty() {
                     // Skip pokud uz transition na tu prop existuje
                     if result.iter().any(|t| t.node_id == *node_id && t.property == *prop) { continue; }
