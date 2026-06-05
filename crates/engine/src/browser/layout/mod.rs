@@ -1989,6 +1989,20 @@ pub fn interpolate_keyframes(
     frames: &[(f32, Vec<super::css_parser::Declaration>)],
     progress: f32,
 ) -> std::collections::HashMap<String, String> {
+    interpolate_keyframes_eased(frames, progress, "linear")
+}
+
+/// Jako interpolate_keyframes ale aplikuje easing PER-SEGMENT (mezi sousednimi
+/// keyframy), per CSS Animations §3. KLIC pro step-end/steps(): driv se easing
+/// aplikoval na CELKOVY progress -> step-end skocil 0->1 -> prostredni keyframe
+/// (napr. blink 50% opacity:0) se NIKDY nedosahl = blink staticky. Per-segment
+/// easing to opravi (segment 0%->50% step-end = drz prvni do konce, pak skok).
+pub fn interpolate_keyframes_eased(
+    frames: &[(f32, Vec<super::css_parser::Declaration>)],
+    progress: f32,
+    timing_fn: &str,
+) -> std::collections::HashMap<String, String> {
+    let ease = |t: f32| crate::browser::cascade::apply_easing(t, timing_fn);
     let mut out = std::collections::HashMap::new();
     if frames.is_empty() { return out; }
     // CSS Animations §3: chybejici 0%/100% keyframe se synthetizuje z elementoveho
@@ -2007,7 +2021,7 @@ pub fn interpolate_keyframes(
     if progress <= first.0 {
         // Prvni frame NENI na 0% -> interpoluj initial -> first.
         if first.0 > 0.001 && progress < first.0 {
-            let t = (progress / first.0).clamp(0.0, 1.0);
+            let t = ease((progress / first.0).clamp(0.0, 1.0));
             for d in &first.1 {
                 let init = initial_kf(&d.property);
                 if !init.is_empty() {
@@ -2027,7 +2041,7 @@ pub fn interpolate_keyframes(
     if progress >= last.0 {
         // Posledni frame NENI na 100% -> interpoluj last -> initial.
         if last.0 < 0.999 && progress > last.0 {
-            let t = ((progress - last.0) / (1.0 - last.0)).clamp(0.0, 1.0);
+            let t = ease(((progress - last.0) / (1.0 - last.0)).clamp(0.0, 1.0));
             for d in &last.1 {
                 let init = initial_kf(&d.property);
                 if !init.is_empty() {
@@ -2048,8 +2062,8 @@ pub fn interpolate_keyframes(
         let (p0, decls0) = (&win[0].0, &win[0].1);
         let (p1, decls1) = (&win[1].0, &win[1].1);
         if progress >= *p0 && progress <= *p1 {
-            let t = (progress - p0) / (p1 - p0);
-            // Interpoluj kazdou prop pokud je v obou + cislo
+            let t = ease((progress - p0) / (p1 - p0));
+            // Interpoluj kazdou prop pokud je v obou + cislo (t uz eased per-segment)
             for d0 in decls0 {
                 let d1 = decls1.iter().find(|d| d.property == d0.property);
                 if let Some(d1) = d1 {

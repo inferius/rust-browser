@@ -3956,7 +3956,7 @@ fn parse_time(s: &str) -> Option<f32> {
 }
 
 /// Aplikuje easing na linearni progress (0..1).
-fn apply_easing(t: f32, easing: &str) -> f32 {
+pub fn apply_easing(t: f32, easing: &str) -> f32 {
     let t = t.clamp(0.0, 1.0);
     let easing = easing.trim();
     match easing {
@@ -4271,10 +4271,11 @@ pub fn apply_animations(
         };
         if reverse { local = 1.0 - local; }
 
-        // Easing
-        let progress = apply_easing(local, &spec.timing_function);
-
-        let interp_vals = interpolate_keyframes(frames, progress);
+        // Easing: PER-SEGMENT (uvnitr interpolate_keyframes_eased), NE na celkovy
+        // progress. Driv apply_easing(local) na celek = step-end/steps preskocil
+        // prostredni keyframy (blink stuck). Predame RAW local + timing.
+        let interp_vals = super::layout::interpolate_keyframes_eased(
+            frames, local, &spec.timing_function);
         let styles = Rc::make_mut(styles_rc);
         for (k, v) in interp_vals { styles.insert(k, v); }
         any_active = true;
