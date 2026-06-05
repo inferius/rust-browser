@@ -2,9 +2,29 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`, `debug_utils.md`.
 
-## Session N+29: hover transitions "1 FPS" + grid template-areas + keyframe animace
+## Session N+29: hover transitions + grid template-areas + keyframe animace + hover PERF
 
-Pokracovani chyby-rbro doc fixu. 3 systemove bugy:
+Pokracovani chyby-rbro doc fixu. Systemove bugy:
+
+### Hover PERF "velke zpozdeni" (akumuluje s hoverem, pak settle) - 3 fixy
+- **VIEWPORT-CULL structural_fp** (hlavni, paint 9ms->0.6ms): off-screen content
+  boxy menily structural_fp kazdy frame (colorCycle bg animace mimo viewport) ->
+  root layer damaged -> full root re-paint (tree walk pro build_layered_display_list
+  warm+text_runs) i kdyz NENI videt. compute_fingerprints ted skipne off-screen
+  boxy (600px buffer; set_viewport_cull pred extract_layer_tree). Visible animace
+  funguji dal. POZN: visible non-layer color animace porad stoji full root re-paint
+  - dalsi fix by byl tile-based display_list (TODO).
+- **Cascade cache cap RETAIN** current dom_version misto clear-all: clear na 8000
+  delal cold cascade (12ms) + layout miss (19ms) = 41ms hitch; rychly hover = caste
+  = "cim vic hover tim vic zpozdeni". Retain drzi warm working set.
+- **Warm atlas jen DAMAGED layery** (ne vsechny pri ANY damage).
+- Vysledek: IDLE 210 FPS (render 4.7ms; wall-clock 111 FPS limited present/pacing).
+  Steady hover 13ms->4.7ms. Cycling 17ms->6.9ms, spiky 9%->3.8%.
+- Debug: `RWE_FORCE_HOVER=<class>[,<class>...]` [+`_ALT`], `RWE_PROF`, `RWE_DAMAGE_DBG`.
+- ZBYVA: cycling spiky 3.8% (dom mutace -> cascade cold + layout miss = incremental
+  layout TODO); wall-clock 9ms vs render 4.7ms (present/vsync/JS pacing).
+
+### 3 systemove bugy:
 
 - **Hover transition "1 FPS" + zaseknuti napul + nevraceni** (sekce 04 Transforms):
   dva propojene root cause:
