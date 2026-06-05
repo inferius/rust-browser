@@ -253,6 +253,13 @@ pub struct WebView {
     /// jen - color/background change neinvaliduje. Pri shode reuse
     /// last_layout_root + skip layout_tree call (363ms drop na <1ms v debug).
     pub(crate) layout_cache_key: Option<(u64, u64, u32, u32)>,
+    /// Cache PseudoStyleMap (::before/::after/::selection/::marker). cascade_pseudo
+    /// je ~6ms (re-match vsech pseudo selektoru pro vsechny nody) a bezel na KAZDEM
+    /// layout cache miss - i kdyz hover meni jen layout prop a pseudo styly se
+    /// nezmenily. Klic = (dom_style_version, stylesheets_sig) -> reuse kdyz se DOM
+    /// strukturalne/tridami nemenil. (`:hover::before` edge case nepokryt - vzacne.)
+    pub(crate) pseudo_map_cache: Option<crate::browser::cascade::PseudoStyleMap>,
+    pub(crate) pseudo_map_cache_key: Option<(u64, usize)>,
     /// Per-element matched_decls cache invalidation tracker. Pres dom_version
     /// change clear cache (node_ptrs mohou byt mrtvych po DOM mutaci).
     pub(crate) last_matched_cache_dom_ver: u64,
@@ -541,6 +548,8 @@ impl WebView {
             last_render_dom_version: 0,
             cascade_cache_key: None,
             cascade_cache_value: None,
+            pseudo_map_cache: None,
+            pseudo_map_cache_key: None,
             layout_fp_cache: None,
             paint_fp_cache: None,
             hit_test_cache: None,
@@ -2621,11 +2630,29 @@ impl WebView {
             // Build PseudoStyleMap (::before / ::after / ::marker / atd) - bez
             // tohoto nikdy build_pseudo_box NE-emit pseudo content. Drive bylo
             // empty_pseudo = vsechny ::before/::after invisible.
-            let pseudo_map = crate::browser::cascade::cascade_pseudo(&doc.root, &self.stylesheets);
+            let t_ps = std::time::Instant::now();
+            // Cache cascade_pseudo (~6ms) - reuse pokud se DOM strukturalne/tridami
+            // nezmenil (dom_style_version + stylesheets sig stejne). Hover co meni
+            // jen layout prop (padding/border) tim nemusi re-matchovat vsechny
+            // pseudo selektory.
+            let pseudo_key = (
+                dom_style_ver,
+                self.stylesheets.len()
+                    + self.stylesheets.iter().map(|s| s.rules.len()).sum::<usize>(),
+            );
+            let pseudo_map = if self.pseudo_map_cache_key == Some(pseudo_key) {
+                self.pseudo_map_cache.as_ref().unwrap().clone()
+            } else {
+                let m = crate::browser::cascade::cascade_pseudo(&doc.root, &self.stylesheets);
+                self.pseudo_map_cache = Some(m.clone());
+                self.pseudo_map_cache_key = Some(pseudo_key);
+                m
+            };
             let t = std::time::Instant::now();
             let r = crate::browser::layout::layout_tree_with_pseudo_cached(
                 &doc.root, &style_map, &pseudo_map, viewport_w, viewport_h,
                 self.last_layout_root.as_ref());
+            let _ = t_ps;
             let elapsed = t.elapsed().as_secs_f32() * 1000.0;
             if elapsed > 100.0 {
                 let node_count = count_nodes(&doc.root);
@@ -2840,8 +2867,13 @@ impl WebView {
             &layer_tree, &layout_root, self.scroll_y, viewport_h,
             &mut self.layer_paint_cache);
 
-        // D4 GPU layer pipeline pres env var prepinac (debug).
-        // RWE_LAYER_GPU_OFF=1 -> monolithic. Default ON.
+        // D4 GPU layer pipeline pres env var prepinac.
+        // ZMENA: default MONOLITHIC (opt-in layer mode pres RWE_LAYER_GPU_ON).
+        // Layer compositor re-renderoval layery pri kazde hover/layout zmene =
+        // paint 9-280ms behem mousingu (vs 0.2-5ms monolithic). Damage tracking
+        // nepomahal na animovanych strankach (vse se meni kazdy frame). Monolithic
+        // = 3-5x rychlejsi interakce. Layer mode TODO: fix damage tracking aby
+        // re-renderoval jen zmenene layery, pak znovu zvazit default.
         // Auto-disable D4 pri layer texture exceed GPU max dim (= 8192 default
         // down-level baseline). Pri page_h * scale > max_tex, layer texture
         // clamped = vertical compression v texture = compose stretch back =
@@ -2850,7 +2882,7 @@ impl WebView {
         // tile path activates per-layer = no single big texture alloc, no clamp.
         // Drive any_oversized DISABLOVAL D4 cele = monolithic fallback = user
         // nechce fallback. Tile path handluje oversized.
-        let layer_gpu_mode = std::env::var("RWE_LAYER_GPU_OFF").is_err();
+        let layer_gpu_mode = std::env::var("RWE_LAYER_GPU_ON").is_ok();
         let mut d4_overlay_start: usize = 0;
         if layer_gpu_mode {
             // CRITICAL: warm atlas PRED layer raster. Pri D4 layer-mode build_vertices

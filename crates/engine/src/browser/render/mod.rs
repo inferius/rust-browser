@@ -1217,6 +1217,12 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         last_render_instant: Option<std::time::Instant>,
         /// Throttle update window title FPS (set_title je syscall, ne kazdy frame).
         frames_since_title: u32,
+        /// COALESCING hoveru: posledni mouse pozice (viewport coords) cekajici na
+        /// zpracovani. CursorMoved jen ulozi pozici; webview hover pipeline
+        /// (hit-test + JS dispatch + :hover cascade) se spusti JEDNOU za frame v
+        /// renderu z teto pozice. Bez toho se kazdy z desitek CursorMoved/frame
+        /// zpracoval plne -> queue buildup = hover lag + zbytecna prace.
+        pending_hover: Option<(f32, f32)>,
         // animation_origin / animation_pause_start / paused_animation_nodes /
         // animations_scrubber_drag / paused_node_styles fields vsechny smazany
         // Phase 99: effective animace cas drzi webview.animation_origin. App-side
@@ -1647,14 +1653,12 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     let hov_in_devtools = self.devtools.panel_open
                         && hov_raw_y >= hov_viewport_h - hov_panel_h;
                     if !hov_in_devtools {
+                        // COALESCING: jen ulozim posledni pozici; webview hover
+                        // pipeline (hit-test + JS mouseover/move dispatch + :hover
+                        // cascade) se spusti 1x/frame v render_via_webview. Desitky
+                        // CursorMoved/frame se tim slouci -> bez queue lagu.
                         let vp_x = self.mouse_x - self.scroll_x();
-                        if let Some(wv) = self.webview.as_mut() {
-                            let _ = wv.handle_input(crate::embed::InputEvent::MouseMove {
-                                x: vp_x, y: hov_raw_y,
-                                modifiers: Default::default(),
-                                coalesced: Vec::new(),
-                            });
-                        }
+                        self.pending_hover = Some((vp_x, hov_raw_y));
                         if let Some(w) = &self.window { w.request_redraw(); }
                     }
                     self.update_hover();
@@ -4334,6 +4338,18 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// fallback pres `RWE_RENDER_LEGACY=1` env var.
         fn render_via_webview(&mut self) {
             self.poll_debug_runner();
+            // COALESCED hover: zpracuj posledni mouse pozici 1x pred renderem
+            // (hit-test + JS mouseover/mousemove dispatch + :hover cascade update).
+            // Slouci desitky CursorMoved/frame do jednoho = bez hover lagu.
+            if let Some((hx, hy)) = self.pending_hover.take() {
+                if let Some(wv) = self.webview.as_mut() {
+                    let _ = wv.handle_input(crate::embed::InputEvent::MouseMove {
+                        x: hx, y: hy,
+                        modifiers: Default::default(),
+                        coalesced: Vec::new(),
+                    });
+                }
+            }
             self.sync_devtools_from_interp();
             let _ = self.smooth_scroll_tick();
             // Sync zoom from App-side state (Ctrl+= adjusts) do webview.
@@ -4567,6 +4583,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         show_fps: false,
         last_render_instant: None,
         frames_since_title: 0,
+        pending_hover: None,
         open_select: None,
         auto_devtools,
         window: None,
