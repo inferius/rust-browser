@@ -43,6 +43,19 @@ thread_local! {
 /// (Rc::as_ptr(self.document.root)), `dom_version` = JS interp counter.
 pub fn set_cascade_ctx(host_id: u64, dom_version: u64) {
     CASCADE_CTX.with(|c| c.set((host_id, dom_version)));
+    // Bound cache growth. Klic obsahuje dom_version + hover_bit - behem mousingu
+    // (logEvt DOM mutace bumpne dom_version kazdy frame, hover_bit se meni)
+    // pribyvaji ~N nodu novych entries KAZDY frame a nikdy se neevictuji (clear
+    // je disabled pres multi-WV konflikt). = memory leak ~20MB/4s + pomalejsi
+    // lookup = "cim vic hover, tim pomalejsi". Pri prekroceni capu clear vse -
+    // cache stejne nepomaha kdyz dom_version meni kazdy frame. Static page
+    // (~667 nodu x 2 hover stavy ~1300 entries) cap nikdy netrigne.
+    const CAP: usize = 8000;
+    if MATCHED_DECLS_CACHE.with(|c| c.borrow().len()) > CAP {
+        MATCHED_DECLS_CACHE.with(|c| c.borrow_mut().clear());
+        WALK_OUTPUT_CACHE.with(|c| c.borrow_mut().clear());
+        PROPAGATED_ENTRY_CACHE.with(|c| c.borrow_mut().clear());
+    }
 }
 fn get_cascade_ctx() -> (u64, u64) {
     CASCADE_CTX.with(|c| c.get())
