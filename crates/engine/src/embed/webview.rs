@@ -2867,13 +2867,12 @@ impl WebView {
             &layer_tree, &layout_root, self.scroll_y, viewport_h,
             &mut self.layer_paint_cache);
 
-        // D4 GPU layer pipeline pres env var prepinac.
-        // ZMENA: default MONOLITHIC (opt-in layer mode pres RWE_LAYER_GPU_ON).
-        // Layer compositor re-renderoval layery pri kazde hover/layout zmene =
-        // paint 9-280ms behem mousingu (vs 0.2-5ms monolithic). Damage tracking
-        // nepomahal na animovanych strankach (vse se meni kazdy frame). Monolithic
-        // = 3-5x rychlejsi interakce. Layer mode TODO: fix damage tracking aby
-        // re-renderoval jen zmenene layery, pak znovu zvazit default.
+        // D4 GPU layer pipeline pres env var prepinac. Default ON (layer mode).
+        // POZN: transform vytvori LAYER a layer transform aplikuje JEN compositor.
+        // Monolithic (RWE_LAYER_GPU_OFF) ho ztrati -> transform animace ZAMRZNOU.
+        // Proto NELZE defaultit monolithic. Layer compositor overhead pri hoveru
+        // (re-render layeru, paint 9-280ms) je TODO: fix damage tracking aby
+        // re-renderoval jen zmenene layery.
         // Auto-disable D4 pri layer texture exceed GPU max dim (= 8192 default
         // down-level baseline). Pri page_h * scale > max_tex, layer texture
         // clamped = vertical compression v texture = compose stretch back =
@@ -2882,7 +2881,7 @@ impl WebView {
         // tile path activates per-layer = no single big texture alloc, no clamp.
         // Drive any_oversized DISABLOVAL D4 cele = monolithic fallback = user
         // nechce fallback. Tile path handluje oversized.
-        let layer_gpu_mode = std::env::var("RWE_LAYER_GPU_ON").is_ok();
+        let layer_gpu_mode = std::env::var("RWE_LAYER_GPU_OFF").is_err();
         let mut d4_overlay_start: usize = 0;
         if layer_gpu_mode {
             // CRITICAL: warm atlas PRED layer raster. Pri D4 layer-mode build_vertices
