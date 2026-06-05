@@ -4060,29 +4060,39 @@ pub fn detect_transitions(
         let specs = TransitionSpec::from_styles(cur);
         if specs.is_empty() { continue; }
 
+        // Initial value pro property co v cascade chybi (= reset na default).
+        // Bez tohoto reverse transition (un-hover = prop zmizi z cur) nefunguje.
+        let initial_for = |prop: &str| -> &'static str {
+            match prop {
+                "transform" => "none",
+                "opacity" => "1",
+                "filter" | "backdrop-filter" => "none",
+                _ => "",
+            }
+        };
+
         for spec in &specs {
-            // Match: bud "all" nebo konkretni property
-            let props_to_check: Vec<&String> = if spec.property == "all" {
-                cur.keys().collect()
+            // Match: bud "all" nebo konkretni property. KLIC: prop musi byt v cur
+            // NEBO prev - jinak removed prop (un-hover: transform zmizi z cur) se
+            // nezkontroluje = ZADNY reverse = box se nevrati.
+            let props_to_check: Vec<String> = if spec.property == "all" {
+                let mut set: std::collections::HashSet<String> = cur.keys().cloned().collect();
+                set.extend(prev.keys().cloned());
+                set.into_iter().collect()
+            } else if cur.contains_key(&spec.property) || prev.contains_key(&spec.property) {
+                vec![spec.property.clone()]
             } else {
-                if cur.contains_key(&spec.property) { vec![&spec.property] } else { vec![] }
+                vec![]
             };
 
-            for prop in props_to_check {
-                let cur_val = cur.get(prop).map(|s| s.as_str()).unwrap_or("");
+            for prop in &props_to_check {
+                let cur_val_raw = cur.get(prop).map(|s| s.as_str()).unwrap_or("");
                 let prev_val_raw = prev.get(prop).map(|s| s.as_str()).unwrap_or("");
-                // Prazdny prev = property na INITIAL value. Bez tohoto hover co
-                // PRIDA transform/opacity (base nema) = transition se nedetekoval
-                // (`!prev_val.is_empty()`) = skok bez animace. CSS: transition z
-                // initial (transform:none, opacity:1) na hover hodnotu animuje.
-                let prev_val = if prev_val_raw.is_empty() {
-                    match prop.as_str() {
-                        "transform" => "none",
-                        "opacity" => "1",
-                        "filter" | "backdrop-filter" => "none",
-                        _ => prev_val_raw,
-                    }
-                } else { prev_val_raw };
+                // Chybejici prev/cur = property na INITIAL value (transform:none,
+                // opacity:1). Symetricky pro oba smery (hover-on PRIDA prop,
+                // un-hover ODEBERE prop).
+                let prev_val = if prev_val_raw.is_empty() { initial_for(prop) } else { prev_val_raw };
+                let cur_val = if cur_val_raw.is_empty() { initial_for(prop) } else { cur_val_raw };
                 if cur_val != prev_val && !prev_val.is_empty() {
                     // Skip pokud uz transition na tu prop existuje
                     if result.iter().any(|t| t.node_id == *node_id && t.property == *prop) { continue; }

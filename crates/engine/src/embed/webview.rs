@@ -487,6 +487,21 @@ pub fn last_layer_cache_stats() -> LayerCacheStats {
     LAYER_CACHE_STATS.with(|c| c.get())
 }
 
+/// DEBUG: najdi prvni node s danou CSS tridou (pro RWE_FORCE_HOVER mereni).
+fn find_first_node_by_class(bx: &crate::browser::layout::LayoutBox, class: &str) -> Option<usize> {
+    if let Some(n) = &bx.node {
+        if let Some(c) = n.attr("class") {
+            if c.split_whitespace().any(|cls| cls == class) {
+                return Some(std::rc::Rc::as_ptr(n) as usize);
+            }
+        }
+    }
+    for ch in &bx.children {
+        if let Some(id) = find_first_node_by_class(ch, class) { return Some(id); }
+    }
+    None
+}
+
 /// Path lookup LayoutBox dle node_id. Vraci (rect_w, rect_h, content_w, content_h).
 fn find_box_dims(bx: &crate::browser::layout::LayoutBox, node_id: usize)
     -> Option<(f32, f32, f32, f32)>
@@ -2370,6 +2385,27 @@ impl WebView {
         // Pred cascade set thread_local na per-WV hover stav (selectory ctou
         // pres set_hovered_node API). Po render_via NEN0 reset - dalsi WV
         // cascade nastavi pred svym walk.
+        // DEBUG: RWE_FORCE_HOVER=<class> vynuti hover na prvni node s tou tridou
+        // (mereni hover perf bez realne mysi - winit nevidi SetCursorPos).
+        if let Ok(sel) = std::env::var("RWE_FORCE_HOVER") {
+            if let Some(root) = self.last_layout_root.as_ref() {
+                // RWE_FORCE_HOVER_ALT=1 alternuje hover/None kazdy frame =
+                // simuluje prejezd mysi (hovered_node se meni = full cascade miss
+                // + DOM eventy kazdy frame). Bez ALT = steady hover.
+                let alt = std::env::var("RWE_FORCE_HOVER_ALT").is_ok();
+                // Toggle kazdych 40 framu (pomalu - aby transition staci dohrat).
+                thread_local!(static FRAMECNT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) });
+                let on = if alt {
+                    let c = FRAMECNT.with(|t| { let v = t.get() + 1; t.set(v); v });
+                    (c / 40) % 2 == 0
+                } else { true };
+                let target = if on { find_first_node_by_class(root, &sel) } else { None };
+                if self.hovered_node_local != target {
+                    self.hovered_node_local = target;
+                    self.dirty = true;
+                }
+            }
+        }
         crate::browser::cascade::set_hovered_node(self.hovered_node_local);
 
         let prof_t0 = std::time::Instant::now();
@@ -2480,9 +2516,28 @@ impl WebView {
                 }
             }
         }
+        // Cascade BASE (PRED apply_transitions) pro prev_style_map pristi frame.
+        // KLIC: detect_transitions musi porovnavat BASE vs BASE (computed cascade
+        // hodnoty), NE post-transition interpolovane. Driv prev_style_map = mapa
+        // PO apply_transitions = obsahovala "scale(1.300)"; detect ji porovnal s
+        // cascade target "scale(1.3)" -> string mismatch -> spurious no-op
+        // transition kazdy frame -> (a) jitter scale = layer texture realloc =
+        // "1 FPS"; (b) ta spurious transition blokovala REVERSE (4088 check) pri
+        // un-hover -> box se NEVRATIL. Drzenim base se make_mut nize donuti
+        // klonovat (refcount 2) -> base zustane nezmenena.
+        let cascade_base = style_map.clone();
         if !self.active_transitions.is_empty() {
             crate::browser::cascade::apply_transitions(
                 std::rc::Rc::make_mut(&mut style_map), &self.active_transitions, elapsed);
+        }
+        if std::env::var("RWE_TRANS_DBG").is_ok() && !self.active_transitions.is_empty() {
+            for at in &self.active_transitions {
+                let t = (elapsed - at.start_time - at.spec.delay_secs).max(0.0);
+                let prog = (t / at.spec.duration_secs).clamp(0.0, 1.0);
+                eprintln!("[TRANS] node={} prop={} {}->{} prog={:.2} (start={:.2} elapsed={:.2} dur={:.2})",
+                    at.node_id, at.property, at.from_value, at.to_value, prog,
+                    at.start_time, elapsed, at.spec.duration_secs);
+            }
         }
 
         // 1c. CSS @keyframes animation tick - aplikuj current keyframe values
@@ -2569,7 +2624,8 @@ impl WebView {
         }
 
         // Sync prev_style_map pro pristi frame transitions detection.
-        self.prev_style_map = Some(style_map.clone());
+        // Pouzij cascade BASE (ne post-transition style_map) - viz komentar vyse.
+        self.prev_style_map = Some(cascade_base);
         let prof_t1 = std::time::Instant::now();
         self.prof_cascade_ms = prof_t1.duration_since(prof_t0).as_secs_f32() * 1000.0;
 
