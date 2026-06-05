@@ -1991,12 +1991,56 @@ pub fn interpolate_keyframes(
 ) -> std::collections::HashMap<String, String> {
     let mut out = std::collections::HashMap::new();
     if frames.is_empty() { return out; }
-    if progress <= frames[0].0 {
-        for d in &frames[0].1 { out.insert(d.property.clone(), d.value.clone()); }
+    // CSS Animations §3: chybejici 0%/100% keyframe se synthetizuje z elementoveho
+    // base/initial. Bez tohoto napr. `@keyframes spin { to { rotate(360deg) } }`
+    // (jen 100%) vrati vzdy rotate(360)=rotate(0) = STATICKY. Synteza 0%=initial
+    // (transform:none) -> interpoluj none->rotate(360) = realna rotace.
+    let initial_kf = |prop: &str| -> &'static str {
+        match prop {
+            "transform" => "none",
+            "opacity" => "1",
+            "filter" | "backdrop-filter" => "none",
+            _ => "",
+        }
+    };
+    let first = &frames[0];
+    if progress <= first.0 {
+        // Prvni frame NENI na 0% -> interpoluj initial -> first.
+        if first.0 > 0.001 && progress < first.0 {
+            let t = (progress / first.0).clamp(0.0, 1.0);
+            for d in &first.1 {
+                let init = initial_kf(&d.property);
+                if !init.is_empty() {
+                    if let Some(v) = interpolate_css_value(&d.property, init, &d.value, t) {
+                        out.insert(d.property.clone(), v);
+                        continue;
+                    }
+                }
+                out.insert(d.property.clone(), d.value.clone());
+            }
+            return out;
+        }
+        for d in &first.1 { out.insert(d.property.clone(), d.value.clone()); }
         return out;
     }
-    if progress >= frames.last().unwrap().0 {
-        for d in &frames.last().unwrap().1 { out.insert(d.property.clone(), d.value.clone()); }
+    let last = frames.last().unwrap();
+    if progress >= last.0 {
+        // Posledni frame NENI na 100% -> interpoluj last -> initial.
+        if last.0 < 0.999 && progress > last.0 {
+            let t = ((progress - last.0) / (1.0 - last.0)).clamp(0.0, 1.0);
+            for d in &last.1 {
+                let init = initial_kf(&d.property);
+                if !init.is_empty() {
+                    if let Some(v) = interpolate_css_value(&d.property, &d.value, init, t) {
+                        out.insert(d.property.clone(), v);
+                        continue;
+                    }
+                }
+                out.insert(d.property.clone(), d.value.clone());
+            }
+            return out;
+        }
+        for d in &last.1 { out.insert(d.property.clone(), d.value.clone()); }
         return out;
     }
     // Najdi mezi-rame

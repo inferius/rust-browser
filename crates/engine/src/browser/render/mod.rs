@@ -942,9 +942,20 @@ fn apply_paint_animations_inner(box_: &mut crate::browser::layout::LayoutBox,
                 box_.text_color = Some(rgb);
             }
         }
-        if let Some(c) = styles.get("background-color") {
-            if let Some(rgb) = crate::browser::layout::parse_color(c) {
-                box_.bg_color = Some(rgb);
+        // Animovana bg barva. KLIC: base "background:#335" vytvori backgrounds
+        // layer se solid barvou a paint_box pak SKIPNE bx.bg_color
+        // (bg_color_handled_by_layers). Takze nestaci nastavit bg_color - musime
+        // updatnout i barvu backgrounds layeru, jinak se animace (colorCycle apod.)
+        // nezobrazi. Zkousime "background-color" i "background" shorthand (keyframes
+        // neexpanduji shorthand); "background" prepise (= ten kam animace zapsala).
+        for prop in ["background-color", "background"] {
+            if let Some(c) = styles.get(prop) {
+                if let Some(rgb) = crate::browser::layout::parse_color(c.trim()) {
+                    box_.bg_color = Some(rgb);
+                    for layer in box_.backgrounds.iter_mut() {
+                        if layer.color.is_some() { layer.color = Some(rgb); }
+                    }
+                }
             }
         }
         if let Some(t) = styles.get("transform") {
