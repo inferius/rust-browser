@@ -2,6 +2,35 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`, `debug_utils.md`.
 
+## Session N+29: hover transitions "1 FPS" + grid template-areas + keyframe animace
+
+Pokracovani chyby-rbro doc fixu. 3 systemove bugy:
+
+- **Hover transition "1 FPS" + zaseknuti napul + nevraceni** (sekce 04 Transforms):
+  dva propojene root cause:
+  1. `prev_style_map` = mapa PO apply_transitions (interpolovane "scale(1.300)"),
+     porovnana s cascade target "scale(1.3)" = string mismatch = SPURIOUS no-op
+     transition kazdy frame = jitter scale -> layer texture realloc = "1 FPS";
+     navic spurious transition blokovala REVERSE (4088 check) = box se nevratil.
+     Fix: prev_style_map = cascade BASE (pred apply_transitions). base-vs-base.
+  2. detect_transitions iteroval jen cur.keys() -> pri un-hover transform ZMIZI
+     z cascade = reverse se nezkontroluje. Fix: props_to_check zahrne prop v cur
+     NEBO prev + cur_val/prev_val initial fallback (transform:none, opacity:1).
+  Vysledek: ciste forward<->reverse, toggle hover 15ms -> 4.5ms (200 FPS).
+  Debug harness: `RWE_FORCE_HOVER=<class>` [+`_ALT`] (winit nevidi syntet. mys).
+
+- **grid-template-areas** (screen 3 doc): named grid-area (grid-area: header) se
+  VUBEC nečetla ani neresolvovala -> auto-place = rozbity layout. Implementovan
+  novy LayoutBox.grid_area + parse_template_areas() + resolution v layout_grid
+  (name -> row/col lines). header/footer span full, sidebar|content|aside middle.
+
+- **Keyframe animace flaky** (jen ~3-4 fungovaly):
+  1. `spin { to { rotate(360deg) } }` (jen 100%) STATICKY - interpolate_keyframes
+     vratil jediny frame. Fix: synteza chybejiciho 0%/100% z initial (CSS §3).
+  2. `colorCycle { background: ... }` neanimoval - base bg vytvori backgrounds
+     LAYER, paint skipne bg_color. Fix: apply_paint_animations updatuje i barvu
+     backgrounds layeru.
+
 ## Session N+28: SYSTEMOVA oprava layer compositor transform clipu (NE workaround)
 
 **KLICOVE: layer compositor (WebRender-style) je DEFAULT a transform clip je
