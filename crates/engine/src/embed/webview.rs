@@ -2393,13 +2393,21 @@ impl WebView {
                 // simuluje prejezd mysi (hovered_node se meni = full cascade miss
                 // + DOM eventy kazdy frame). Bez ALT = steady hover.
                 let alt = std::env::var("RWE_FORCE_HOVER_ALT").is_ok();
-                // Toggle kazdych 40 framu (pomalu - aby transition staci dohrat).
+                // ALT: cykli pres comma-separated tridy (simuluje prejezd mysi pres
+                // ruzne boxy = nove transition + texture kazdy prejezd). Toggle
+                // hover/None mezi nimi. Bez ALT = steady hover na prvni tridu.
                 thread_local!(static FRAMECNT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) });
-                let on = if alt {
+                let classes: Vec<&str> = sel.split(',').map(|s| s.trim()).collect();
+                let target = if alt {
                     let c = FRAMECNT.with(|t| { let v = t.get() + 1; t.set(v); v });
-                    (c / 40) % 2 == 0
-                } else { true };
-                let target = if on { find_first_node_by_class(root, &sel) } else { None };
+                    let phase = (c / 12) as usize; // ~12 framu per faze
+                    if phase % 2 == 0 {
+                        let cls = classes[(phase / 2) % classes.len()];
+                        find_first_node_by_class(root, cls)
+                    } else { None }
+                } else {
+                    find_first_node_by_class(root, classes[0])
+                };
                 if self.hovered_node_local != target {
                     self.hovered_node_local = target;
                     self.dirty = true;
@@ -2875,6 +2883,11 @@ impl WebView {
         // L2: per-layer offscreen texture allocator + damage rect detection.
         // Damage: porovnani fingerprint vs prev frame. Same fingerprint = no
         // damage = mozne reuse cached texture (TODO D3+D4).
+        // Set viewport cull PRED extract aby compute_fingerprints ignoroval
+        // off-screen content (off-screen bg/color animace nedamaguje root =
+        // zadny zbytecny 9ms full root re-paint). build_layered_display_list nize
+        // si cull prenastavi sam.
+        crate::browser::paint::set_viewport_cull(self.scroll_y, self.scroll_y + viewport_h);
         let mut layer_tree = crate::browser::compositor::extract_layer_tree(&layout_root);
         // Compositor-driven anim tick - posune progress + override layer
         // opacity/transform values BEZ re-cascade. Pri animaci jen tyhle props
@@ -3009,10 +3022,14 @@ impl WebView {
             // damage_rect.is_some() na ANY layer = need warm new content.
             let any_damaged = flat.iter().any(|l| l.damage_rect.is_some());
             if any_damaged {
-                // Warm per-layer s jeho raster_scale - scale(N) layer warmuje
-                // glyfy v N x vetsim physical_size (matchne N x vetsi layer tex
-                // + boosted build_vertices) = ostry text u scale(N).
+                // Warm JEN DAMAGED layery. Nedamaged layery maji glyfy uz warmnute
+                // z framu kdy byly novy/damaged (atlas je perzistentni). Drive se
+                // warmovaly VSECHNY layery pri ANY damage = iterace 5000+ cmds +
+                // hash kazdy hover frame = ~9ms (hlavni hover lag, "velke zpozdeni").
+                // Per-layer raster_scale - scale(N) layer warmuje glyfy v N x vetsim
+                // physical_size = ostry text u scale(N).
                 for layer in &flat {
+                    if layer.damage_rect.is_none() { continue; }
                     if let Some(cmds) = local_cache.get(&layer.id) {
                         let rs = layer_raster_scale(&layer.transforms);
                         renderer.warm_atlas_for_scaled(cmds, self.base_url.as_deref(), rs);

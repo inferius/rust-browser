@@ -193,8 +193,25 @@ fn compute_fingerprints_inner(
     // opacity + transform: only into full hash (compositor-only props).
     layer.opacity.to_bits().hash(&mut h_full);
     // Content boxes rect + key style props.
+    // VIEWPORT CULL: off-screen content boxy NEhashujeme (s bufferem). Bez tohoto
+    // off-screen animace (napr. colorCycle bg v sekci mimo viewport) meni
+    // structural_fp kazdy frame -> layer damaged -> full root re-paint (~9ms tree
+    // walk) i kdyz neni videt. Browsery off-screen damage ignoruji dokud
+    // nescrollujes. Scroll meni cull bounds -> box se "objevi" v fp -> damage ->
+    // re-paint s aktualni hodnotou (spravne).
+    let cull = crate::browser::paint::viewport_cull_bounds();
+    const CULL_BUF: f32 = 600.0;
     for id in &layer.content_box_ids {
         if let Some(bx) = box_map.get(id) {
+            if let Some((vt, vb)) = cull {
+                let always = matches!(bx.position,
+                    super::layout::Position::Fixed | super::layout::Position::Sticky);
+                if !always {
+                    let top = bx.rect.y;
+                    let bot = bx.rect.y + bx.rect.height;
+                    if bot < vt - CULL_BUF || top > vb + CULL_BUF { continue; }
+                }
+            }
             id.hash(&mut h_full);
             id.hash(&mut h_struct);
             bx.rect.x.to_bits().hash(&mut h_full);

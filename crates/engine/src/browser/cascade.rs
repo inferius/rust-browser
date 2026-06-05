@@ -52,9 +52,14 @@ pub fn set_cascade_ctx(host_id: u64, dom_version: u64) {
     // (~667 nodu x 2 hover stavy ~1300 entries) cap nikdy netrigne.
     const CAP: usize = 8000;
     if MATCHED_DECLS_CACHE.with(|c| c.borrow().len()) > CAP {
-        MATCHED_DECLS_CACHE.with(|c| c.borrow_mut().clear());
-        WALK_OUTPUT_CACHE.with(|c| c.borrow_mut().clear());
-        PROPAGATED_ENTRY_CACHE.with(|c| c.borrow_mut().clear());
+        // RETAIN jen current dom_version (drop stale z minulych dom_ver). Drive
+        // clear() VSECHNO = next frame cold full cascade (~12ms) + layout cache
+        // miss (~19ms) = 41ms hitch. Pri rychlem hoveru caste hitche = "cim vic
+        // hover tim vic zpozdeni, pak settle". Retain drzi WARM working set
+        // (current dom_ver) -> zadny cold cascade -> zadny spike. Klic.1 = dom_ver.
+        MATCHED_DECLS_CACHE.with(|c| c.borrow_mut().retain(|k, _| k.1 == dom_version));
+        WALK_OUTPUT_CACHE.with(|c| c.borrow_mut().retain(|k, _| k.1 == dom_version));
+        PROPAGATED_ENTRY_CACHE.with(|c| c.borrow_mut().retain(|k, _| k.1 == dom_version));
     }
 }
 fn get_cascade_ctx() -> (u64, u64) {

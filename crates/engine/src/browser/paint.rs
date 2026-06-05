@@ -452,6 +452,11 @@ pub fn set_viewport_cull(top: f32, bottom: f32) {
 pub fn clear_viewport_cull() {
     VIEWPORT_CULL.with(|c| c.set(None));
 }
+/// Aktualni viewport cull bounds (top, bottom) v page coords, nebo None.
+/// Pouziva compute_fingerprints aby off-screen content nedamagoval (= re-paint).
+pub fn viewport_cull_bounds() -> Option<(f32, f32)> {
+    VIEWPORT_CULL.with(|c| c.get())
+}
 
 /// Vraci LayoutBox ktery vlastni layer s `layer_id`.
 pub fn find_box_by_node_id(root: &LayoutBox, target_id: usize) -> Option<&LayoutBox> {
