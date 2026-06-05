@@ -105,6 +105,41 @@ fn grid_mark_occupied(
 /// Grid layout entry-point - rozdeli children do gridu.
 /// Pouzije bx.grid_template_columns / bx.grid_template_rows.
 /// Resolve fr units, fixed lengths, auto, percent.
+/// Parse grid-template-areas string -> map name -> (row_start, row_end,
+/// col_start, col_end), vse 1-based grid line cisla (end = exclusive line za
+/// poslednim cell). Format: `"a a b" "a a b" "c c c"` (quoted rows). Tecka "."
+/// = prazdny cell. Per CSS Grid Template Areas L1.
+fn parse_template_areas(s: &str) -> std::collections::HashMap<String, (i32, i32, i32, i32)> {
+    use std::collections::HashMap;
+    // Kazdy quoted retezec = jedna row. Fallback: pokud zadne uvozovky,
+    // split pres newline.
+    let rows: Vec<Vec<String>> = if s.contains('"') {
+        s.split('"')
+            .map(|r| r.split_whitespace().map(|c| c.to_string()).collect::<Vec<_>>())
+            .filter(|r| !r.is_empty())
+            .collect()
+    } else {
+        s.lines()
+            .map(|r| r.split_whitespace().map(|c| c.to_string()).collect::<Vec<_>>())
+            .filter(|r| !r.is_empty())
+            .collect()
+    };
+    let mut map: HashMap<String, (i32, i32, i32, i32)> = HashMap::new();
+    for (r, row) in rows.iter().enumerate() {
+        for (c, name) in row.iter().enumerate() {
+            if name == "." { continue; }
+            let rl = r as i32 + 1; // row line start (1-based)
+            let cl = c as i32 + 1; // col line start
+            let e = map.entry(name.clone()).or_insert((rl, rl + 1, cl, cl + 1));
+            e.0 = e.0.min(rl);
+            e.1 = e.1.max(rl + 1);
+            e.2 = e.2.min(cl);
+            e.3 = e.3.max(cl + 1);
+        }
+    }
+    map
+}
+
 pub fn layout_grid(bx: &mut LayoutBox) {
     let bw_l = bx.border_left_width.unwrap_or(bx.border_width);
     let bw_r = bx.border_right_width.unwrap_or(bx.border_width);
@@ -122,6 +157,25 @@ pub fn layout_grid(bx: &mut LayoutBox) {
     let inner_h = (bx.rect.height - pad_t - pad_b - 2.0 * bx.margin - scrollbar_h).max(0.0);
 
     if bx.children.is_empty() { return; }
+
+    // CSS Grid §8.1: resolve NAMED grid areas (grid-area: header) proti parent
+    // grid-template-areas -> nastav row/column line cisla childu. Driv se
+    // template-areas jen ukladal jako string + named grid-area se ignorovala =
+    // items auto-placed = rozbity layout (header/sidebar/footer spatne).
+    if !bx.grid_template_areas.trim().is_empty() {
+        let areas = parse_template_areas(&bx.grid_template_areas);
+        if !areas.is_empty() {
+            for ch in bx.children.iter_mut() {
+                if ch.grid_area.is_empty() { continue; }
+                if let Some(&(rs, re, cs, ce)) = areas.get(&ch.grid_area) {
+                    ch.grid_row_start = rs;
+                    ch.grid_row_end = re;
+                    ch.grid_column_start = cs;
+                    ch.grid_column_end = ce;
+                }
+            }
+        }
+    }
 
     // Re-resolve gap pct proti inner content dimension.
     let (row_gap, col_gap) = super::resolve_gaps(bx, inner_w, inner_h);

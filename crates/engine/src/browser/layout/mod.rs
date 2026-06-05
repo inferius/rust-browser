@@ -1058,6 +1058,9 @@ pub struct LayoutBox {
     /// grid-area / grid-column / grid-row positioning string.
     pub grid_column: String,
     pub grid_row: String,
+    /// grid-area NAMED area (napr. "header") - resolvuje se v grid layoutu proti
+    /// parent grid_template_areas na row/column lines. Prazdny = bez named area.
+    pub grid_area: String,
     pub grid_auto_columns: String,
     pub grid_auto_rows: String,
     pub grid_auto_flow: String,
@@ -1338,6 +1341,7 @@ impl LayoutBox {
             grid_template_areas: String::new(),
             grid_column: String::new(),
             grid_row: String::new(),
+            grid_area: String::new(),
             grid_auto_columns: String::new(),
             grid_auto_rows: String::new(),
             grid_auto_flow: String::new(),
@@ -2802,6 +2806,39 @@ fn build_box_inner_impl(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &supe
         if st != 0 { bx.grid_row_start = st; }
         if en != 0 { bx.grid_row_end = en; }
         if sp != 0 { bx.grid_row_span = sp; }
+    }
+    // grid-area: bud NAMED area ("header") nebo "row-start / col-start / row-end /
+    // col-end". Named se resolvuje pozdeji v grid layoutu proti parent template-
+    // areas. Numericka forma (s '/') expanduje na grid-row/grid-column.
+    if let Some(ga) = s.get("grid-area") {
+        let ga = ga.trim();
+        if !ga.is_empty() && ga != "auto" {
+            if ga.contains('/') {
+                // Numericka forma: row-start / col-start / row-end / col-end.
+                let parts: Vec<&str> = ga.split('/').map(|p| p.trim()).collect();
+                if let Some(p) = parts.first() {
+                    let (st, _, sp) = parse_grid_line(p);
+                    if st != 0 { bx.grid_row_start = st; }
+                    if sp != 0 { bx.grid_row_span = sp; }
+                }
+                if let Some(p) = parts.get(1) {
+                    let (st, _, sp) = parse_grid_line(p);
+                    if st != 0 { bx.grid_column_start = st; }
+                    if sp != 0 { bx.grid_column_span = sp; }
+                }
+                if let Some(p) = parts.get(2) {
+                    let (st, _, _) = parse_grid_line(p);
+                    if st != 0 { bx.grid_row_end = st; }
+                }
+                if let Some(p) = parts.get(3) {
+                    let (st, _, _) = parse_grid_line(p);
+                    if st != 0 { bx.grid_column_end = st; }
+                }
+            } else {
+                // Named area - ulozit, resolvuje grid layout.
+                bx.grid_area = ga.to_string();
+            }
+        }
     }
     if let Some(gac) = s.get("grid-auto-columns") {
         bx.grid_auto_columns = gac.trim().to_string();
