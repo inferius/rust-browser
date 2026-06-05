@@ -2572,10 +2572,18 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
                 TransformOp::Perspective(_) | TransformOp::None => {} // No-op
             }
         }
-    } else if let Some(TransformOp::Translate(tx, ty)) = bx.transform {
-        let start = box_start;
-        for cmd in &mut cmds[start..] {
-            shift_cmd(cmd, tx, ty);
+    } else if !is_layer_with_transform {
+        // Fallback: singular bx.transform translate kdyz transforms (plural) prazdny.
+        // ALE NE pro layer boxy - tam transform aplikuje GPU compose na quad.
+        // Driv se aplikoval i pro layer boxy = DOUBLE transform: paint pohnul box
+        // o tx,ty + shift na local coords ho castecne vystrkl mimo texturu (clip)
+        // + compose pohnul znovu = "usekany" transformovany obsah. Toto byl root
+        // cause clipu transformu v layer mode.
+        if let Some(TransformOp::Translate(tx, ty)) = bx.transform {
+            let start = box_start;
+            for cmd in &mut cmds[start..] {
+                shift_cmd(cmd, tx, ty);
+            }
         }
     }
     if blend_active {

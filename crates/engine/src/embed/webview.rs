@@ -2897,16 +2897,13 @@ impl WebView {
         let prof_t2 = std::time::Instant::now();
         self.prof_layout_ms = prof_t2.duration_since(prof_t1).as_secs_f32() * 1000.0;
 
-        // D4 GPU layer pipeline pres env var. Default MONOLITHIC (opt-in layer pres
-        // RWE_LAYER_GPU_ON). Monolithic je rychlejsi pri hoveru (zadny per-layer
-        // texture re-render) A NEklipuje transformy: layer 2D transform se aplikuje
-        // pres CPU geometry (pohne vertexy), zatimco layer compose i TransformBegin
-        // offscreen clipuji transformovany obsah na bounds (stagger "usekany").
-        // Driv monolithic ztracel transformy (animace zamrzly) - opraveno
-        // MONOLITHIC_PAINT flagem v paint.rs (geometry aplikuje i pro layer boxy).
-        let layer_gpu_mode = std::env::var("RWE_LAYER_GPU_ON").is_ok();
-        // KLIC: set flag PRED jakymkoli paint_layer_into (build_layered_display_list
-        // i build_layer_local_cache). V monolithic geometry aplikuje transform.
+        // D4 GPU layer pipeline (WebRender-style compositing) = DEFAULT a spravna
+        // architektura. Opt-out monolithic pres RWE_LAYER_GPU_OFF (CPU fallback).
+        // Transform clip v layer compose byl opraven SYSTEMOVE: paint_box uz
+        // neaplikuje bx.transform na layer boxy (else branch guard) - transform
+        // dela vyhradne GPU compose na quad = zadny double-transform/clip.
+        // MONOLITHIC_PAINT flag drzi i CPU fallback korektni (geometry pro transformy).
+        let layer_gpu_mode = std::env::var("RWE_LAYER_GPU_OFF").is_err();
         crate::browser::paint::set_monolithic_paint(!layer_gpu_mode);
 
         // 3. Paint - per-layer pass dle damage_rect.
