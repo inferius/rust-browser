@@ -2,6 +2,27 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`, `debug_utils.md`.
 
+## Session N+27: animace interpolace + hover perf (layer mode, NE monolithic!)
+
+- **Animace neinterpolovaly** (transform/keyframe/transition skakaly z pozice na
+  pozici): parse_length("translateX(0)")=0 -> snap. Fix interpolate_css_value
+  (per-function transform lerp + color rgba). Klicove.
+- **Hover perf**: 3 fixy (vsechny v layer mode, animace zustavaji funkcni):
+  1. cascade_pseudo cache (6ms/layout-miss usetreno).
+  2. hover coalescing (App ulozi posledni mouse pozici, webview hover 1x/frame).
+  3. **cascade cache leak fix** (MATCHED_DECLS/WALK_OUTPUT/PROPAGATED rostly
+     neomezene behem mousingu = progressive slowdown; size cap 8000).
+  Vysledek: engine-test mousing 1326 framu <6ms (drive 328), memory stabilni.
+- **POZOR/POUCENI**: zkousel jsem defaultit MONOLITHIC render (RWE_LAYER_GPU_OFF)
+  pro rychly hover - ROZBILO to transform animace (transform vytvori GPU layer,
+  layer transform aplikuje JEN compositor; monolithic ho flatten ztrati ->
+  animace zamrznou na frame 0). REVERTNUTO. Layer mode je default a NUTNY pro
+  transform animace. Layer compositor hover overhead resi pseudo cache+coalescing
+  +cache cap (ne disable). TODO: layer damage tracking aby re-renderoval jen
+  zmenene layery.
+- ::selection text kontrast (prekresli selected text v selection_color).
+
+
 ## Session N+26: Interaktivita + hover + perf + clip-path + gradienty (chyby-rbro doc)
 
 Prace na bug dokumentu `E:\Data\Downloads\chyby-rbro.docx` (~27 chyb, nas-vs-Chrome
