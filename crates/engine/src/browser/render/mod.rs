@@ -2428,9 +2428,19 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     if self.modifiers.shift_key() {
                         self.set_scroll_target_x((self.scroll_target_x() - logical_scroll).max(0.0));
                     } else {
-                        self.set_scroll_target_y((self.scroll_target_y() - logical_scroll).max(0.0));
+                        // Nejdriv zkus INNER overflow kontejner pod kurzorem
+                        // (overflow:auto/scroll sekce). Pokud scrollnut inner,
+                        // NEscrolluj stranku - jinak se inner thumb nehybal +
+                        // "scrolluju strankou misto sekce".
+                        let dy_inner = -logical_scroll;
+                        let inner = self.webview.as_mut()
+                            .map(|w| w.try_inner_wheel_scroll(self.mouse_x, self.mouse_y, dy_inner))
+                            .unwrap_or(false);
+                        if !inner {
+                            self.set_scroll_target_y((self.scroll_target_y() - logical_scroll).max(0.0));
+                            self.clamp_scroll_to_layout();
+                        }
                     }
-                    self.clamp_scroll_to_layout();
                     self.render();
                 }
                 WindowEvent::RedrawRequested => {

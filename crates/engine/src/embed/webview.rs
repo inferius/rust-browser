@@ -1263,6 +1263,31 @@ impl WebView {
         true
     }
 
+    /// Wheel scroll: zkus scrollnout INNER overflow kontejner pod kurzorem.
+    /// Vrati true = scrollnuto inner (App nesmi scrollovat stranku). false =
+    /// zadny inner kontejner pod kurzorem (App scrolluje stranku). Bez tohoto
+    /// wheel vzdy scrolloval stranku i nad overflow:auto sekci -> inner scrollbar
+    /// thumb se nehybal + "scrolluju strankou misto sekce".
+    pub fn try_inner_wheel_scroll(&mut self, mx: f32, my: f32, dy: f32) -> bool {
+        use crate::browser::scroll::{ScrollableMut, ElementScroll};
+        let target = self.find_scroll_target(mx, my, 0.0, dy);
+        if let Some(node_id) = target {
+            if let Some(root) = &self.last_layout_root {
+                if let Some((rw, rh, cw, ch)) = find_box_dims(root, node_id) {
+                    let mut h = ElementScroll {
+                        map: &mut self.element_scroll,
+                        node_id, rect_w: rw, rect_h: rh,
+                        content_w: cw, content_h: ch,
+                    };
+                    h.scroll_by(0.0, dy);
+                    self.dirty = true;
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// Hit-test layout pres mouse (logical px) + walk up ancestors. Vrati
     /// node_id prvniho scrollable predka kdyz scrolly v dany smer (dx/dy)
     /// jeste zbyva room. Pouziva trait `Scrollable::has_room`. Inak None =
