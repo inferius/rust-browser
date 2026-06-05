@@ -113,8 +113,24 @@ screeny). Testovano vizualne pres PrintWindow capture (engine bin, debug). Commi
   selection_color nad bg (klonuji puvodni Text commandy v selection rectu).
   Cerny text na zlute = citelne (Chrome-like).
 
+### 15. KRITICKY perf: hover/mousing - LAYER COMPOSITOR byl overhead
+- User: "hover ma strasny zpozdeni, funguje nevykone". Profiling rychleho
+  mousingu (250 moves/4s) na engine-test odhalil:
+  - **Layer compositor (D4) re-renderoval VSECHNY layery pri kazde hover/layout
+    zmene -> paint faze 9-280ms** (vs 0.2-5ms monolithic). Damage tracking
+    nepomahal na animovanych strankach. Fix: **default MONOLITHIC** (layer mode
+    opt-in pres RWE_LAYER_GPU_ON). -> 1289 framu <6ms misto 328, 135->147 FPS.
+    TODO: fix layer damage tracking pak znovu zvazit default-on.
+  - cascade_pseudo (~6ms) bezel na kazdem layout cache miss -> cache pseudo_map
+    (klic dom_style_version + sheets sig).
+  - Hover coalescing: App jen ulozi posledni mouse pozici, webview hover pipeline
+    1x/frame v renderu (misto kazdy z desitek CursorMoved/frame plne).
+- Vysledek: vetsina mousing framu <6ms (drive ~1/3 framu 12-37ms).
+- ZBYVA: cascade re-walk 8-12ms kdyz logEvt/DOM mutace invaliduje matched_decls
+  cache (= incremental cascade), layout_tree 6ms subtree rebuild.
+
 ### ZBYVA z chyby-rbro doc (pro dalsi vlakno)
-- **Perf gap na 240fps**: jsme ~100fps (release), Chrome 240. Per-frame ~9ms =
+- **Perf gap na 240fps**: jsme ~135fps idle (release). Per-frame ~9ms =
   layout 3ms + SVG resvg re-raster KAZDY frame (wave) + canvas + rAF JS. SVG
   re-raster pres resvg je drahy - potreba fast-path nebo cache invalidace jen pri
   realne zmene. Layout clone+layer-tree taky.
