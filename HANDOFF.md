@@ -2,40 +2,49 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`, `debug_utils.md`.
 
-## Session N+28: MONOLITHIC transform geometry (OPRAVUJE N+27 zaver!) + test suite
+## Session N+28: SYSTEMOVA oprava layer compositor transform clipu (NE workaround)
 
-**KLICOVE: monolithic render TED FUNGUJE s transform animacemi** - oprava N+27
-"POUCENI" ze monolithic nejde. Default je ted MONOLITHIC (opt-in layer pres
-`RWE_LAYER_GPU_ON`).
+**KLICOVE: layer compositor (WebRender-style) je DEFAULT a transform clip je
+opraven SYSTEMOVE v paint.rs.** Zadny monolithic workaround (uzivatel explicitne:
+"zadne workaroundy nikdy, resit systemove").
 
-- **Stagger/transform "usekany na vrchu" (#1 reaffirmed bug) OPRAVENO**: root cause
-  zjisten - layer compose I TransformBegin offscreen CLIPUJI transformovany obsah
-  na bounds layeru/textury. Jen CPU geometry post-process (shift/scale/rotate
-  vertices, paint.rs ~2491) NEclipuje (pohne realne vertexy). Ten byl ale SKIPNUT
-  pro layer boxy (`is_layer_with_transform`).
-- **Fix**: `MONOLITHIC_PAINT` thread-local v paint.rs. V monolithic:
-  - `transform_by_layer_compose` + `is_layer_with_transform` = false -> 2D transform
-    se aplikuje pres geometry i pro layer boxy (= bez clipu).
-  - `walk_layer_paint` force re-paint layeru s transformem (structural_fp drzi
-    stejny pri transform-only zmene = jinak by animace zamrzla z cache - to byl
-    ten N+27 "monolithic zamrza animace" bug, ted vyresen force-repaintem).
-- **Overeno vizualne**: static translateY(-50) cely box bez clipu; animovany
-  translateX animuje (box_x 124->233); stagger bounce(-20px) flex items neusekane;
-  opacity 0.3 spravne; engine-test 103 FPS (drive layer mode laggy).
-- **Hover transform scale**: melo by ted animovat (geometry + force-repaint +
-  detect_transitions z N+27). Synteticky hover neoveritelny (SetCursorPos/SendInput
-  winit nevidi) - NUTNO overit realnou mysi.
+- **Root cause "usekaneho" transformovaneho obsahu** (stagger bounce, translateY):
+  `paint_box` mel `else if let Some(Translate)=bx.transform` branch ktery aplikoval
+  singular transform translate I PRO LAYER BOXY (kdyz hlavni geometry blok skipnut).
+  = DOUBLE transform: (1) paint pohnul box o (tx,ty) -> shift na layer-local coords
+  ho castecne vystrcil MIMO texturu (sized na orig rect) = clip; (2) GPU compose
+  pohnul quad ZNOVU.
+- **Diagnostika** (instrumentace, ne hadani): local cache box na y=-50 misto y=0.
+  compute_transform_matrix + TRANSFORM shader overeny korektni (row-major translate,
+  m[7]=-50). Bug byl PURE v paint else branch.
+- **Fix**: else branch guardnut `!is_layer_with_transform` -> layer box dostane
+  transform VYHRADNE z GPU compose na quad. paint.rs ~2575.
+- **Overeno vizualne**: _ty translateY(-50) cely box bez clipu (LAYER default I CPU
+  fallback); stagger bounce neusekane; animace translateX **240 FPS** (transform-only
+  = re-compose bez re-paintu = WebRender vyhoda, presne jak Chrome!).
+- **Architektura**: LAYER mode default (opt-out `RWE_LAYER_GPU_OFF`). MONOLITHIC_PAINT
+  flag (z drivejsiho pokusu) ponechan - dela CPU fallback taky korektni pro transformy
+  (geometry post-process). Oba renderery spravne, GPU layer primarni.
 - **Test suite zase kompiluje**: merge 27a11f9 zanesl L5 typed-cascade testy
   (apply_animations_typed, read_animated_value_from_cs, is_set, visual_snapshot)
   jejichz impl lokalne chybi -> suite od merge NEKOMPILOVALA. Disabled pres
   `#[cfg(any())]` + koment. Po fixu: **4152 pass, 7 fail**.
-- **7 pre-existing SVG test failu** (paint_svg_*, svg_rect/circle): STALE testy -
-  SVG ted rasterizuje pres resvg -> emituje `DisplayCommand::Image`, ne manual
-  `DisplayCommand::Rect` co testy cekaji. SVG renderuje OK, testy zastarale.
-  TODO: updatnout na novou resvg behavior nebo testovat fallback path primo.
+- **7 pre-existing SVG test failu**: STALE testy - SVG ted rasterizuje pres resvg ->
+  `DisplayCommand::Image`, ne manual `Rect`. SVG renderuje OK, testy zastarale.
+
+### Zbyva (dalsi systemove tasky)
+- **Perf**: engine-test 80 FPS (12.5ms) v layer mode idle - jednoducha anim 240 FPS.
+  Gap = layer re-paint overhead (barevne animace + hover meni non-transform props ->
+  re-paint textury). Systemovy fix: damage tracking aby re-paintoval JEN zmenene
+  layery, transform/opacity-only = re-compose. structural_fp to uz rozlisuje.
+- **Hover real-mouse verify**: scale transition (geometry + detect_transitions z N+27).
+- **writing-mode vertical text** (sekce 12) - znaky se prekryvaji.
+- **inline SVG** (sekce 14) - par boxu prazdnych/cernych (resvg selhava na obsahu).
 
 ## Session N+27: animace interpolace + hover perf (layer mode, NE monolithic!)
-### POZN: N+27 zaver "monolithic nejde" je SUPERSEDED N+28 (monolithic ted jde pres geometry).
+### POZN: N+27 "monolithic nejde pro transformy" mel pravdu v zaveru (layer = default),
+### ale spatny root cause. N+28 nasel REALNY root cause (paint else-branch double-transform)
+### a opravil ho SYSTEMOVE -> layer mode transform clip pryc.
 
 - **Animace neinterpolovaly** (transform/keyframe/transition skakaly z pozice na
   pozici): parse_length("translateX(0)")=0 -> snap. Fix interpolate_css_value
