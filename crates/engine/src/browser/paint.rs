@@ -471,6 +471,24 @@ thread_local! {
     /// LAYER_SCOPE = None = walk vsechno (legacy behavior).
     /// Inspired by WebRender Picture/Tile boundary model.
     pub(crate) static LAYER_SCOPE: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+
+    /// MONOLITHIC paint mode flag. Kdyz true, layer boxy aplikuji svuj 2D
+    /// transform pres CPU geometry post-process (shift/scale/rotate vertices) -
+    /// stejne jako non-layer boxy. Kdyz false (layer GPU mode), geometry se skipne
+    /// a transform aplikuje GPU compose na layer texturu. KLIC: geometry NEclipuje
+    /// (pohne realne vertexy), zatimco compose i TransformBegin offscreen clipuji
+    /// transformovany obsah na bounds (stagger box "usekany na vrchu").
+    pub(crate) static MONOLITHIC_PAINT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Nastavi monolithic paint flag (vola webview pred build_layered_display_list).
+pub fn set_monolithic_paint(on: bool) {
+    MONOLITHIC_PAINT.with(|c| c.set(on));
+}
+
+/// Zjisti monolithic paint flag.
+pub fn is_monolithic_paint() -> bool {
+    MONOLITHIC_PAINT.with(|c| c.get())
 }
 
 /// Paint commands jen pro subtree dane layer (= picture). Nested layer
@@ -1503,7 +1521,12 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
     // (rohy AABB). Proto inner transform emit JEN v monolithic mode
     // (cur_scope = None). V layer mode rotaci handluje compose sam - stejne jako
     // uz funguje pure-2D Rotate(0)/Scale (needs_3d=false vetev).
-    let transform_by_layer_compose = cur_scope.is_some()
+    // V MONOLITHIC mode neni compose -> transform musi aplikovat paint sam
+    // (geometry pro 2D, TransformBegin pro 3D). transform_by_layer_compose jen
+    // v layer GPU mode.
+    let monolithic = MONOLITHIC_PAINT.with(|c| c.get());
+    let transform_by_layer_compose = !monolithic
+        && cur_scope.is_some()
         && super::compositor::is_layer_boundary(bx)
         && bx.transform.is_some();
     let emit_inner_transform = needs_3d && !transform_by_layer_compose;
@@ -2485,7 +2508,9 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
     // Skip kdyz bx je layer boundary - compose pipeline aplikuje transform na
     // quad pri layer-to-screen compose (= rotates layer texture INCL glyphs +
     // GPU subpixel AA). Bez skip transform aplikovany 2x.
-    let is_layer_with_transform = !bx.transforms.is_empty()
+    // V monolithic mode geometry aplikujeme i pro layer boxy (compose nebezi).
+    let is_layer_with_transform = !monolithic
+        && !bx.transforms.is_empty()
         && super::compositor::is_layer_boundary(bx);
     use super::layout::TransformOp;
     if !bx.transforms.is_empty() && !needs_3d && !is_layer_with_transform {

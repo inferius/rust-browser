@@ -388,7 +388,15 @@ fn walk_layer_paint(
     cache: &mut std::collections::HashMap<usize, Vec<crate::browser::paint::DisplayCommand>>,
 ) {
     let layer_box = crate::browser::paint::find_box_by_node_id(layout_root, layer.id);
-    let layer_cmds: Vec<crate::browser::paint::DisplayCommand> = if layer.damage_rect.is_none()
+    // V MONOLITHIC mode se transform baked do vertexu (geometry post-process).
+    // Layer cache ale structural_fp drzi STEJNY pri transform-only zmene (zamerne
+    // - layer compose to resi bez re-paintu). To by v monolithic zamrzlo animovany
+    // transform (cache vraci zapeceny prvni frame). Proto force re-paint layeru s
+    // transformem v monolithic = re-bake aktualniho transformu kazdy frame.
+    let force_repaint_tf = crate::browser::paint::is_monolithic_paint()
+        && !layer.transforms.is_empty();
+    let layer_cmds: Vec<crate::browser::paint::DisplayCommand> = if !force_repaint_tf
+        && layer.damage_rect.is_none()
         && cache.contains_key(&layer.id)
     {
         // No damage - reuse cached commands.
@@ -400,7 +408,10 @@ fn walk_layer_paint(
         // Damage or first paint - repaint subtree (layer-aware).
         let mut tmp = Vec::new();
         crate::browser::paint::paint_layer_into(bx, &mut tmp);
-        cache.insert(layer.id, tmp.clone());
+        // Force-repaint (transform) NEcachujeme - musi se re-bakovat kazdy frame.
+        if !force_repaint_tf {
+            cache.insert(layer.id, tmp.clone());
+        }
         LAYER_CACHE_STATS.with(|c| {
             let mut s = c.get(); s.repainted += 1; s.total += 1; c.set(s);
         });
@@ -408,6 +419,9 @@ fn walk_layer_paint(
     } else {
         Vec::new()
     };
+    // POZN: v monolithic mode (MONOLITHIC_PAINT=true) paint_layer_into uz
+    // aplikoval layer 2D transform pres CPU geometry (paint.rs ~2491) -> layer_cmds
+    // maji transform zapeceny do vertexu (BEZ clipu). Tady jen flatten.
     out.extend(layer_cmds);
     // Recurse child layers in z-index order.
     for child in &layer.children {
@@ -2883,6 +2897,18 @@ impl WebView {
         let prof_t2 = std::time::Instant::now();
         self.prof_layout_ms = prof_t2.duration_since(prof_t1).as_secs_f32() * 1000.0;
 
+        // D4 GPU layer pipeline pres env var. Default MONOLITHIC (opt-in layer pres
+        // RWE_LAYER_GPU_ON). Monolithic je rychlejsi pri hoveru (zadny per-layer
+        // texture re-render) A NEklipuje transformy: layer 2D transform se aplikuje
+        // pres CPU geometry (pohne vertexy), zatimco layer compose i TransformBegin
+        // offscreen clipuji transformovany obsah na bounds (stagger "usekany").
+        // Driv monolithic ztracel transformy (animace zamrzly) - opraveno
+        // MONOLITHIC_PAINT flagem v paint.rs (geometry aplikuje i pro layer boxy).
+        let layer_gpu_mode = std::env::var("RWE_LAYER_GPU_ON").is_ok();
+        // KLIC: set flag PRED jakymkoli paint_layer_into (build_layered_display_list
+        // i build_layer_local_cache). V monolithic geometry aplikuje transform.
+        crate::browser::paint::set_monolithic_paint(!layer_gpu_mode);
+
         // 3. Paint - per-layer pass dle damage_rect.
         // Per layer s damage_rect = Some: repaint commands + cache.
         // Per layer s damage_rect = None: reuse cached commands z prev framu.
@@ -2906,7 +2932,7 @@ impl WebView {
         // tile path activates per-layer = no single big texture alloc, no clamp.
         // Drive any_oversized DISABLOVAL D4 cele = monolithic fallback = user
         // nechce fallback. Tile path handluje oversized.
-        let layer_gpu_mode = std::env::var("RWE_LAYER_GPU_OFF").is_err();
+        // (layer_gpu_mode + monolithic flag uz nastaveny vyse pred build.)
         let mut d4_overlay_start: usize = 0;
         if layer_gpu_mode {
             // CRITICAL: warm atlas PRED layer raster. Pri D4 layer-mode build_vertices
