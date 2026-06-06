@@ -3204,40 +3204,36 @@ impl WebView {
                     // sveho boxu. Scoped `.foo::selection` se drzi jen ve .foo.
                     let mut hits: Vec<(f32, f32, f32, f32, Option<[u8; 4]>, Option<[u8; 4]>)> = Vec::new();
                     collect_text_lines(&layout_root, start.0, start.1, end.0, end.1, &mut hits);
-                    // 1) bg rect pod text. Solidnejsi (alpha ~200) - text se v kroku
-                    // 2) VZDY prebarvi na kontrastni, takze nemusi prosvitat.
+                    // 1) bg rect pod text (alpha < 255 aby text prosvital = citelny
+                    // bez prebarveni). S gamma-space blendem (rgba fix) blenduje
+                    // ted spravne jako Chrome. Alpha 150/120 = subtle highlight,
+                    // original text prosvita.
                     for (hx, hy, hw, hh, sel_bg, _) in &hits {
-                        let base = sel_bg.unwrap_or([80, 150, 255, 255]);
-                        let a = if base[3] >= 255 { 200 } else { base[3] };
-                        let color = [base[0], base[1], base[2], a];
+                        let color = sel_bg
+                            .map(|c| if c[3] >= 255 { [c[0], c[1], c[2], 150] } else { c })
+                            .unwrap_or([80, 150, 255, 120]);
                         display_list.push(crate::browser::paint::DisplayCommand::Rect {
                             x: *hx, y: *hy, w: *hw, h: *hh, color, radius: 0.0,
                         });
                     }
-                    // 2) prebarvi selektovany text: ::selection color kdyz nastaveny,
-                    // jinak KONTRASTNI (bila/cerna dle luminance selection bg) - jako
-                    // Chrome (HighlightText). Driv se prebarvilo jen kdyz sel_col set
-                    // -> jinak original text prosvital pres bg = nizky kontrast.
-                    // Klonuju puvodni Text commandy (uz spravne pozicovane) co padnou
-                    // do selection rectu. Partial run = cely run prebarven (prijatelne).
-                    let contrast = |bg: [u8; 4]| -> [u8; 4] {
-                        let l = 0.299 * bg[0] as f32 + 0.587 * bg[1] as f32 + 0.114 * bg[2] as f32;
-                        if l > 155.0 { [20, 20, 20, 255] } else { [245, 245, 245, 255] }
-                    };
+                    // 2) ::selection {color} prebarvi text JEN kdyz je explicitne
+                    // nastaveny (sel_col Some). NEPREBARVUJEME automaticky - text je
+                    // jeden DisplayCommand per uzel, takze "always recolor" prebarvil
+                    // CELY uzel i kdyz byla vybrana jen cast (regrese). Subtle bg
+                    // (krok 1) zajisti citelnost i bez recoloringu.
                     let recolor: Vec<crate::browser::paint::DisplayCommand> = display_list.iter()
                         .filter_map(|cmd| {
                             if let crate::browser::paint::DisplayCommand::Text { x, y, .. } = cmd {
-                                for (hx, hy, hw, hh, sel_bg, sel_col) in &hits {
-                                    if *x >= hx - 2.0 && *x <= hx + hw + 2.0
-                                        && *y >= hy - 2.0 && *y <= hy + hh + 2.0 {
-                                        let target = (*sel_col).unwrap_or_else(|| {
-                                            contrast((*sel_bg).unwrap_or([80, 150, 255, 255]))
-                                        });
-                                        let mut c = cmd.clone();
-                                        if let crate::browser::paint::DisplayCommand::Text { color, .. } = &mut c {
-                                            *color = target;
+                                for (hx, hy, hw, hh, _, sel_col) in &hits {
+                                    if let Some(sc) = sel_col {
+                                        if *x >= hx - 2.0 && *x <= hx + hw + 2.0
+                                            && *y >= hy - 2.0 && *y <= hy + hh + 2.0 {
+                                            let mut c = cmd.clone();
+                                            if let crate::browser::paint::DisplayCommand::Text { color, .. } = &mut c {
+                                                *color = *sc;
+                                            }
+                                            return Some(c);
                                         }
-                                        return Some(c);
                                     }
                                 }
                             }

@@ -2574,6 +2574,9 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
                         for cmd in &mut cmds[start..] { scale_cmd(cmd, scale_x, 1.0, cx, cy); }
                     }
                 }
+                // Skew: CPU fallback ho nereprezentuje (rect neumi shear) -
+                // GPU layer compositor (default) aplikuje pres matici spravne.
+                TransformOp::Skew(_, _) => {}
                 TransformOp::Perspective(_) | TransformOp::None => {} // No-op
             }
         }

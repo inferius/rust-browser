@@ -1470,6 +1470,49 @@ fn parse_transform_matrix3d() {
     } else { panic!(); }
 }
 
+// Regrese: skew/matrix(2D)/scaleX/scaleY se driv neparsovaly (vracely None)
+// -> transformy se ignorovaly = "nefunguji". Ted parsovany.
+#[test]
+fn parse_transform_skew() {
+    use crate::browser::layout::{parse_transform, TransformOp};
+    // skewX(45deg) -> tan(45) = 1.0
+    if let TransformOp::Skew(kx, ky) = parse_transform("skewX(45deg)").unwrap() {
+        assert!((kx - 1.0).abs() < 0.01 && ky.abs() < 0.001, "skewX kx={kx} ky={ky}");
+    } else { panic!("skewX neparsovano"); }
+    if let TransformOp::Skew(kx, ky) = parse_transform("skewY(45deg)").unwrap() {
+        assert!(kx.abs() < 0.001 && (ky - 1.0).abs() < 0.01, "skewY kx={kx} ky={ky}");
+    } else { panic!("skewY neparsovano"); }
+    // skew(20deg, 5deg) - dvojice
+    if let TransformOp::Skew(kx, ky) = parse_transform("skew(20deg, 5deg)").unwrap() {
+        assert!(kx > 0.0 && ky > 0.0, "skew kx={kx} ky={ky}");
+    } else { panic!("skew neparsovano"); }
+}
+
+#[test]
+fn parse_transform_scale_xy_axis() {
+    use crate::browser::layout::{parse_transform, TransformOp};
+    if let TransformOp::Scale(sx, sy) = parse_transform("scaleX(-1)").unwrap() {
+        assert_eq!((sx, sy), (-1.0, 1.0));
+    } else { panic!("scaleX neparsovano"); }
+    if let TransformOp::Scale(sx, sy) = parse_transform("scaleY(-1)").unwrap() {
+        assert_eq!((sx, sy), (1.0, -1.0));
+    } else { panic!("scaleY neparsovano"); }
+}
+
+#[test]
+fn parse_transform_matrix_2d() {
+    use crate::browser::layout::{parse_transform, TransformOp};
+    // matrix(a,b,c,d,e,f) -> row-major [a,c,0,e, b,d,0,f, 0,0,1,0, 0,0,0,1].
+    if let TransformOp::Matrix3D(m) = parse_transform("matrix(1.1, 0.2, -0.2, 1.1, 5, 5)").unwrap() {
+        assert!((m[0] - 1.1).abs() < 0.001, "a={}", m[0]);
+        assert!((m[1] - (-0.2)).abs() < 0.001, "c={}", m[1]);
+        assert!((m[3] - 5.0).abs() < 0.001, "e={}", m[3]);
+        assert!((m[4] - 0.2).abs() < 0.001, "b={}", m[4]);
+        assert!((m[5] - 1.1).abs() < 0.001, "d={}", m[5]);
+        assert!((m[7] - 5.0).abs() < 0.001, "f={}", m[7]);
+    } else { panic!("matrix(2D) neparsovano"); }
+}
+
 #[test]
 fn font_family_picks_first_from_list() {
     let doc = parse_html(r#"<html><body><p>x</p></body></html>"#, "");

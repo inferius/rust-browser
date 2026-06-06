@@ -65,6 +65,8 @@ pub enum TransformOp {
     Translate(f32, f32),
     Rotate(f32),  // radians
     Scale(f32, f32),
+    /// skew(ax, ay) - ulozene jako tan(uhel) pro x i y osu (2D shear).
+    Skew(f32, f32),
     /// 3D - z osa nepouzite pri 2D rendering (zkracene na xy).
     Translate3D { x: f32, y: f32, z: f32 },
     Rotate3D { x: f32, y: f32, z: f32, angle_rad: f32 },
@@ -1458,6 +1460,16 @@ fn inverse_transform_for_hit(bx: &LayoutBox, x: f32, y: f32) -> (f32, f32) {
                     let ry = qy - cy;
                     qx = cx + rx * cos + ry * sin;
                     qy = cy - rx * sin + ry * cos;
+                }
+            }
+            TransformOp::Skew(kx, ky) => {
+                // Inverse shear: forward [[1,kx],[ky,1]], inv = 1/det*[[1,-kx],[-ky,1]].
+                let det = 1.0 - kx * ky;
+                if det.abs() > 1e-6 {
+                    let rx = qx - cx;
+                    let ry = qy - cy;
+                    qx = cx + (rx - kx * ry) / det;
+                    qy = cy + (-ky * rx + ry) / det;
                 }
             }
             // 3D/Matrix3D/Perspective: identita fallback. TODO: full inverse.

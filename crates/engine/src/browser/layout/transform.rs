@@ -49,6 +49,14 @@ fn transform_op_matrix(op: &TransformOp) -> [f32; 16] {
             0.0, 0.0, 1.0, 0.0,
             0.0, 0.0, 0.0, 1.0,
         ],
+        // Skew (2D shear): kx = tan(skewX), ky = tan(skewY).
+        // x' = x + kx*y ; y' = ky*x + y.  Row-major (M*v).
+        TransformOp::Skew(kx, ky) => [
+            1.0, *kx, 0.0, 0.0,
+            *ky, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0,
+        ],
         TransformOp::Scale3D { x, y, z } => [
             *x,  0.0, 0.0, 0.0,
             0.0, *y,  0.0, 0.0,

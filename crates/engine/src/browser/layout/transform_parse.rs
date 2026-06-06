@@ -73,6 +73,27 @@ pub fn parse_transform(s: &str) -> Option<TransformOp> {
         let sy = parts.get(1).and_then(|p| p.parse::<f32>().ok()).unwrap_or(sx);
         return Some(TransformOp::Scale(sx, sy));
     }
+    if let Some(inner) = s.strip_prefix("scaleX(").and_then(|x| x.strip_suffix(')')) {
+        let sx = inner.trim().parse::<f32>().unwrap_or(1.0);
+        return Some(TransformOp::Scale(sx, 1.0));
+    }
+    if let Some(inner) = s.strip_prefix("scaleY(").and_then(|x| x.strip_suffix(')')) {
+        let sy = inner.trim().parse::<f32>().unwrap_or(1.0);
+        return Some(TransformOp::Scale(1.0, sy));
+    }
+    // skew(ax[, ay]) / skewX / skewY - ulozeno jako tan(uhel) (2D shear).
+    if let Some(inner) = s.strip_prefix("skewX(").and_then(|x| x.strip_suffix(')')) {
+        return Some(TransformOp::Skew(parse_angle_tan(inner), 0.0));
+    }
+    if let Some(inner) = s.strip_prefix("skewY(").and_then(|x| x.strip_suffix(')')) {
+        return Some(TransformOp::Skew(0.0, parse_angle_tan(inner)));
+    }
+    if let Some(inner) = s.strip_prefix("skew(").and_then(|x| x.strip_suffix(')')) {
+        let parts: Vec<&str> = inner.split(',').map(str::trim).collect();
+        let ax = parts.first().map(|p| parse_angle_tan(p)).unwrap_or(0.0);
+        let ay = parts.get(1).map(|p| parse_angle_tan(p)).unwrap_or(0.0);
+        return Some(TransformOp::Skew(ax, ay));
+    }
     // 3D varianty
     if let Some(inner) = s.strip_prefix("translate3d(").and_then(|x| x.strip_suffix(')')) {
         let parts: Vec<&str> = inner.split(',').map(str::trim).collect();
@@ -128,8 +149,35 @@ pub fn parse_transform(s: &str) -> Option<TransformOp> {
             return Some(TransformOp::Matrix3D(m));
         }
     }
+    if let Some(inner) = s.strip_prefix("matrix(").and_then(|x| x.strip_suffix(')')) {
+        // matrix(a,b,c,d,e,f) 2D affine: x'=a*x+c*y+e, y'=b*x+d*y+f.
+        // Expand na 4x4 ROW-major (= transform_op_matrix konvence, M*v).
+        let p: Vec<f32> = inner.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+        if p.len() == 6 {
+            let (a, b, c, d, e, f) = (p[0], p[1], p[2], p[3], p[4], p[5]);
+            return Some(TransformOp::Matrix3D([
+                a,   c,   0.0, e,
+                b,   d,   0.0, f,
+                0.0, 0.0, 1.0, 0.0,
+                0.0, 0.0, 0.0, 1.0,
+            ]));
+        }
+    }
     if let Some(inner) = s.strip_prefix("perspective(").and_then(|x| x.strip_suffix(')')) {
         return Some(TransformOp::Perspective(parse_length(inner)));
     }
     None
+}
+
+/// Parse CSS uhel (deg/rad/bare=deg) a vrat jeho tangens (pro skew shear).
+fn parse_angle_tan(s: &str) -> f32 {
+    let s = s.trim();
+    let rad = if let Some(d) = s.strip_suffix("deg") {
+        d.trim().parse::<f32>().unwrap_or(0.0).to_radians()
+    } else if let Some(r) = s.strip_suffix("rad") {
+        r.trim().parse::<f32>().unwrap_or(0.0)
+    } else {
+        s.parse::<f32>().unwrap_or(0.0).to_radians()
+    };
+    rad.tan()
 }
