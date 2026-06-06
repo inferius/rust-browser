@@ -59,31 +59,74 @@ fn grid_spans(child: &LayoutBox) -> (usize, usize) {
     (span_row, span_col)
 }
 
+/// True kdyz cely span (sr x sc) od (r,c) je volny. Bunky za occupied.len()
+/// (implicit grid roste) = volne.
+fn grid_cells_free(occupied: &[bool], r: usize, c: usize, sr: usize, sc: usize, cols: usize) -> bool {
+    for dr in 0..sr {
+        for dc in 0..sc {
+            let idx = (r + dr) * cols + (c + dc);
+            if idx < occupied.len() && occupied[idx] { return false; }
+        }
+    }
+    true
+}
+
 /// Auto-place do row-major occupied flat grid. cursor je sdileny mezi calls
-/// (CSS auto-cursor §8.5). Vraci (row, col).
+/// (CSS auto-cursor §8.5). Span-aware: cely span (span_row x span_col) musi
+/// byt volny a nesmi pretect cols. dense=true -> hleda od zacatku (backfill
+/// der za vetsimi spany), cursor NEposouva; dense=false (sparse) -> hleda od
+/// cursoru, posune ho za umisteni. Driv: kontroloval jen top-left bunku (span
+/// overlap) + cursor monotonni (zadny dense backtracking). Vraci (row, col).
 fn grid_flow_place(
     explicit_row: Option<usize>,
     explicit_col: Option<usize>,
+    span_row: usize,
+    span_col: usize,
     occupied: &[bool],
     cursor: &mut usize,
     cols: usize,
+    dense: bool,
 ) -> (usize, usize) {
     let cols_mx = cols.max(1);
+    let sc = span_col.max(1).min(cols_mx);
+    let sr = span_row.max(1);
     if let (Some(r), Some(c)) = (explicit_row, explicit_col) {
         (r, c)
     } else if let Some(c) = explicit_col {
+        // Definite col, auto row: prvni row kde cely span volny.
+        let c = c.min(cols_mx - sc);
         let mut r = 0;
-        while r * cols + c < occupied.len() && occupied[r * cols + c] { r += 1; }
+        while !grid_cells_free(occupied, r, c, sr, sc, cols_mx) {
+            r += 1;
+            if r > 100_000 { break; }
+        }
         (r, c)
     } else if let Some(r) = explicit_row {
+        // Definite row, auto col: prvni col kde span volny (bez preteku cols).
         let mut c = 0;
-        while r * cols + c < occupied.len() && occupied[r * cols + c] { c += 1; }
-        (r, c)
+        while c + sc <= cols_mx && !grid_cells_free(occupied, r, c, sr, sc, cols_mx) {
+            c += 1;
+        }
+        (r, c.min(cols_mx - sc))
     } else {
-        let mut idx = *cursor;
-        while idx < occupied.len() && occupied[idx] { idx += 1; }
-        *cursor = idx + 1;
-        (idx / cols_mx, idx % cols_mx)
+        // Auto row+col. Row-major linear scan. dense -> od 0 (backfill),
+        // sparse -> od cursoru. Span nesmi pretect cols (skoc na dalsi row)
+        // ani prekryt obsazene.
+        let mut idx = if dense { 0 } else { *cursor };
+        loop {
+            let r = idx / cols_mx;
+            let c = idx % cols_mx;
+            if c + sc > cols_mx {
+                idx = (r + 1) * cols_mx;
+                continue;
+            }
+            if grid_cells_free(occupied, r, c, sr, sc, cols_mx) {
+                if !dense { *cursor = idx + 1; }
+                return (r, c);
+            }
+            idx += 1;
+            if r > 100_000 { return (r, c); }
+        }
     }
 }
 
@@ -181,10 +224,11 @@ pub fn layout_grid(bx: &mut LayoutBox) {
     let (row_gap, col_gap) = super::resolve_gaps(bx, inner_w, inner_h);
 
     // grid-auto-flow detect early.
-    // dense varianta (CSS Grid §8.5) parsuje ale neimplementuje - po
-    // placement nepocita backtracking pres earlier free cells.
+    // dense varianta (CSS Grid §8.5): backfill der za vetsimi spany. Predava
+    // se do grid_flow_place + needed_from_placement (auto branch zacina od 0).
     let auto_flow_str = bx.grid_auto_flow.trim();
     let column_flow = auto_flow_str.contains("column");
+    let dense = auto_flow_str.contains("dense");
     // Parse + resolve column tracks
     let mut col_tracks = resolve_tracks(&bx.grid_template_columns, inner_w, col_gap);
     let (mut col_token_kinds, mut col_is_autofit) = parse_track_tokens_with_autofit(&bx.grid_template_columns, inner_w, col_gap);
@@ -468,7 +512,8 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                     (r, c)
                 }
                 else {
-                    let mut idx = auto_cur;
+                    // dense -> hledej od 0 (backfill), cursor neposouvej.
+                    let mut idx = if dense { 0 } else { auto_cur };
                     loop {
                         let r = idx / cols_n; let c = idx % cols_n;
                         if c + span_col > cols_n { idx = (r + 1) * cols_n; continue; }
@@ -481,7 +526,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                             }
                             if blocked { break; }
                         }
-                        if !blocked { auto_cur = idx + 1; break (r, c); }
+                        if !blocked { if !dense { auto_cur = idx + 1; } break (r, c); }
                         idx += 1;
                     }
                 };
@@ -650,7 +695,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
             let span_col = resolve_end(child.grid_column_start, child.grid_column_end, child.grid_column_span, cols);
             let span_row = resolve_end(child.grid_row_start, child.grid_row_end, child.grid_row_span, rows);
             let (row, col) = grid_flow_place(
-                explicit_row, explicit_col, &occupied_d, &mut auto_cursor_d, cols);
+                explicit_row, explicit_col, span_row, span_col, &occupied_d, &mut auto_cursor_d, cols, dense);
             grid_mark_occupied(row, col, span_row, span_col, &mut occupied_d, cols);
             item_placement.push((row, col, span_row, span_col));
         }
@@ -955,7 +1000,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                     child, cols_explicit, row_count_explicit, col_prepend, row_prepend);
                 let (span_row, span_col) = grid_spans(child);
                 let (row, col) = grid_flow_place(
-                    explicit_row, explicit_col, &occupied_d, &mut auto_cursor_d, cols);
+                    explicit_row, explicit_col, span_row, span_col, &occupied_d, &mut auto_cursor_d, cols, dense);
                 grid_mark_occupied(row, col, span_row, span_col, &mut occupied_d, cols);
                 item_placements.push((row, col, span_row, span_col));
             }
@@ -1095,7 +1140,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                 child, cols_explicit, row_count_explicit, col_prepend, row_prepend);
             let (span_row, span_col) = grid_spans(child);
             let (row, col) = grid_flow_place(
-                explicit_row, explicit_col, &occupied_d, &mut auto_cursor_d, cols);
+                explicit_row, explicit_col, span_row, span_col, &occupied_d, &mut auto_cursor_d, cols, dense);
             grid_mark_occupied(row, col, span_row, span_col, &mut occupied_d, cols);
             if span_row == 1 {
                 // Intrinsic h measurement pass pro items bez explicit_height ale s children
@@ -1281,7 +1326,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                 child, cols_explicit, row_count_explicit, col_prepend, row_prepend);
             let (span_row, span_col) = grid_spans(child);
             let (row, col) = grid_flow_place(
-                explicit_row, explicit_col, &occupied_d2, &mut auto_cursor_d2, cols);
+                explicit_row, explicit_col, span_row, span_col, &occupied_d2, &mut auto_cursor_d2, cols, dense);
             grid_mark_occupied(row, col, span_row, span_col, &mut occupied_d2, cols);
             if span_row <= 1 { continue; }
             // Compute item h (vc. margins).
@@ -1323,7 +1368,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                 child, cols_explicit, row_count_explicit, col_prepend, row_prepend);
             let (span_row, span_col) = grid_spans(child);
             let (row, col) = grid_flow_place(
-                explicit_row, explicit_col, &occupied_grid, &mut auto_cur, cols);
+                explicit_row, explicit_col, span_row, span_col, &occupied_grid, &mut auto_cur, cols, dense);
             grid_mark_occupied(row, col, span_row, span_col, &mut occupied_grid, cols);
             for dc in 0..span_col {
                 if col + dc < cols { occupied_cols[col + dc] = true; }
@@ -1490,7 +1535,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
             (rr, col)
         } else if column_flow {
             // Column-flow auto: advance row-first, then col.
-            let mut idx = auto_cursor;
+            let mut idx = if dense { 0 } else { auto_cursor };
             let result;
             loop {
                 let cc = idx / rows.max(1);
@@ -1505,7 +1550,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                     if blocked { break; }
                 }
                 if !blocked {
-                    auto_cursor = idx + 1;
+                    if !dense { auto_cursor = idx + 1; }
                     result = (rr, cc);
                     break;
                 }
@@ -1515,7 +1560,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
             result
         } else {
             // Auto: posun cursorem (row-major).
-            let mut idx = auto_cursor;
+            let mut idx = if dense { 0 } else { auto_cursor };
             let result;
             loop {
                 let rr = idx / cols.max(1);
@@ -1530,7 +1575,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                     if blocked { break; }
                 }
                 if !blocked {
-                    auto_cursor = idx + 1;
+                    if !dense { auto_cursor = idx + 1; }
                     result = (rr, cc);
                     break;
                 }

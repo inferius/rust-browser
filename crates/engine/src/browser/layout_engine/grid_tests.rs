@@ -242,4 +242,66 @@ mod tests {
         assert!(h >= 93.0 && h <= 200.0,
             "top-container rect.h should be ~120 (content+padding) or >=93 (min-height), got {}", h);
     }
+
+    // ─── dense auto-flow + span ──────────────────────────────────────────
+    #[test]
+    fn grid_dense_backfills_hole() {
+        // 4 cols (100px), auto-rows 32px, dense.
+        // 1(1x1), 2(span2), 3(span2), 4(1x1).
+        // Sparse: 3 jde na row1 (cursor pretekl), 4 az za 3 -> row1 col2,
+        //   col3 row0 zustane DIRA.
+        // Dense: 4 backfilluje diru -> (row0, col3) = x300 y0.
+        let mut g = make_grid_box(400.0, 400.0);
+        g.grid_template_columns = "repeat(4, 1fr)".into();
+        g.grid_auto_rows = "32px".into();
+        g.grid_auto_flow = "dense".into();
+        let one = make_child(0.0, 0.0);
+        let mut two = make_child(0.0, 0.0); two.grid_column_span = 2;
+        let mut three = make_child(0.0, 0.0); three.grid_column_span = 2;
+        let four = make_child(0.0, 0.0);
+        g.children = vec![one, two, three, four];
+        layout_grid(&mut g);
+        let r = |i: usize| (g.children[i].rect.x, g.children[i].rect.y);
+        assert!((r(0).0).abs() < 1.0 && (r(0).1).abs() < 1.0, "1 at {:?}", r(0));
+        assert!((r(1).0 - 100.0).abs() < 1.0 && (r(1).1).abs() < 1.0, "2 at {:?}", r(1));
+        // 3 -> row1 (pretekl row0)
+        assert!((r(2).0).abs() < 1.0 && r(2).1 > 20.0, "3 should be row1, at {:?}", r(2));
+        // 4 -> DENSE backfill row0 col3 (x300 y0). Sparse by dal (200, row1).
+        assert!((r(3).0 - 300.0).abs() < 1.0 && (r(3).1).abs() < 2.0,
+            "4 DENSE backfill expected (300,0), got {:?} (sparse bug = ~(200,32))", r(3));
+    }
+
+    #[test]
+    fn grid_dense_span_engine_fixture_no_overlap() {
+        // engine-test.html .grid-dense: 6 cols 1fr, dense, auto-rows 32px.
+        // 1, wide(span3), 3, tall(span2 row), big(2x2), 6, 7, 8.
+        let mut g = make_grid_box(600.0, 400.0);
+        g.grid_template_columns = "repeat(6, 1fr)".into();
+        g.grid_auto_rows = "32px".into();
+        g.grid_auto_flow = "dense".into();
+        let one = make_child(0.0, 0.0);
+        let mut wide = make_child(0.0, 0.0); wide.grid_column_span = 3;
+        let three = make_child(0.0, 0.0);
+        let mut tall = make_child(0.0, 0.0); tall.grid_row_span = 2;
+        let mut big = make_child(0.0, 0.0); big.grid_column_span = 2; big.grid_row_span = 2;
+        let (s6, s7, s8) = (make_child(0.0, 0.0), make_child(0.0, 0.0), make_child(0.0, 0.0));
+        g.children = vec![one, wide, three, tall, big, s6, s7, s8];
+        layout_grid(&mut g);
+        let r = |i: usize| (g.children[i].rect.x, g.children[i].rect.y, g.children[i].rect.width, g.children[i].rect.height);
+        // wide span3 sirka ~300
+        assert!((r(1).2 - 300.0).abs() < 3.0, "wide width ~300, got {}", r(1).2);
+        // tall span2 row vyska >= 60
+        assert!(r(3).3 >= 60.0, "tall height >=60, got {}", r(3).3);
+        // big 2x2: backfill row1 col0 (x0, y32), sirka ~200, vyska >=60
+        assert!((r(4).0).abs() < 1.0 && (r(4).1 - 32.0).abs() < 3.0,
+            "big DENSE backfill (0,32), got ({},{})", r(4).0, r(4).1);
+        assert!((r(4).2 - 200.0).abs() < 3.0 && r(4).3 >= 60.0, "big 2x2 size, got w={} h={}", r(4).2, r(4).3);
+        // No overlap: zadne dva non-span items nesmi mit stejny (x,y).
+        let cells: Vec<(i32, i32)> = (0..8).map(|i| (r(i).0 as i32, r(i).1 as i32)).collect();
+        for a in 0..cells.len() {
+            for b in (a + 1)..cells.len() {
+                assert_ne!(cells[a], cells[b], "items {} a {} overlap na {:?}", a, b, cells[a]);
+            }
+        }
+    }
 }
