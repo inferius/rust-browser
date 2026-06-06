@@ -1056,14 +1056,20 @@ impl WebView {
     /// Velikost v PHYSICAL px (= logical * scale_factor).
     /// Vraci Option<()> = None pokud engine headless. Texture + view ulozeny
     /// v self.layer_textures pres klic.
+    /// Vraci true kdyz texturu (re)vytvorila (size change) - caller pak MUSI
+    /// vrstvu re-rastrovat i kdyz neni damaged (jinak nova prazdna texture =
+    /// vanish; typicky pri scale spring overshoot co osciluje raster_scale).
     pub(crate) fn ensure_layer_texture(
         &mut self,
         layer_id: usize,
         logical_w: f32,
         logical_h: f32,
         raster_scale: f32,
-    ) -> Option<()> {
-        let device = self.engine.device.as_ref()?.clone();
+    ) -> bool {
+        let device = match self.engine.device.as_ref() {
+            Some(d) => d.clone(),
+            None => return false,
+        };
         // Layer phys = logical * zoom * scale_factor. Bez zoom multiplier by
         // pri zoom 1.5x byl layer tex stored at base size. Atlas glyph raster
         // at zoom-scaled size -> compose downsamples to layer tex -> SOFT.
@@ -1078,7 +1084,7 @@ impl WebView {
         // Reuse pri shode size.
         if let Some(slot) = self.layer_textures.get(&layer_id) {
             if slot.width == phys_w && slot.height == phys_h {
-                return Some(());
+                return false;
             }
         }
 
@@ -1103,7 +1109,7 @@ impl WebView {
             height: phys_h,
             last_paint_fp: 0,
         });
-        Some(())
+        true
     }
 
     /// Garbage collect layer_textures - drop entries jejichz layer_id neni v
@@ -2917,6 +2923,11 @@ impl WebView {
             &mut layer_tree, &mut self.prev_layer_fingerprints);
         crate::browser::compositor::mark_tile_damage(
             &mut layer_tree, &mut self.prev_tile_fingerprints);
+        // Vrstvy kterym se prave (re)vytvorila texture (size change ze scale
+        // spring overshoot) - musi se re-rastrovat i kdyz nejsou damaged (jinak
+        // nova prazdna texture = vanish). Deklarovano pred alloc blokem aby bylo
+        // viditelne i v raster bloku (layer_gpu_mode nize).
+        let mut recreated_layer_tex: std::collections::HashSet<usize> = std::collections::HashSet::new();
         if std::env::var("RWE_DAMAGE_DBG").is_ok() {
             let total = crate::browser::compositor::count_layers(&layer_tree);
             let damaged = crate::browser::compositor::count_damaged_layers(&layer_tree);
@@ -2948,7 +2959,9 @@ impl WebView {
                 let rscale = layer_raster_scale(&layer.transforms);
                 let phys_max = (lw * sf_alloc * rscale).max(lh * sf_alloc * rscale);
                 if phys_max <= MAX_TEX_DIM_ALLOC {
-                    let _ = self.ensure_layer_texture(layer.id, lw, lh, rscale);
+                    if self.ensure_layer_texture(layer.id, lw, lh, rscale) {
+                        recreated_layer_tex.insert(layer.id);
+                    }
                 }
             }
             // Per-tile alloc - tile texture < 8192 phys = no clamp ever.
@@ -3071,7 +3084,10 @@ impl WebView {
             let mut d4_renders = 0u32;
             let mut d4_tile_renders = 0u32;
             for layer in &flat {
-                if layer.damage_rect.is_none() { continue; }
+                // Re-raster kdyz damaged NEBO se prave (re)vytvorila texture
+                // (size change ze scale spring overshoot) - jinak nova prazdna
+                // texture = vanish (flip scaleX(-1) na konci animace mizel).
+                if layer.damage_rect.is_none() && !recreated_layer_tex.contains(&layer.id) { continue; }
                 let cmds = match local_cache.get(&layer.id) {
                     Some(c) if !c.is_empty() => c.clone(),
                     _ => continue,
