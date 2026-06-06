@@ -3204,34 +3204,40 @@ impl WebView {
                     // sveho boxu. Scoped `.foo::selection` se drzi jen ve .foo.
                     let mut hits: Vec<(f32, f32, f32, f32, Option<[u8; 4]>, Option<[u8; 4]>)> = Vec::new();
                     collect_text_lines(&layout_root, start.0, start.1, end.0, end.1, &mut hits);
-                    // 1) bg rect pod text (alpha < 255 aby text prosvital).
+                    // 1) bg rect pod text. Solidnejsi (alpha ~200) - text se v kroku
+                    // 2) VZDY prebarvi na kontrastni, takze nemusi prosvitat.
                     for (hx, hy, hw, hh, sel_bg, _) in &hits {
-                        let color = sel_bg
-                            .map(|c| if c[3] >= 255 { [c[0], c[1], c[2], 150] } else { c })
-                            .unwrap_or([80, 150, 255, 120]);
+                        let base = sel_bg.unwrap_or([80, 150, 255, 255]);
+                        let a = if base[3] >= 255 { 200 } else { base[3] };
+                        let color = [base[0], base[1], base[2], a];
                         display_list.push(crate::browser::paint::DisplayCommand::Rect {
                             x: *hx, y: *hy, w: *hw, h: *hh, color, radius: 0.0,
                         });
                     }
-                    // 2) ::selection color (text barva) - prekresli selected text
-                    // runy v selection_color NAD bg (jinak svetly text na barevnem
-                    // bg = nizky kontrast; Chrome dela kontrastni). Klonuju puvodni
-                    // Text commandy (uz spravne pozicovane) co padnou do selection
-                    // rectu. Plne selektovane radky = presne; partial run = cely
-                    // run prebarven (prijatelne).
+                    // 2) prebarvi selektovany text: ::selection color kdyz nastaveny,
+                    // jinak KONTRASTNI (bila/cerna dle luminance selection bg) - jako
+                    // Chrome (HighlightText). Driv se prebarvilo jen kdyz sel_col set
+                    // -> jinak original text prosvital pres bg = nizky kontrast.
+                    // Klonuju puvodni Text commandy (uz spravne pozicovane) co padnou
+                    // do selection rectu. Partial run = cely run prebarven (prijatelne).
+                    let contrast = |bg: [u8; 4]| -> [u8; 4] {
+                        let l = 0.299 * bg[0] as f32 + 0.587 * bg[1] as f32 + 0.114 * bg[2] as f32;
+                        if l > 155.0 { [20, 20, 20, 255] } else { [245, 245, 245, 255] }
+                    };
                     let recolor: Vec<crate::browser::paint::DisplayCommand> = display_list.iter()
                         .filter_map(|cmd| {
                             if let crate::browser::paint::DisplayCommand::Text { x, y, .. } = cmd {
-                                for (hx, hy, hw, hh, _, sel_col) in &hits {
-                                    if let Some(sc) = sel_col {
-                                        if *x >= hx - 2.0 && *x <= hx + hw + 2.0
-                                            && *y >= hy - 2.0 && *y <= hy + hh + 2.0 {
-                                            let mut c = cmd.clone();
-                                            if let crate::browser::paint::DisplayCommand::Text { color, .. } = &mut c {
-                                                *color = *sc;
-                                            }
-                                            return Some(c);
+                                for (hx, hy, hw, hh, sel_bg, sel_col) in &hits {
+                                    if *x >= hx - 2.0 && *x <= hx + hw + 2.0
+                                        && *y >= hy - 2.0 && *y <= hy + hh + 2.0 {
+                                        let target = (*sel_col).unwrap_or_else(|| {
+                                            contrast((*sel_bg).unwrap_or([80, 150, 255, 255]))
+                                        });
+                                        let mut c = cmd.clone();
+                                        if let crate::browser::paint::DisplayCommand::Text { color, .. } = &mut c {
+                                            *color = target;
                                         }
+                                        return Some(c);
                                     }
                                 }
                             }
