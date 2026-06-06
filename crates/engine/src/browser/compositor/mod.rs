@@ -294,6 +294,12 @@ fn compute_layer_tiles(
                     bx.rect.height.to_bits().hash(&mut h);
                     if let Some(c) = bx.bg_color { c.hash(&mut h); }
                     if let Some(c) = bx.text_color { c.hash(&mut h); }
+                    // border-color/width: paint property - bez nej border-color
+                    // transition (.tf-box:hover) nezmeni tile fp -> tile se
+                    // neoznaci dirty -> NEprepaintuje -> border se "zjevi az na
+                    // konci" animace (layer structural_fp se menil ale tile ne).
+                    if let Some(c) = bx.border_color { c.hash(&mut h); }
+                    bx.border_width.to_bits().hash(&mut h);
                     if let Some(t) = &bx.text { t.hash(&mut h); }
                 }
             }
