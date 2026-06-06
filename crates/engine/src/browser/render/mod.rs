@@ -964,8 +964,21 @@ fn apply_paint_animations_inner(box_: &mut crate::browser::layout::LayoutBox,
                 }
             }
         }
+        // Animovana border-color (transition/keyframe) - aplikuj na box aby se
+        // border animoval. Bez tohoto pri cached layoutu interpolovana hodnota
+        // nedosahne box.border_color.
+        if let Some(c) = styles.get("border-color") {
+            if let Some(rgb) = crate::browser::layout::parse_color(c.trim()) {
+                box_.border_color = Some(rgb);
+            }
+        }
         if let Some(t) = styles.get("transform") {
             box_.transforms = crate::browser::layout::parse_transform_chain(t);
+            // Sync i singular transform - jinak pri CACHED layoutu zustane stara
+            // hodnota (build_box nebezi, transform je paint prop). Inconsistence
+            // singular(stale) vs transforms(current) = layer compose pouzival
+            // jiny scale nez raster/texture = scale-hover box MIZEL.
+            box_.transform = box_.transforms.first().cloned();
         }
         if let Some(f) = styles.get("filter") {
             box_.filter = crate::browser::layout::parse_filter_chain(f);

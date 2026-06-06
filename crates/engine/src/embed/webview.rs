@@ -447,7 +447,13 @@ pub(crate) fn layer_raster_scale(transforms: &[crate::browser::layout::Transform
             _ => {}
         }
     }
-    s.clamp(1.0, 4.0)
+    // KVANTIZACE na 0.25 kroky. Bez toho scale TRANSITION interpoluje raster
+    // spojite (1.299 vs 1.301) -> phys texture size osciluje o 1px (116<->117) ->
+    // ensure_layer_texture re-creates texturu KAZDY frame -> prazdna texture ->
+    // scale-hover box MIZEL. Kvantizace = stabilni size mezi blizkymi scale =
+    // zadne re-creation = box viditelny + plynula animace (compose scaluje quad).
+    let q = (s * 4.0).round() / 4.0;
+    q.clamp(1.0, 4.0)
 }
 
 pub(crate) fn build_layer_local_cache(

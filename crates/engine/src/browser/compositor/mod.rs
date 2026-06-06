@@ -226,6 +226,13 @@ fn compute_fingerprints_inner(
             bx.opacity.to_bits().hash(&mut h_full);
             if let Some(c) = bx.bg_color { c.hash(&mut h_full); c.hash(&mut h_struct); }
             if let Some(c) = bx.text_color { c.hash(&mut h_full); c.hash(&mut h_struct); }
+            // border-color: paint property - musi byt v structural_fp jinak
+            // border-color transition (napr. .tf-box:hover border-color) NEdamaguje
+            // layer -> nedojde k re-paintu -> border se neanimuje ("zjevi se na
+            // konci"). Plus border_width.
+            if let Some(c) = bx.border_color { c.hash(&mut h_full); c.hash(&mut h_struct); }
+            bx.border_width.to_bits().hash(&mut h_full);
+            bx.border_width.to_bits().hash(&mut h_struct);
             if let Some(t) = &bx.text { t.hash(&mut h_full); t.hash(&mut h_struct); }
         }
     }
