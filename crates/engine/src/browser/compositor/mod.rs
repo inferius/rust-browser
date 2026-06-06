@@ -318,11 +318,37 @@ fn compute_layer_tiles(
     layer.tiles = tiles;
 }
 
+thread_local! {
+    /// Node ids s aktivni @keyframes animaci (z webview.active_animations). Set
+    /// pred extract_layer_tree. Promote je na vlastni layer aby paint-animace
+    /// (colorCycle bg/border = NE transform/opacity) NEdamagovaly ROOT layer.
+    /// Bez tohoto: colorCycle v rootu -> root damaged -> paint_layer_into
+    /// prekresli CELY root content (vsechny off-screen prvky) = 17ms/frame
+    /// (35 FPS). S promote: jen maly colorCycle layer re-paint = root reuse.
+    static FORCE_LAYER_NODES: std::cell::RefCell<std::collections::HashSet<usize>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+/// Set node ids ktere maji byt vzdy vlastni layer (animated paint props).
+pub fn set_force_layer_nodes(ids: std::collections::HashSet<usize>) {
+    FORCE_LAYER_NODES.with(|c| *c.borrow_mut() = ids);
+}
+
+fn is_force_layer_node(id: usize) -> bool {
+    FORCE_LAYER_NODES.with(|c| c.borrow().contains(&id))
+}
+
 /// Vraci true pokud element vytvori novou layer (stacking context boundary).
 pub fn is_layer_boundary(b: &LayoutBox) -> bool {
     // position: fixed / sticky
     if matches!(b.position, Position::Fixed | Position::Sticky) {
         return true;
+    }
+    // Aktivni @keyframes animace (vc. paint-only jako colorCycle) -> vlastni
+    // layer = damage izolovany, root se neprekresluje.
+    if let Some(node) = b.node.as_ref() {
+        let id = std::rc::Rc::as_ptr(node) as usize;
+        if is_force_layer_node(id) { return true; }
     }
     // z-index != auto on positioned element
     if b.z_index.is_some() && b.position != Position::Static {

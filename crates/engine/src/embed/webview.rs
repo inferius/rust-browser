@@ -2894,6 +2894,15 @@ impl WebView {
         // zadny zbytecny 9ms full root re-paint). build_layered_display_list nize
         // si cull prenastavi sam.
         crate::browser::paint::set_viewport_cull(self.scroll_y, self.scroll_y + viewport_h);
+        // Promote elementy s aktivni @keyframes animaci na vlastni layer. KLIC
+        // pro perf: paint-only animace (colorCycle bg/border) co NEjsou
+        // transform/opacity by jinak zustaly v ROOT layeru a kazdy frame
+        // damagovaly cely root -> paint_layer_into prekresli VSECHEN root content
+        // (i off-screen) = 17ms (35 FPS pri animacni sekci). Promote = damage
+        // izolovany na maly layer = root cache reuse.
+        let anim_layer_ids: std::collections::HashSet<usize> =
+            self.active_animations.iter().map(|(id, _)| *id).collect();
+        crate::browser::compositor::set_force_layer_nodes(anim_layer_ids);
         let mut layer_tree = crate::browser::compositor::extract_layer_tree(&layout_root);
         // Compositor-driven anim tick - posune progress + override layer
         // opacity/transform values BEZ re-cascade. Pri animaci jen tyhle props
