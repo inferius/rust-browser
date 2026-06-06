@@ -591,6 +591,16 @@ pub fn layout_grid(bx: &mut LayoutBox) {
             for c in 0..cols {
                 let idx = r * cols + c;
                 if let Some(child) = bx.children.get(idx) {
+                    // KLIC: spanning items (rowspan > 1) maji explicit_height =
+                    // CELA span vyska (napr. 2 rady = 69px). NESMI nafouknout
+                    // JEDEN row - jejich vyska je pokryta souctem spanovanych
+                    // tracku. Bez skipu se tall/big (69px) priradily do row 0
+                    // (idx=r*cols+c) -> row 0 = 69px misto 32px = velka mezera.
+                    let row_span = if child.grid_row_span > 0 { child.grid_row_span }
+                        else if child.grid_row_end > 0 && child.grid_row_start > 0 {
+                            (child.grid_row_end - child.grid_row_start).max(1)
+                        } else { 1 };
+                    if row_span > 1 { continue; }
                     if let Some(eh) = child.explicit_height {
                         let pb_t = child.padding_top.unwrap_or(child.padding) + child.border_top_width.unwrap_or(child.border_width);
                         let pb_b = child.padding_bottom.unwrap_or(child.padding) + child.border_bottom_width.unwrap_or(child.border_width);

@@ -304,4 +304,27 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn grid_rowspan_item_nenafoukne_single_row() {
+        // Regrese (dense+span mezera): rowspan-2 item ma explicit_height = CELA
+        // span vyska (auto-track-sizing). Row-height loop (idx=r*cols+c) ji driv
+        // priradil do JEDNOHO row -> ten row nafouknut na celou span vysku =
+        // velka mezera. Fix: spanning items (rowspan>1) skip v override.
+        let mut g = make_grid_box(400.0, 400.0);
+        g.grid_template_columns = "1fr 1fr".into();
+        g.grid_auto_rows = "40px".into();
+        let a = make_child(0.0, 0.0);
+        let mut tall = make_child(0.0, 0.0);
+        tall.grid_row_span = 2;
+        tall.explicit_height = Some(84.0); // simuluje 2-row span vysku
+        let c = make_child(0.0, 0.0);
+        let d = make_child(0.0, 0.0);
+        g.children = vec![a, tall, c, d];
+        layout_grid(&mut g);
+        // 'a' (single-row, row 0) nesmi byt nafouknute spanning sousedem 'tall'.
+        // Row 0 = grid-auto-rows 40px, ne 84px. (Driv: 84 = bug.)
+        assert!(g.children[0].rect.height <= 50.0,
+            "single-row item nafouknut spanning sousedem, h={} (cekano ~40)", g.children[0].rect.height);
+    }
 }
