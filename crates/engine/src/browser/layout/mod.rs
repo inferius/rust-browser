@@ -1957,6 +1957,20 @@ fn interpolate_transform_value(from: &str, to: &str, t: f32) -> Option<String> {
     // neanimuje".
     let ident = |funcs: &[(String, Vec<(f32, String)>)]| -> Vec<(String, Vec<(f32, String)>)> {
         funcs.iter().map(|(n, args)| {
+            // matrix/matrix3d maji identitu s 1 na diagonale (ne vsude stejne iv).
+            // Bez tohoto matrix(...) z none synthesizoval matrix(0,0,0,0,0,0) =
+            // degenerate (box kolabuje do bodu) = "matrix neanimuje spravne".
+            if n == "matrix" {
+                let id = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+                return (n.clone(), args.iter().enumerate()
+                    .map(|(i, (_, u))| (*id.get(i).unwrap_or(&0.0), u.clone())).collect());
+            }
+            if n == "matrix3d" {
+                let id = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0,
+                          0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0];
+                return (n.clone(), args.iter().enumerate()
+                    .map(|(i, (_, u))| (*id.get(i).unwrap_or(&0.0), u.clone())).collect());
+            }
             let iv = if n.starts_with("scale") { 1.0 } else { 0.0 };
             (n.clone(), args.iter().map(|(_, u)| (iv, u.clone())).collect())
         }).collect()
@@ -1972,7 +1986,10 @@ fn interpolate_transform_value(from: &str, to: &str, t: f32) -> Option<String> {
             let unit = if !u0.is_empty() { u0.as_str() }
                        else if !u1.is_empty() { u1.as_str() }
                        else if a.0.starts_with("rotate") || a.0.starts_with("skew") { "deg" }
-                       else if a.0.starts_with("scale") { "" }
+                       // scale + matrix args jsou UNITLESS. Bez tohoto dostaly "px"
+                       // (matrix(1.05px,...)) -> parse_transform to neumi -> matrix
+                       // transition se zahodila = "matrix neanimuje".
+                       else if a.0.starts_with("scale") || a.0.starts_with("matrix") { "" }
                        else { "px" };
             // Zaokrouhli na 3 desetinna mista (bez trailing nul ruseni - jednoduche).
             format!("{:.3}{}", v, unit)
