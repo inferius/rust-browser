@@ -4099,8 +4099,33 @@ pub fn detect_transitions(
                 let prev_val = if prev_val_raw.is_empty() { initial_for(prop) } else { prev_val_raw };
                 let cur_val = if cur_val_raw.is_empty() { initial_for(prop) } else { cur_val_raw };
                 if cur_val != prev_val && !prev_val.is_empty() {
-                    // Skip pokud uz transition na tu prop existuje
-                    if result.iter().any(|t| t.node_id == *node_id && t.property == *prop) { continue; }
+                    // Existuje uz transition na tu prop?
+                    if let Some(idx) = result.iter().position(|t| t.node_id == *node_id && t.property == *prop) {
+                        if result[idx].to_value == cur_val {
+                            continue; // uz animuje na spravny cil
+                        }
+                        // CIL SE ZMENIL (napr. un-hover UPROSTRED forward, nebo
+                        // rychly re-hover). CSS Transitions retargeting: nahrad
+                        // transition, ale ZACNI z AKTUALNI interpolovane hodnoty
+                        // (ne snap na base). Bez tohoto 4088 check blokoval reverse
+                        // -> box se nevratil / zustal / "rychly hover se zasekne".
+                        let ex = &result[idx];
+                        let t = (elapsed_secs - ex.start_time - ex.spec.delay_secs).max(0.0);
+                        let raw = (t / ex.spec.duration_secs.max(0.0001)).clamp(0.0, 1.0);
+                        let prog = apply_easing(raw, &ex.spec.timing_function);
+                        let cur_interp = super::layout::interpolate_css_value(
+                            prop, &ex.from_value, &ex.to_value, prog)
+                            .unwrap_or_else(|| if prog < 0.5 { ex.from_value.clone() } else { ex.to_value.clone() });
+                        result[idx] = ActiveTransition {
+                            node_id: *node_id,
+                            property: prop.clone(),
+                            from_value: cur_interp,
+                            to_value: cur_val.to_string(),
+                            spec: spec.clone(),
+                            start_time: elapsed_secs,
+                        };
+                        continue;
+                    }
                     result.push(ActiveTransition {
                         node_id: *node_id,
                         property: prop.clone(),
