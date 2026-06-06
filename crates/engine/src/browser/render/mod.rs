@@ -4864,9 +4864,18 @@ impl Renderer {
         // (wgpu spec guarantee) takze fallback netreba.
         let present_mode = wgpu::PresentMode::Fifo;
         crate::vlog!("[render] present_mode = {:?} (available: {:?})", present_mode, surface_caps.present_modes);
+        // GAMMA-SPACE compositing: vyber NON-sRGB (Unorm) surface format aby HW
+        // alpha blending probihal v gamma/sRGB prostoru = STEJNE jako Chrome
+        // (CSS compositing neni linear). Driv formats[0] = typicky sRGB -> blend
+        // v linear -> semi-transparent rgba nesedely (rgba 0.5 pres tmavou
+        // davalo R=190 misto Chrome 148). Fallback na [0] kdyz non-sRGB neni.
+        let surface_format = surface_caps.formats.iter().copied()
+            .find(|f| !f.is_srgb())
+            .unwrap_or(surface_caps.formats[0]);
+        crate::vlog!("[render] surface_format = {:?} (sRGB={})", surface_format, surface_format.is_srgb());
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: surface_caps.formats[0],
+            format: surface_format,
             width: init_w,
             height: init_h,
             present_mode,
@@ -4918,7 +4927,9 @@ impl Renderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            // Unorm (ne Srgb): GAMMA-space rendering - sample vraci sRGB-encoded
+            // hodnoty konzistentni s normalize_color (zadna linear konverze).
+            format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -5404,13 +5415,14 @@ impl Renderer {
     }
 
     /// Upload WebGL texture data do GPU. RGBA bytes (rozmer = w*h*4).
-    /// Format: GL_RGBA (0x1908) -> Rgba8UnormSrgb.
+    /// Format: GL_RGBA (0x1908) -> Rgba8Unorm (gamma-space, konzistentni s RT).
     /// Idempotent reupload.
     pub fn upload_webgl_texture(&mut self, texture_id: u32, w: u32, h: u32, format: u32, data: &[u8]) -> bool {
         if w == 0 || h == 0 || data.is_empty() { return false; }
         // Format mapping. GL_RGBA = 0x1908, GL_RGB = 0x1907.
         // Pro Rgb -> dopadovat na Rgba (GPU nepodporuje 24-bit usually).
-        let wgpu_format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        // Unorm (ne Srgb): gamma-space rendering - sample vraci sRGB-encoded.
+        let wgpu_format = wgpu::TextureFormat::Rgba8Unorm;
         let bytes_per_pixel = 4u32;
         // Pri RGB (3 bytes/pixel) konvertujem na RGBA s alpha=255.
         let rgba_data: Vec<u8> = match format {
@@ -6057,13 +6069,10 @@ impl Renderer {
             Some((_, v, _, _)) => v,
             None => return false,
         };
-        // WebGL clearColor je v sRGB display space. WGPU Color pri sRGB surface
-        // format ocekava LINEAR. Pri 0.18 sRGB -> linear ~= 0.025. Bez konverze
-        // surface znova encoduje sRGB -> output appears "vyblite".
-        fn s2l(s: f32) -> f64 {
-            let v = if s <= 0.04045 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) };
-            v as f64
-        }
+        // RT je nyni Unorm (config.format = non-sRGB pro gamma-space compositing)
+        // -> wgpu Color se uklada raw, takze WebGL sRGB clearColor predavame
+        // primo bez linear konverze. Driv sRGB RT ocekaval linear (s2l).
+        fn s2l(s: f32) -> f64 { s as f64 }
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
             let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor { multiview_mask: None,

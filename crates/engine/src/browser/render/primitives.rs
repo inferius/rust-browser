@@ -680,20 +680,18 @@ pub(super) fn push_inset_shadow(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32,
     verts.extend_from_slice(&[tl, tr, bl, bl, tr, br]);
 }
 
-/// Normalizuje sRGB byte barvu na linear-space [0..1] floats.
-/// Surface format je Rgba8UnormSrgb / Bgra8UnormSrgb - shader pisi LINEAR
-/// values, GPU dela linear->sRGB encoding na pixel write. CSS hex barvy jsou
-/// sRGB (display values), takze je nutne sRGB->linear convert pred shaderem.
-/// Bez tohoto se sRGB byte trated jako linear a surface re-encoduje pres
-/// gamma 2.2 = barvy "vyblednou" (svetlejsi nez ma byt).
+/// Normalizuje sRGB byte barvu na [0..1] floats - GAMMA (sRGB) space, BEZ
+/// linear konverze. Render target je nyni NON-sRGB (Unorm) -> GPU NEdela
+/// linear->sRGB encoding na write, takze barvy putuji shaderem jako sRGB
+/// hodnoty a alpha blending probiha v gamma prostoru = STEJNE jako Chrome
+/// (CSS compositing je v sRGB/gamma, ne linear). Driv: sRGB->linear convert
+/// + sRGB surface -> HW blend v linear -> semi-transparent barvy nesedely
+/// s Chrome (rgba(255,0,0,0.5) pres tmavou davalo R=190 misto 148).
 pub(super) fn normalize_color(c: &[u8; 4]) -> [f32; 4] {
-    fn srgb_to_linear(s: f32) -> f32 {
-        if s <= 0.04045 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }
-    }
     [
-        srgb_to_linear(c[0] as f32 / 255.0),
-        srgb_to_linear(c[1] as f32 / 255.0),
-        srgb_to_linear(c[2] as f32 / 255.0),
-        c[3] as f32 / 255.0, // Alpha je nepotrebuje gamma korekci.
+        c[0] as f32 / 255.0,
+        c[1] as f32 / 255.0,
+        c[2] as f32 / 255.0,
+        c[3] as f32 / 255.0,
     ]
 }

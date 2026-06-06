@@ -345,15 +345,15 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         let a = params.row3.w * src_linear.a + params.offset.w;
         return vec4<f32>(src_linear.rgb * params.row3.w, a);
     }
-    // CSS filter path: gamma to sRGB, apply matrix in sRGB space, gamma back.
-    let src_srgb_rgb = linear_to_srgb(src_linear.rgb);
-    let src = vec4<f32>(src_srgb_rgb, src_linear.a);
+    // GAMMA-space: src je uz sRGB-encoded (Unorm RT, normalize_color bez linear
+    // konverze). CSS filtry definovany v sRGB -> aplikuj matici primo, bez
+    // linear roundtripu. Driv: linear->sRGB, matice, sRGB->linear.
+    let src = src_linear; // jmeno historicke; hodnota je sRGB-encoded
     let r = dot(params.row0, src) + params.offset.x;
     let g = dot(params.row1, src) + params.offset.y;
     let b = dot(params.row2, src) + params.offset.z;
     let a = dot(params.row3, src) + params.offset.w;
-    let out_linear_rgb = srgb_to_linear(vec3<f32>(r, g, b));
-    return vec4<f32>(out_linear_rgb, a);
+    return vec4<f32>(r, g, b, a);
 }
 "#;
 
@@ -430,10 +430,10 @@ fn srgb_to_lin_v(c: vec3<f32>) -> vec3<f32> {
     return select(hi, lo, c < cutoff);
 }
 fn mix_srgb(a: vec4<f32>, b: vec4<f32>, t: f32) -> vec4<f32> {
-    let a_srgb = lin_to_srgb_v(a.rgb);
-    let b_srgb = lin_to_srgb_v(b.rgb);
-    let mixed = mix(a_srgb, b_srgb, t);
-    return vec4<f32>(srgb_to_lin_v(mixed), mix(a.a, b.a, t));
+    // GAMMA-space rendering: barvy uz jsou sRGB-encoded (normalize_color bez
+    // linear konverze, target Unorm) -> mix primo v sRGB = CSS legacy linear-
+    // gradient interpolace = Chrome. Driv: lin->srgb, mix, srgb->lin roundtrip.
+    return mix(a, b, t);
 }
 
 @fragment
