@@ -2706,11 +2706,14 @@ fn build_box_inner_impl(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &supe
                     prev_ws = false;
                 }
             }
-            // Pokud je collapsed jen samotny space -> empty (whitespace-only node).
-            // POZN: text-transform NEN0 tady (text node nema vlastni cascade entry
-            // = s.len=0). Aplikuje se v rodicovske inheritance smycce nize, kde
-            // je dostupny parent style (viz "text-transform" near children loop).
-            if !collapsed.trim().is_empty() {
+            // Whitespace-only node se dropuje, ALE NBSP (U+00A0) je significant
+            // (ne-collapse + renderuje se jako mezera) -> node obsahujici nbsp
+            // NEzahazovat. Rust trim() trimuje i nbsp (je Unicode whitespace),
+            // takze "A &nbsp; B" mezi inline spany se dropla na 0 sirku -> spany
+            // abuttovaly (text-decoration sekce: "wavy underlinedouble overline").
+            // POZN: text-transform NEN0 tady (text node nema vlastni cascade entry).
+            let droppable = collapsed.chars().all(|c| c.is_whitespace() && c != '\u{00A0}');
+            if !droppable {
                 bx.text = Some(collapsed);
             }
         }
@@ -3663,9 +3666,12 @@ fn build_box_inner_impl(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &supe
 
     // Children - skip None display, skip whitespace-only text uzly
     for child in node.children.borrow().iter() {
-        // Pre-filter: prazdne text uzly nepokracujeme rekursi
+        // Pre-filter: ciste whitespace text uzly preskocime. ALE NBSP (U+00A0)
+        // je significant (renderuje se jako mezera) -> node s nbsp NEskipovat.
+        // Rust trim() trimuje i nbsp (Unicode whitespace) -> "A &nbsp; B" mezi
+        // inline spany se skipl -> spany abuttovaly (text-decoration sekce).
         if let NodeKind::Text(t) = &child.kind {
-            if t.trim().is_empty() { continue; }
+            if t.chars().all(|c| c.is_whitespace() && c != '\u{00A0}') { continue; }
         }
         // Comment / DocType / CDATA preskocime
         if !matches!(child.kind,
