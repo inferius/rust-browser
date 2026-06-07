@@ -99,6 +99,24 @@ Pokracovani chyby-rbro doc fixu. Vsechny systemove (no workarounds):
   layout rozmery + paint (checkbox modry fill+bily check ClippedRect, radio modra tecka,
   range track+filled+thumb dle value). +2 testy.
 
+### 3. kolo feedbacku - OPRAVENO (forms cista + dalsi):
+- **Select 'dvojity'**: <option> default_display=None (closed select = jen vybrana
+  hodnota + chevron, ne expandovany seznam). + select paint respektuje custom bg.
+- **Bily pruh u scrollbaru**: canvas bg (body/html) full-viewport fill na index 0
+  (body width zmensena o scrollbar gutter -> prosvital bily clear).
+- **Form overlap (checkbox+range pres TEXT pole)**: KORENOVA pricina = grid
+  'grid-column: 1 / -1' dalo span_col=1 (negativni end neresen) -> full-width forms
+  items (RANGE/TEXTAREA/accent-demo) zabraly 1 col -> auto items vyplnily zbytek
+  rady -> full render pres ne. Fix grid_spans + needed_from_placement (negativni
+  end -> full span). Forms ted renderuji cista (overeno capture).
+
+### 3. kolo - ZBYVA (forms interakce + dalsi sekce):
+- Form INTERAKCE: klik na checkbox/radio (toggle checked), psani do inputu, drag
+  range thumb -> JS/event strana, tezko verifikovat bez mouse injection. RENDERING
+  forms je ted OK.
+- Dalsi sekce stranky (mix-blend, filtry, typografie, canvas, obskurni CSS) +
+  interaktivni (sticky, klikani, scroll) - user "projdi celou stranku".
+
 ### 2. kolo feedbacku - ZBYVA (forms + dalsi):
 - Text/email/number/textarea inputy: border slaby kontrast (gray 118 na svetlem bg) -
   mozna OK, overit s realnym CSS. Unchecked checkbox/radio slaby kontrast.
