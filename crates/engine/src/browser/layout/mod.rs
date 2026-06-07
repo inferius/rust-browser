@@ -2213,6 +2213,23 @@ fn collect_table_rows(bx: &LayoutBox, out: &mut Vec<usize>) {
     }
 }
 
+/// Max-content sirka bunky = soucet sirek vsech inline text runu v podstromu
+/// (bez wrapu). Pouzite pro auto table-layout column sizing - sirka sloupce =
+/// max pres bunky. Bez tohoto se bralo cell.rect.width (pri prelayout = 0) ->
+/// vsechny sloupce rovnomerne. Aproximace: scita text descendantu jako inline.
+fn cell_content_max_width(bx: &LayoutBox) -> f32 {
+    let mut w = 0.0;
+    if let Some(t) = &bx.text {
+        w += measure_text_width_full(t, bx.font_size, bx.effective_weight(),
+            bx.italic, &bx.font_family, bx.letter_spacing);
+    }
+    for c in &bx.children {
+        if matches!(c.display, Display::None) { continue; }
+        w += cell_content_max_width(c);
+    }
+    w
+}
+
 fn collect_table_cells(
     bx: &LayoutBox,
     row_counter: &mut usize,
@@ -2228,12 +2245,15 @@ fn collect_table_cells(
                 let mut col = 0usize;
                 for cell in &child.children {
                     if matches!(cell.display, Display::TableCell | Display::TableHeaderCell) {
-                        // Min content width = pad + border + heuristic 24 (jedno slovo).
-                        // Max content width = pad + border + estimated text width.
-                        let pad = cell.padding;
-                        let extra = pad * 2.0 + cell.border_width * 2.0;
-                        let estimated_max = cell.rect.width.max(80.0) + extra;
-                        let estimated_min = (24.0 + extra).min(estimated_max);
+                        // Min/max content width = text obsah bunky + padding + border.
+                        // Driv cell.rect.width (pri prelayout = 0) -> vsechny sloupce
+                        // rovnomerne. Ted realny max-content text -> sloupce dle obsahu.
+                        let pad_l = cell.padding_left.unwrap_or(cell.padding);
+                        let pad_r = cell.padding_right.unwrap_or(cell.padding);
+                        let extra = pad_l + pad_r + cell.border_width * 2.0;
+                        let content_w = cell_content_max_width(cell);
+                        let estimated_max = content_w + extra;
+                        let estimated_min = (content_w.min(24.0) + extra).min(estimated_max);
                         cells.push(TableCellSpec {
                             row, col,
                             row_span: 1,
