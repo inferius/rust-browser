@@ -123,19 +123,22 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VOut {
     let ty = dot(tp.row1, p);
     let tz = dot(tp.row2, p);
     let tw = dot(tp.row3, p);
-    // Perspective divide
-    let inv_w = 1.0 / max(tw, 0.0001);
-    let px = tx * inv_w + tp.center.x;
-    let py = ty * inv_w + tp.center.y;
+    // Perspective divide (px space) pro pozici stredu rohu.
+    let w = max(tw, 0.0001);
+    let px = tx / w + tp.center.x;
+    let py = ty / w + tp.center.y;
     let nx = (px / tp.viewport.x) * 2.0 - 1.0;
     let ny = 1.0 - (py / tp.viewport.y) * 2.0;
-    // wgpu NDC z range = [0, 1]. Pri 3D rotaci tz muze byt v sirokem rozsahu
-    // (rotateY(45) -> tz ∈ [-hw, +hw]) -> mimo [0,1] = fragment clipped =
-    // pulka rotace nezobrazena. Fix: pevny nz = 0.5 (vsechno na same depth -
-    // ne real 3D, ale spravne 2D-style render rotovaneho elementu).
-    let nz = 0.5;
+    // PERSPEKTIVNE-KOREKTNI interpolace UV: vystup HOMOGENNI clip pos s w=tw.
+    // GPU rasterizer pak deli pozici (nx*w)/w = nx (spravna pozice rohu) ALE
+    // varying `uv` interpoluje HYPERBOLICKY (perspective-correct) misto afinne.
+    // Driv: manualni divide + clip.w=1.0 -> afinni uv interp -> kazdy ze 2
+    // trojuhelniku quadu mapoval texturu jinak -> viditelny "zlom" na diagonale
+    // (pulka textu vypadala zrcadlena/opacne pri rotateY+perspective).
+    // wgpu NDC z range = [0,1]: clip.z = 0.5*w -> ndc.z = 0.5 (v rozsahu, bez
+    // 3D depth clippingu pulky rotace).
     var out: VOut;
-    out.clip = vec4<f32>(nx, ny, nz, 1.0);
+    out.clip = vec4<f32>(nx * w, ny * w, 0.5 * w, w);
     out.uv = uvs[i];
     return out;
 }
