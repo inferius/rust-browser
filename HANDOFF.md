@@ -88,6 +88,26 @@ Pokracovani chyby-rbro doc fixu. Vsechny systemove (no workarounds):
 - **SVG testy (7)**: zastarale (Rect/Circle commandy) -> aktualizovany na resvg
   raster (DisplayCommand::Image + INLINE_SVG_CACHE pixel check).
 
+### Po user feedbacku (screenshoty) - diagnostikovano, odlozeno (dedikovany fix):
+- **Perspective pravy (vzdaleny) border slaby/chybi**: perspektivne-korektni interp
+  (Session N+30 shader fix, opravil zrcadleni textu) KOMPRIMUJE vzdalenou hranu vic
+  nez afinni -> 6px border tam minifikuje a aliasuje pryc (linear sampling bez
+  mipmap). rotateY BEZ perspective (afinni) border MA. Fix vyzaduje MIPMAPS na
+  layer/offscreen texture NEBO output-supersampling transform passu (compose_transform
+  / TRANSFORM_SHADER render/mod.rs ~7895). Text correctness ma prednost -> shader fix
+  ponechan. Overeno capture (rotateY vs +perspective porovnani).
+- **Tabulka hover "zvetseni-zpozdeni-zmenseni"**: runtime glitch pri hoveru radku
+  (tr:hover bg -> re-cascade -> re-layout). Staticky tabulka stabilni (dump 951x211,
+  sloupce zarovnane+content-sized po Session N+30 fixu). Pattern "enlarge then shrink"
+  = nejspis 2-pass intrinsic-pollution (jako grid/flex) NEBO transition na re-layout.
+  Nutno verifikovat pri runtime hoveru (mouse injection chybi). Coloring/border
+  tabulky overeno OK v izolovane fixtre (header bg, border-bottom, nth-child striping).
+- **Gradienty**: renderuji OK v izolovane fixtre (linear/radial/conic barvy+smery
+  spravne, radial "at 30% 30%" pozice parsovana cx/cy=0.30). gamma fix je NErozbil
+  (spis priblizil Chrome sRGB interpolaci). "rozjebal vic" byl starsi stav z doc.
+  Pripadne jeste zkontrolovat animovany gradient (background-position shift anim) +
+  multi-layer v plne strance.
+
 ### Zbyva z chyby-rbro doc (pro dalsi tah, mnoho interaktivnich = tezko verifikovat staticky):
 - calc/clamp/min/max s % (task_aa5a72b0 spawnut)
 - Position: sticky (menu zaseknuty), JS klikani/events "nikde nefunguji",
