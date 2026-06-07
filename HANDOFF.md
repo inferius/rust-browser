@@ -2,6 +2,63 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`, `debug_utils.md`.
 
+## TODO (dedikovany tah): PERF 120 -> 240 FPS = compositor-only fast path
+
+**Stav:** 35 -> 120 FPS hotovo (commit "PERF: paint-animovane elementy na vlastni
+layer" - colorCycle apod. bg/border animace co NEjsou transform/opacity ted
+dostavaji vlastni layer pres FORCE_LAYER_NODES, jinak damagovaly root -> full
+root re-paint 17.7ms). 120 FPS je vsync cap na 120Hz; na 240Hz pada na 120
+protoze frame work ~5-7ms > 4.2ms (240Hz interval).
+
+**Problem:** kazdy frame transform/opacity animace bezi CELA pipeline i kdyz se
+meni jen jak se layer slozi (ne obsah). Layout faze ~3ms = layout_fingerprint
+prepocet (~0.7ms, O(boxes) kazdy frame), layout_root.clone (0.46ms),
+apply_paint_animations (0.57ms walk vsech boxu), extract_layer_tree rebuild
+(0.65ms), mark_damage. + paint ~0.7ms + gpu ~1ms. (Profilovano RWE_PROF +
+docasne timery; repro: tall page 500 divu + spin = layout 2.9ms, paint 0.6.)
+
+**Korenova pricina:** compositor-driven anim path je NEZAPOJENY.
+`CompositorAnimStore` (crates/engine/src/browser/compositor/anim.rs: tick +
+apply_to_layer_tree) existuje, ALE `register_transform_anim`/`register_opacity_anim`
+(webview.rs ~615) maji ZADNE callery. Takze CSS animace jdou plnou cestou
+(apply_paint_animations -> style_map -> box.transform -> extract -> layer)
+kazdy frame.
+
+**Fix (fast path) - jak Chrome/FF/WebRender (SCENE vs FRAME, reuse scene):**
+1. Detekovat compositor-only frame: gating `needs_tick && is_compositor_only_frame()
+   && !self.dirty && layout_key == self.layout_cache_key && last_layer_tree.is_some()
+   && target_view.is_some()`. (is_compositor_only_frame uz existuje webview.rs ~3611.)
+2. Skip cela layout+paint faze (webview.rs render_via ~2693-3360).
+3. Reuse `self.last_layer_tree` (= scene). cascade faze (keyframe tick, ~2560, bezi
+   PRED paint_cache_hit ~2676) UZ zapsala interpolovany transform do style_map ->
+   read ho a update layer.transforms/opacity na last_layer_tree (lightweight walk
+   layeru, ne vsech boxu).
+4. Re-compose: compose sekce webview.rs ~3362-3510 UZ pouziva self.last_layer_tree
+   + compose_view_to_view_transform_into_encoder. Zavolat ji (extract do metody
+   NEBO fast-path branch s early return).
+
+**Komplikace (proc to chce dedikovany fokus + testovani):**
+- (a) OVERLAY: scrollbar/devtools/canvas se kresli v paint fazi (display_list po
+  d4_overlay_start) co fast path skipuje -> zmizely by. Nutno cachovat overlay
+  cmds z posledniho full frame + reuse, NEBO gate fast path na "zadny overlay".
+- (b) presne gating (nesmi se spustit pri DOM/scroll/hover/layout-animaci jako width).
+- (c) reconcile s apply_paint_animations (aby se transform neaplikoval 2x).
+
+**Reference (stazene v `F:\Projects\browser-refs`, shallow):**
+- `gecko-dev/gfx/wr/webrender/src/` - WebRender (frame_builder.rs, composite.rs,
+  picture.rs) = primo model meho compositoru. SCENE vs FRAME split.
+- `chromium/cc/trees/` - property_tree (TransformTree/EffectTree), damage_tracker,
+  draw_property_utils = jak cc kresli frame z trees BEZ main-thread relayoutu.
+- `servo/components/layout` + `gecko-dev/layout/generic` (nsFlexContainerFrame,
+  nsGridContainerFrame) = flex/grid intrinsic reference.
+
+**Verifikace:** RWE_PROF (frame time klesne ~5ms -> ~1ms) + capture (animace bezi
+plynule + scrollbar/overlay NEzmizel). Revert pri regresi.
+
+**Doporuceni:** nechat na dedikovany tah (ne spech). 120 FPS je plynule, neni
+urgence; fast path je velka hot-path zmena s klesajicim perceptualnim prinosem.
+Ale ma hodnotu i mimo FPS (spravna architektura, nizsi spotreba).
+
 ## Session N+29: hover transitions + grid template-areas + keyframe animace + hover PERF
 
 Pokracovani chyby-rbro doc fixu. Systemove bugy:
