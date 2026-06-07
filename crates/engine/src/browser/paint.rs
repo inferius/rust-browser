@@ -2106,6 +2106,33 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         }
     }
 
+    // Per-side bordery (border-bottom/top/left/right). Uniformni Border vyse kresli
+    // border_width na vsech stranach; tady doplnime ASYMETRICKE strany jako strip
+    // Rect. Guard (w != border_width) brani double-draw kdyz uniform uz stranu
+    // nakreslil. Jen pri radius~0 (rounded box pouziva uniform rounded path).
+    // Bez tohoto se border-bottom (row separatory, underliny) VUBEC nekreslil.
+    if border_visible && bx.border_radius <= 0.5 {
+        if let Some(bc) = bx.border_color {
+            let col = with_alpha(bc);
+            let uw = bx.border_width;
+            let strip = |cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, w: f32, h: f32| {
+                cmds.push(DisplayCommand::Rect { x, y, w, h, color: col, radius: 0.0 });
+            };
+            if let Some(w) = bx.border_top_width { if w > 0.0 && (w - uw).abs() > 0.01 {
+                strip(cmds, bx.rect.x, bx.rect.y, bx.rect.width, w);
+            }}
+            if let Some(w) = bx.border_bottom_width { if w > 0.0 && (w - uw).abs() > 0.01 {
+                strip(cmds, bx.rect.x, bx.rect.y + bx.rect.height - w, bx.rect.width, w);
+            }}
+            if let Some(w) = bx.border_left_width { if w > 0.0 && (w - uw).abs() > 0.01 {
+                strip(cmds, bx.rect.x, bx.rect.y, w, bx.rect.height);
+            }}
+            if let Some(w) = bx.border_right_width { if w > 0.0 && (w - uw).abs() > 0.01 {
+                strip(cmds, bx.rect.x + bx.rect.width - w, bx.rect.y, w, bx.rect.height);
+            }}
+        }
+    }
+
     // Outline (mimo border, posunuto o offset, neovlivnuje layout)
     if bx.outline_width > 0.0 && bx.outline_style != "none" && !bx.outline_style.is_empty() {
         if let Some(oc) = bx.outline_color {

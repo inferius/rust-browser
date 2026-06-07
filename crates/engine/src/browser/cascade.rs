@@ -414,8 +414,13 @@ pub fn expand_shorthand(prop: &str, value: &str, out: &mut HashMap<String, Strin
             out.insert(format!("{prop}-left"),   l.into());
             out.insert(prop.into(), value.into()); // shorthand zachovan pro existing read
         }
-        "border" | "outline" => {
-            // "1px solid red" - parse postupne
+        "border" | "outline"
+        | "border-top" | "border-right" | "border-bottom" | "border-left" => {
+            // "1px solid red" - parse postupne. prefix = prop, takze border-bottom
+            // -> border-bottom-width/style/color (= longhandy co apply_styles cte).
+            // Drive side shorthandy (border-bottom atd.) spadly do _ => verbatim ->
+            // border-bottom-width se nikdy nevytvoril -> border-bottom se nekreslil
+            // (row separatory, underliny chybely).
             let parts: Vec<&str> = value.split_whitespace().collect();
             let prefix = prop;
             for p in &parts {

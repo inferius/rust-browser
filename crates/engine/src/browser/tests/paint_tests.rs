@@ -62,6 +62,34 @@ fn rgba_has_purple(rgba: &[u8]) -> bool {
     })
 }
 
+#[test]
+fn paint_border_bottom_emits_strip() {
+    // Per-side border (border-bottom) - drive se shorthand neexpandoval na
+    // border-bottom-width -> border-bottom (row separatory, underliny) se
+    // nekreslil. Ted emit Rect strip (h = border-bottom-width) u spodu boxu.
+    let cmds = build_dl(
+        r#"<html><body><div>x</div></body></html>"#,
+        r#"div { width: 100px; height: 40px; border-bottom: 3px solid #ff0000; }"#,
+    );
+    let strip = cmds.iter().any(|c| matches!(c,
+        DisplayCommand::Rect { color: [255, 0, 0, 255], w, h, .. }
+        if (*h - 3.0).abs() < 0.1 && *w >= 99.0));
+    assert!(strip, "border-bottom: 3px solid red emit 3px cerveny Rect strip");
+}
+
+#[test]
+fn paint_border_left_emits_strip() {
+    let cmds = build_dl(
+        r#"<html><body><div>x</div></body></html>"#,
+        r#"div { width: 100px; height: 40px; border-left: 5px solid #00ff00; }"#,
+    );
+    // border-left -> vertikalni strip (w = 5) u leve hrany.
+    let strip = cmds.iter().any(|c| matches!(c,
+        DisplayCommand::Rect { color: [0, 255, 0, 255], w, h, .. }
+        if (*w - 5.0).abs() < 0.1 && *h >= 39.0));
+    assert!(strip, "border-left: 5px solid green emit 5px zeleny vertikalni strip");
+}
+
 fn count_filter_ends(cmds: &[DisplayCommand]) -> usize {
     cmds.iter().filter(|c| matches!(c, DisplayCommand::FilterEnd)).count()
 }

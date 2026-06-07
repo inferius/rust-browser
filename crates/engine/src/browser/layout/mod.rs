@@ -3291,6 +3291,34 @@ fn build_box_inner_impl(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &supe
     if let Some(b) = s.get("border-width") { bx.border_width = parse_length(b); }
     if let Some(bc) = s.get("border-color") { bx.border_color = parse_color(bc); }
     if let Some(bs) = s.get("border-style") { bx.border_style = bs.trim().to_string(); }
+    // Per-side border widths (border-top/right/bottom/left-width). Drive se cetl
+    // jen shorthand border-width -> border-bottom (separatory, underliny) se
+    // NEaplikoval ani nerenderoval. LayoutBox nema per-side color/style pole -
+    // sdilime border_color + border_style (jedna barva = bezny pripad).
+    // border-{side}-style:none -> width 0 (CSS: style none = neviditelne).
+    for (wkey, skey, ckey) in [
+        ("border-top-width", "border-top-style", "border-top-color"),
+        ("border-right-width", "border-right-style", "border-right-color"),
+        ("border-bottom-width", "border-bottom-style", "border-bottom-color"),
+        ("border-left-width", "border-left-style", "border-left-color"),
+    ] {
+        let Some(wv) = s.get(wkey) else { continue };
+        let w = parse_length(wv);
+        if let Some(c) = s.get(ckey) { if bx.border_color.is_none() { bx.border_color = parse_color(c); } }
+        let mut is_none = false;
+        if let Some(st) = s.get(skey) {
+            let st = st.trim();
+            if st == "none" { is_none = true; }
+            else if bx.border_style.is_empty() || bx.border_style == "none" { bx.border_style = st.to_string(); }
+        }
+        let eff = if is_none { 0.0 } else { w };
+        match wkey {
+            "border-top-width" => bx.border_top_width = Some(eff),
+            "border-right-width" => bx.border_right_width = Some(eff),
+            "border-bottom-width" => bx.border_bottom_width = Some(eff),
+            _ => bx.border_left_width = Some(eff),
+        }
+    }
     if let Some(fs) = s.get("font-size") { bx.font_size = parse_length(fs); bx.font_size_explicit = true; }
     // line-height: "normal" je font-specific (CSS spec deleguje na font OS/2
     // metrics). Approximace: sans-serif (Arial, Helvetica) ~1.15, monospace
