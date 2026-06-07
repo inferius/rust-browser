@@ -15,6 +15,53 @@ fn count_filter_begins(cmds: &[DisplayCommand]) -> usize {
     cmds.iter().filter(|c| matches!(c, DisplayCommand::FilterBegin { .. })).count()
 }
 
+// ─── SVG resvg raster helpery ────────────────────────────────────────────
+// Inline SVG se od commitu "Inline SVG via resvg+tiny-skia" NErenderuje jako
+// Rect/Circle/ClippedRect display commands, ale rasterizuje pres resvg do
+// bitmapy (INLINE_SVG_CACHE) + emit jako DisplayCommand::Image (src "__isvg_").
+// Testy proto overuji: (1) emit prave 1 __isvg_ Image (serialize_svg behlo),
+// (2) rasterizovane pixely obsahuji ocekavanou fill barvu (= serialize_svg
+// spravne zahrnul danou shape; resvg sam je external + dukladne testovany).
+
+/// Najde __isvg_ Image v display listu + vrati jeho rasterizovanou RGBA bitmapu
+/// (premultiplied, R,G,B,A) z INLINE_SVG_CACHE. None = zadny SVG Image.
+fn svg_image_rgba(cmds: &[DisplayCommand]) -> Option<(Vec<u8>, u32, u32)> {
+    let key = cmds.iter().find_map(|c| match c {
+        DisplayCommand::Image { src, .. } if src.starts_with("__isvg_") => Some(src.clone()),
+        _ => None,
+    })?;
+    crate::browser::paint::INLINE_SVG_CACHE.with(|c| {
+        c.borrow().get(&key).map(|(rgba, w, h, _)| (rgba.clone(), *w, *h))
+    })
+}
+
+/// Pocet __isvg_ Image commandu (= kolikrat se SVG emitnul).
+fn svg_image_count(cmds: &[DisplayCommand]) -> usize {
+    cmds.iter().filter(|c| matches!(c,
+        DisplayCommand::Image { src, .. } if src.starts_with("__isvg_"))).count()
+}
+
+/// True kdyz rasterizovana bitmapa obsahuje aspon 1 plne-kryjici pixel ~ (r,g,b).
+/// Premultiplied + opaque (a>200) fill = straight barva, tolerance per kanal 60.
+fn rgba_has_color(rgba: &[u8], r: u8, g: u8, b: u8) -> bool {
+    rgba.chunks_exact(4).any(|p| {
+        p[3] > 200
+            && (p[0] as i32 - r as i32).abs() <= 60
+            && (p[1] as i32 - g as i32).abs() <= 60
+            && (p[2] as i32 - b as i32).abs() <= 60
+    })
+}
+
+/// True kdyz bitmapa obsahuje purpurovy pixel (r+b vysoke, g nizke) - tenky AA
+/// text nemusi mit plne-kryjici pixel, takze detekuje i premultiplied AA.
+fn rgba_has_purple(rgba: &[u8]) -> bool {
+    rgba.chunks_exact(4).any(|p| {
+        p[3] > 30 && p[0] > 30 && p[2] > 30
+            && (p[1] as i32) < (p[0] as i32) - 10
+            && (p[1] as i32) < (p[2] as i32) - 10
+    })
+}
+
 fn count_filter_ends(cmds: &[DisplayCommand]) -> usize {
     cmds.iter().filter(|c| matches!(c, DisplayCommand::FilterEnd)).count()
 }
@@ -375,11 +422,10 @@ fn paint_svg_rect_emits_rect() {
         </svg></body></html>"#,
         "",
     );
-    let has_red_rect = cmds.iter().any(|c| matches!(c,
-        DisplayCommand::Rect { color: [255, 0, 0, 255], w, h, .. }
-        if (*w - 50.0).abs() < 0.1 && (*h - 30.0).abs() < 0.1
-    ));
-    assert!(has_red_rect, "SVG <rect> emit DisplayCommand::Rect");
+    // SVG se rasterizuje pres resvg -> 1 __isvg_ Image; bitmapa ma cervene pixely.
+    assert_eq!(svg_image_count(&cmds), 1, "SVG emit prave 1 __isvg_ Image");
+    let (rgba, _, _) = svg_image_rgba(&cmds).expect("SVG rasterizovan do cache");
+    assert!(rgba_has_color(&rgba, 255, 0, 0), "SVG <rect fill=red> rasterizovan cervene");
 }
 
 #[test]
@@ -390,11 +436,9 @@ fn paint_svg_circle_emits_rounded_rect() {
         </svg></body></html>"#,
         "",
     );
-    let has_circle = cmds.iter().any(|c| matches!(c,
-        DisplayCommand::Rect { color: [0, 0, 255, 255], radius, .. }
-        if (*radius - 20.0).abs() < 0.1
-    ));
-    assert!(has_circle, "SVG <circle> emit Rect s radius=r");
+    assert_eq!(svg_image_count(&cmds), 1, "SVG emit prave 1 __isvg_ Image");
+    let (rgba, _, _) = svg_image_rgba(&cmds).expect("SVG rasterizovan do cache");
+    assert!(rgba_has_color(&rgba, 0, 0, 255), "SVG <circle fill=blue> rasterizovan modre");
 }
 
 #[test]
@@ -405,11 +449,9 @@ fn paint_svg_polygon_emits_clipped() {
         </svg></body></html>"#,
         "",
     );
-    let has_polygon = cmds.iter().any(|c| matches!(c,
-        DisplayCommand::ClippedRect { color: [0, 0x80, 0, 255], points }
-        if points.len() == 3
-    ));
-    assert!(has_polygon, "SVG <polygon> emit ClippedRect 3-point");
+    assert_eq!(svg_image_count(&cmds), 1, "SVG emit prave 1 __isvg_ Image");
+    let (rgba, _, _) = svg_image_rgba(&cmds).expect("SVG rasterizovan do cache");
+    assert!(rgba_has_color(&rgba, 0, 0x80, 0), "SVG <polygon fill=green> rasterizovan zelene");
 }
 
 #[test]
@@ -467,12 +509,11 @@ fn paint_svg_group_recursion() {
         </svg></body></html>"#,
         "",
     );
-    let red = cmds.iter().any(|c| matches!(c,
-        DisplayCommand::Rect { color: [255, 0, 0, 255], .. }));
-    let blue = cmds.iter().any(|c| matches!(c,
-        DisplayCommand::Rect { color: [0, 0, 255, 255], .. }));
-    assert!(red, "SVG <g> -> <rect> red emit");
-    assert!(blue, "SVG <g> -> <rect> blue emit");
+    // <g> recursion: serialize_svg musi zahrnout OBE deti -> raster ma cervene i modre.
+    assert_eq!(svg_image_count(&cmds), 1, "SVG emit prave 1 __isvg_ Image");
+    let (rgba, _, _) = svg_image_rgba(&cmds).expect("SVG rasterizovan do cache");
+    assert!(rgba_has_color(&rgba, 255, 0, 0), "SVG <g> -> <rect red> rasterizovan");
+    assert!(rgba_has_color(&rgba, 0, 0, 255), "SVG <g> -> <rect blue> rasterizovan");
 }
 
 #[test]
@@ -739,21 +780,12 @@ fn paint_svg_text_emitted_once_not_double() {
         </svg></body></html>"#,
         r#"body { margin: 0; padding: 50px; } svg { display: block; }"#,
     );
-    // "SVG text" Text cmd musi byt JEN jednou (emit_svg_children), ne 2x.
-    let svg_text_count = cmds.iter().filter(|c| {
-        if let DisplayCommand::Text { content, .. } = c {
-            content == "SVG text"
-        } else { false }
-    }).count();
-    assert_eq!(svg_text_count, 1, "SVG text musi byt emit JEN jednou, ne pres regular paint_inline_or_text");
-    // x musi byt > 0 (= SVG.rect.x + 290) - SVG je na padding 50, takze x je ~340.
-    for cmd in &cmds {
-        if let DisplayCommand::Text { content, x, .. } = cmd {
-            if content == "SVG text" {
-                assert!(*x > 100.0, "SVG text x={} musi byt v SVG-space (svg.rect.x + 290), ne 290 absolutne", x);
-            }
-        }
-    }
+    // SVG text se rasterizuje do resvg bitmapy (ne DisplayCommand::Text). Overeni:
+    // (1) emit prave 1 __isvg_ Image (ne 2x = "not double"), (2) serialize_svg
+    // zahrnul <text> -> bitmapa ma purpurove pixely (jinak prazdna).
+    assert_eq!(svg_image_count(&cmds), 1, "SVG text emit JEN 1 __isvg_ Image (ne 2x)");
+    let (rgba, _, _) = svg_image_rgba(&cmds).expect("SVG rasterizovan do cache");
+    assert!(rgba_has_purple(&rgba), "SVG <text fill=purple> rasterizovan (serialize_svg zahrnul text)");
 }
 
 // ─── Polygon clip-path ──────────────────────────────────────────────────

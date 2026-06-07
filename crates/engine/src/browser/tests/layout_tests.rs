@@ -1201,10 +1201,16 @@ fn svg_rect_emits_display_command() {
     let style_map = crate::browser::cascade::cascade(&doc.root, &[css]);
     let root = layout::layout_tree(&doc.root, &style_map, 1024.0, 768.0);
     let cmds = paint::build_display_list(&root);
-    // SVG <rect> by mel emit Rect command s red color
-    let red_rect = cmds.iter().find(|c| matches!(c,
-        paint::DisplayCommand::Rect { color: [255, 0, 0, 255], .. }));
-    assert!(red_rect.is_some(), "svg rect mel byt emitten");
+    // SVG se rasterizuje pres resvg -> __isvg_ Image (ne Rect command); bitmapa
+    // (INLINE_SVG_CACHE) musi mit cervene pixely.
+    let key = cmds.iter().find_map(|c| match c {
+        paint::DisplayCommand::Image { src, .. } if src.starts_with("__isvg_") => Some(src.clone()),
+        _ => None,
+    }).expect("SVG mel emit __isvg_ Image");
+    let has_red = paint::INLINE_SVG_CACHE.with(|c| c.borrow().get(&key).map(|(rgba, _, _, _)|
+        rgba.chunks_exact(4).any(|p| p[3] > 200 && p[0] > 195 && p[1] < 60 && p[2] < 60)
+    ).unwrap_or(false));
+    assert!(has_red, "SVG <rect fill=red> rasterizovan cervene");
 }
 
 #[test]
@@ -1219,9 +1225,15 @@ fn svg_circle_emits_rounded_rect() {
     let style_map = crate::browser::cascade::cascade(&doc.root, &[css]);
     let root = layout::layout_tree(&doc.root, &style_map, 1024.0, 768.0);
     let cmds = paint::build_display_list(&root);
-    let blue = cmds.iter().find(|c| matches!(c,
-        paint::DisplayCommand::Rect { color: [0, 0, 255, 255], radius, .. } if *radius == 30.0));
-    assert!(blue.is_some());
+    // SVG circle -> resvg raster -> __isvg_ Image; bitmapa musi mit modre pixely.
+    let key = cmds.iter().find_map(|c| match c {
+        paint::DisplayCommand::Image { src, .. } if src.starts_with("__isvg_") => Some(src.clone()),
+        _ => None,
+    }).expect("SVG mel emit __isvg_ Image");
+    let has_blue = paint::INLINE_SVG_CACHE.with(|c| c.borrow().get(&key).map(|(rgba, _, _, _)|
+        rgba.chunks_exact(4).any(|p| p[3] > 200 && p[2] > 195 && p[0] < 60 && p[1] < 60)
+    ).unwrap_or(false));
+    assert!(has_blue, "SVG <circle fill=blue> rasterizovan modre");
 }
 
 #[test]
