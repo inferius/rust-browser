@@ -90,6 +90,25 @@ fn paint_border_left_emits_strip() {
     assert!(strip, "border-left: 5px solid green emit 5px zeleny vertikalni strip");
 }
 
+#[test]
+fn paint_checkbox_checked_emits_accent_check() {
+    // Nativni checkbox control - drive se nekreslil vubec.
+    let cmds = build_dl(r#"<html><body><input type="checkbox" checked></body></html>"#, "");
+    let fill = cmds.iter().any(|c| matches!(c, DisplayCommand::Rect { color: [26, 115, 232, 255], .. }));
+    let check = cmds.iter().any(|c| matches!(c, DisplayCommand::ClippedRect { color: [255, 255, 255, 255], .. }));
+    assert!(fill, "checked checkbox emit modry accent fill");
+    assert!(check, "checked checkbox emit bily checkmark (ClippedRect)");
+}
+
+#[test]
+fn paint_range_emits_thumb() {
+    let cmds = build_dl(r#"<html><body><input type="range" min="0" max="100" value="50"></body></html>"#, "");
+    // range -> thumb = accent kruh (Rect radius > 3).
+    let thumb = cmds.iter().any(|c| matches!(c,
+        DisplayCommand::Rect { color: [26, 115, 232, 255], radius, .. } if *radius > 3.0));
+    assert!(thumb, "range emit modry thumb (kruh s radius)");
+}
+
 fn count_filter_ends(cmds: &[DisplayCommand]) -> usize {
     cmds.iter().filter(|c| matches!(c, DisplayCommand::FilterEnd)).count()
 }

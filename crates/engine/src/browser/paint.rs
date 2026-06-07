@@ -2133,6 +2133,56 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         }
     }
 
+    // Nativni form controls (checkbox / radio / range) - overlay nad default
+    // bg/border. Drive se nekreslily vubec (zadny handling) = "inputy nefunguji".
+    if bx.tag.as_deref() == Some("input") {
+        let typ = bx.node.as_ref().and_then(|n| n.attr("type"))
+            .map(|t| t.to_lowercase()).unwrap_or_else(|| "text".into());
+        let checked = bx.node.as_ref().map(|n| n.attr("checked").is_some()).unwrap_or(false);
+        let accent = [26u8, 115, 232, 255]; // Chrome accent blue
+        match typ.as_str() {
+            "checkbox" if checked => {
+                // Modra vypln + bily checkmark (ClippedRect thick-V polygon).
+                cmds.push(DisplayCommand::Rect {
+                    x: bx.rect.x, y: bx.rect.y, w: bx.rect.width, h: bx.rect.height,
+                    color: accent, radius: 2.0,
+                });
+                let (x, y, s) = (bx.rect.x, bx.rect.y, bx.rect.width.min(bx.rect.height));
+                let pt = |fx: f32, fy: f32| (x + fx * s, y + fy * s);
+                let pts = vec![
+                    pt(0.22, 0.50), pt(0.42, 0.70), pt(0.80, 0.24),
+                    pt(0.86, 0.34), pt(0.42, 0.84), pt(0.16, 0.58),
+                ];
+                cmds.push(DisplayCommand::ClippedRect { color: [255, 255, 255, 255], points: pts });
+            }
+            "radio" if checked => {
+                // Modra tecka uprostred (Rect s radius = kruh).
+                let cx = bx.rect.x + bx.rect.width * 0.5;
+                let cy = bx.rect.y + bx.rect.height * 0.5;
+                let r = bx.rect.width.min(bx.rect.height) * 0.28;
+                cmds.push(DisplayCommand::Rect {
+                    x: cx - r, y: cy - r, w: r * 2.0, h: r * 2.0, color: accent, radius: r,
+                });
+            }
+            "range" => {
+                // Track (gray) + filled (accent do value) + thumb (kruh).
+                let attr_f = |name: &str, d: f32| bx.node.as_ref()
+                    .and_then(|n| n.attr(name)).and_then(|v| v.trim().parse().ok()).unwrap_or(d);
+                let (val, min, max) = (attr_f("value", 50.0), attr_f("min", 0.0), attr_f("max", 100.0));
+                let frac = if max > min { ((val - min) / (max - min)).clamp(0.0, 1.0) } else { 0.0 };
+                let track_y = bx.rect.y + bx.rect.height * 0.5 - 2.0;
+                cmds.push(DisplayCommand::Rect { x: bx.rect.x, y: track_y, w: bx.rect.width, h: 4.0, color: [180, 180, 185, 255], radius: 2.0 });
+                if frac > 0.0 {
+                    cmds.push(DisplayCommand::Rect { x: bx.rect.x, y: track_y, w: bx.rect.width * frac, h: 4.0, color: accent, radius: 2.0 });
+                }
+                let tx = bx.rect.x + bx.rect.width * frac;
+                let tr = 7.0;
+                cmds.push(DisplayCommand::Rect { x: tx - tr, y: bx.rect.y + bx.rect.height * 0.5 - tr, w: tr * 2.0, h: tr * 2.0, color: accent, radius: tr });
+            }
+            _ => {}
+        }
+    }
+
     // Outline (mimo border, posunuto o offset, neovlivnuje layout)
     if bx.outline_width > 0.0 && bx.outline_style != "none" && !bx.outline_style.is_empty() {
         if let Some(oc) = bx.outline_color {

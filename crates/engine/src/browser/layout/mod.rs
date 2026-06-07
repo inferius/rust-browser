@@ -650,6 +650,21 @@ fn apply_default_tag_styles(bx: &mut LayoutBox, tag: &str) {
                     if bx.rect.height == 0.0 { bx.rect.height = 21.0; }
                     if bx.rect.width == 0.0 { bx.rect.width = 154.0; }
                 }
+                "checkbox" | "radio" => {
+                    // Nativni control 13x13. Radio = kruh (border_radius).
+                    // checked stav + checkmark/dot kresli paint (form-control blok).
+                    if bx.explicit_width.is_none() { bx.rect.width = 13.0; bx.explicit_width = Some(13.0); }
+                    if bx.explicit_height.is_none() { bx.rect.height = 13.0; bx.explicit_height = Some(13.0); }
+                    if bx.border_width == 0.0 { bx.border_width = 1.0; }
+                    if bx.border_color.is_none() { bx.border_color = Some([118, 118, 118, 255]); }
+                    if bx.bg_color.is_none() { bx.bg_color = Some([255, 255, 255, 255]); }
+                    if typ == "radio" && bx.border_radius == 0.0 { bx.border_radius = 6.5; }
+                }
+                "range" => {
+                    // Slider: track + thumb kresli paint. Default 129x15.
+                    if bx.explicit_width.is_none() && bx.rect.width == 0.0 { bx.rect.width = 129.0; bx.explicit_width = Some(129.0); }
+                    if bx.explicit_height.is_none() { bx.rect.height = 15.0; bx.explicit_height = Some(15.0); }
+                }
                 _ => {}
             }
         }
