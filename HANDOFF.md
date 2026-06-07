@@ -110,10 +110,17 @@ Pokracovani chyby-rbro doc fixu. Vsechny systemove (no workarounds):
   rady -> full render pres ne. Fix grid_spans + needed_from_placement (negativni
   end -> full span). Forms ted renderuji cista (overeno capture).
 
-### 3. kolo - ZBYVA (forms interakce + dalsi sekce):
-- Form INTERAKCE: klik na checkbox/radio (toggle checked), psani do inputu, drag
-  range thumb -> JS/event strana, tezko verifikovat bez mouse injection. RENDERING
-  forms je ted OK.
+### 4. kolo feedbacku - FORMS INTERAKCE (uz funguji):
+- **Checkbox/radio klik toggle**: dispatch_event HTML default action (click ->
+  toggle checked, radio uncheck group siblings, fire change, gated preventDefault).
+  Realny klik jde pres webview->dispatch_event. +3 testy.
+- **Range klik+drag**: mousedown/MouseMove na range -> set value dle x + fire
+  input/change (set_range_from_x). range_drag_node state.
+- **Text input typing**: uz fungovalo (focused input capture char + set value +
+  fire input, webview ~2094).
+- ZBYVA: select dropdown (klik otevri seznam + vyber option) = komplexni (overlay).
+
+### 3. kolo - ZBYVA (dalsi sekce):
 - Dalsi sekce stranky (mix-blend, filtry, typografie, canvas, obskurni CSS) +
   interaktivni (sticky, klikani, scroll) - user "projdi celou stranku".
 
