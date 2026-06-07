@@ -110,6 +110,39 @@ Pokracovani chyby-rbro doc fixu. Vsechny systemove (no workarounds):
   rady -> full render pres ne. Fix grid_spans + needed_from_placement (negativni
   end -> full span). Forms ted renderuji cista (overeno capture).
 
+### 5. kolo - AUTONOMNI PRUCHOD SEKCEMI (capture triage + bounded fixy)
+
+Helper: `python3 /tmp/extract_section.py s-<id>` extrahuje sekci + plny CSS do
+`F:\Projects\_sec.html` (full-width, bez .page gridu - jinak #main spadne do
+200px sloupce!). Pak `./target/debug/rwe-engine.exe browser _sec.html` + capture.
+
+**OPRAVENO:**
+- **NBSP mezi inline elementy** (typografie text-decoration spany abuttovaly):
+  build children loop + text collapse pouzivaly `t.trim().is_empty()` co trimuje
+  i nbsp (U+00A0) -> `A &nbsp; B` se skiplo. Fix: skip jen ciste breakable ws.
+
+**STAV SEKCI (po pruchodu):**
+- 06 pseudo: OK-ish. Minor: ::after badge pozice, nth-child(4n+1) rotovane boxy
+  maji zubate hrany (AA na transformu - chybi mipmaps/supersample, jako persp border).
+- 07 gradients: linear/radial/conic render OK (fixtura). Animovany (background-
+  position shift @keyframes) + background-size 400% NEoveren/neimplementovan.
+- 08 filters: filtry OK (blur/brightness/contrast/saturate/hue/invert/sepia/
+  drop-shadow/multi). **mix-blend-mode = jen FALLBACK alpha compose** (render/mod.rs
+  7134 `let _ = mode` - blend formula multiply/screen/overlay/... NENI, jen alpha)
+  = "uplne jina" + text artefakty. DEEP: potreba real blend shader (dst sample).
+- 11 overflow: OK (scroll-snap boxy, overflow contained). Custom scrollbar scroll-
+  routing (scroll sekce vs stranka) = runtime.
+- 12 typografie: nbsp FIXED. DEEP: vertical text (writing-mode vertical-rl/lr na
+  spanu renderuje HORIZONTALNE prekryvajici - chybi vertical glyph stacking),
+  column-count, marquee, typewriter. text-shadow efekty OK.
+- 18/19 modern: vetsinou prazdna (@container query + color-mix boxy bez obsahu).
+- 19 canvas / 20 events / 21 observers / 22 drag: JS-dependent - fixtura (jen CSS)
+  je neukaze, potreba zahrnout page <script> NEBO scroll v realne strance.
+
+**ZBYVA (deep features, ne quick fixy):** mix-blend real shader, vertical text,
+column-count, marquee animace, canvas API, sticky (runtime), nekonecny scroll
+(runtime feedback), JS observers/drag&drop, animovane gradienty (bg-position).
+
 ### 4. kolo feedbacku - FORMS INTERAKCE (uz funguji):
 - **Checkbox/radio klik toggle**: dispatch_event HTML default action (click ->
   toggle checked, radio uncheck group siblings, fire change, gated preventDefault).
