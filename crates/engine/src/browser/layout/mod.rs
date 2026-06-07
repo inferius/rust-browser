@@ -4287,6 +4287,13 @@ pub fn layout_block(bx: &mut LayoutBox) {
                     } else if child.taffy_mode && child.children.is_empty() {
                         // Taffy mode: prazdny leaf div ma 0 vysku (CSS spec).
                         0.0
+                    } else if matches!(child.display, Display::Flex | Display::Grid) {
+                        // Flex/grid container si vysku spocita SAM (layout_flex/grid
+                        // z obsahu). Placeholder 20px by layout_flex vzal jako definite
+                        // main size (indefinite_main check vyzaduje rect.height<=0) ->
+                        // flex-shrink shrinkne items POD jejich explicit vysku (napr.
+                        // calc-bary height:28px scvrkly na ~text). Necht 0 = auto.
+                        0.0
                     } else {
                         20.0
                     };
