@@ -404,6 +404,25 @@ pub fn layout_grid(bx: &mut LayoutBox) {
             }
         }
     }
+    // INTRINSIC HEIGHT fix: auto-fill pri INDEFINITE sirce (= intrinsic mere
+    // flex/block parentem, inner_w~0) kolabuje na 1 sloupec -> items se stackuji
+    // do N rad -> nafouknuta intrinsic VYSKA -> parent (flex column) o tolik
+    // vyssi = "velky padding pod gridem". Pro height intrinsic ma byt max-content
+    // (1 rada). Expand cols na pocet in-flow items.
+    let is_auto_repeat = bx.grid_template_columns.contains("auto-fill")
+        || bx.grid_template_columns.contains("auto-fit");
+    if bx.taffy_intrinsic_mode && inner_w < 1.0 && is_auto_repeat {
+        let items = bx.children.iter()
+            .filter(|c| !super::is_out_of_flow(c)
+                && !matches!(c.display, super::super::layout::Display::None))
+            .count();
+        let cw = col_tracks.first().copied().unwrap_or(0.0);
+        while col_tracks.len() < items {
+            col_tracks.push(cw);
+            col_token_kinds.push(Track::Auto);
+            col_is_autofit.push(false);
+        }
+    }
     let cols = col_tracks.len();
     // Helper: resolve grid-column-start s prepend offsetem.
     let _resolve_col_start = |start: i32| -> Option<usize> {

@@ -327,4 +327,22 @@ mod tests {
         assert!(g.children[0].rect.height <= 50.0,
             "single-row item nafouknut spanning sousedem, h={} (cekano ~40)", g.children[0].rect.height);
     }
+
+    #[test]
+    fn grid_autofill_intrinsic_single_row() {
+        // auto-fill v INTRINSIC mode (flex/block parent meri pri w=0) kolabuje
+        // na 1 sloupec -> items do N rad -> nafouknuta intrinsic vyska ->
+        // parent flex column o tolik vyssi = "velky padding pod gridem".
+        // Fix: expand cols na pocet items = 1 rada (max-content height).
+        let mut g = make_grid_box(0.0, 0.0); // width 0 = indefinite (intrinsic)
+        g.grid_template_columns = "repeat(auto-fill, minmax(80px, 1fr))".into();
+        g.taffy_intrinsic_mode = true;
+        for _ in 0..6 { g.children.push(make_child(0.0, 30.0)); }
+        layout_grid(&mut g);
+        // 6 items v 1 rade -> max bottom ~30, NE 6 rad (~180).
+        let max_bottom = g.children.iter()
+            .map(|c| c.rect.y + c.rect.height).fold(0.0_f32, f32::max);
+        assert!(max_bottom < 80.0,
+            "auto-fill intrinsic: items maji byt v 1 rade, max_bottom={} (bug = ~180)", max_bottom);
+    }
 }

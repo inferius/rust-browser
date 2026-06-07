@@ -110,7 +110,21 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                     inner_w_pct * p
                 }
             } else { 0.0 }
-        } else { ch.explicit_width.unwrap_or(0.0) };
+        } else {
+            ch.explicit_width.unwrap_or_else(|| {
+                // Flex COLUMN: child cross-size = container WIDTH (align stretch
+                // default). Mer child pri DEFINITE container sirce (ne 0), jinak
+                // width-dependent obsah (auto-fill grid -> 1 sloupec/N rad pri
+                // w=0; wrap text) da nafouknutou intrinsic VYSKU -> column
+                // container o tolik vyssi = "velky padding pod gridem". Plati i
+                // v intrinsic mode kdyz container.w uz definite (parent ji set).
+                let is_col = matches!(bx.flex_direction,
+                    FlexDirection::Column | FlexDirection::ColumnReverse);
+                if is_col && bx.rect.width > 0.0 {
+                    (bx.rect.width - pad_l - pad_r - 2.0 * bx.margin).max(0.0)
+                } else { 0.0 }
+            })
+        };
         ch.rect.height = if let Some(p) = ch.height_pct {
             if parent_intrinsic { 0.0 } else if bx.rect.height > 0.0 {
                 let inner_h_pct = (bx.rect.height - pad_t - pad_b - 2.0 * bx.margin).max(0.0);
