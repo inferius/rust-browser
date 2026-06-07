@@ -167,6 +167,9 @@ pub struct WebView {
     /// cascade::FOCUSED_NODE thread_local - to slo sdileny pres vsechny
     /// WebViews (chrome/page/devtools) co vedlo k mismatch.
     pub(crate) focused_node_local: Option<usize>,
+    /// Range slider drag - Some(node) pri drag thumb (mousedown az mouseup).
+    /// MouseMove pak nastavuje value dle x pozice.
+    pub(crate) range_drag_node: Option<std::rc::Rc<crate::browser::dom::Node>>,
     pub(crate) layout_dumped: bool,
     /// Scrollbar drag state - Some(grab_offset_y) pri V thumb drag.
     /// Inner element scrollbar drag: (node_id, grab_y_offset, max_scroll, bar_y, bar_h).
@@ -568,6 +571,7 @@ impl WebView {
             overlay_painter: None,
             last_synced_scroll_pos: (0.0, 0.0),
             focused_node_local: None,
+            range_drag_node: None,
             layout_dumped: false,
             v_scrollbar_drag: None,
             h_scrollbar_drag: None,
@@ -1441,6 +1445,11 @@ impl WebView {
                     // Inner scrollbar drag - prepocet thumb pos -> element_scroll.
                     let cx_inner = x + self.scroll_x;
                     let cy_inner = y + self.scroll_y;
+                    // Range drag: drzime-li range thumb (mousedown na range), nastav
+                    // value dle x pozice (set_range_from_x fire input/change).
+                    if let Some(rn) = self.range_drag_node.clone() {
+                        self.set_range_from_x(&rn, cx_inner);
+                    }
                     if let Some((node_id, grab_y, max_y, bar_y, bar_h)) = self.inner_v_drag {
                         // Thumb size invariant: vyresit z bar_h + max_scroll/vh - ale
                         // jednodusší: thumb_h dynamic, recompute. Pouzij stored max_y
@@ -1843,6 +1852,18 @@ impl WebView {
                         self.focused_node_local = None;
                         crate::browser::cascade::set_focused_node(None);
                     }
+                    // Range slider: klik nastavi value dle x pozice + fire input/
+                    // change (engine-test range-val span se updatne pres oninput).
+                    // Bez tohoto byl range needovladatelny mysi. Nastav drag node
+                    // pro nasledny drag v MouseMove.
+                    if let Some(target) = target_node.as_ref() {
+                        let is_range = target.tag_name().as_deref() == Some("input")
+                            && target.attr("type").map(|t| t.eq_ignore_ascii_case("range")).unwrap_or(false);
+                        if is_range {
+                            self.range_drag_node = Some(std::rc::Rc::clone(target));
+                            self.set_range_from_x(target, content_x);
+                        }
+                    }
                     // Editor hit-test pri klik na <input>/<textarea>: posun
                     // caret na glyph pod kurzorem. Bez tohoto by Click vzdy
                     // skociol jen na end (input_caret defaults).
@@ -1897,6 +1918,8 @@ impl WebView {
             }
             InputEvent::MouseUp { x, y, button, .. } => {
                 if matches!(button, crate::embed::MouseButton::Left) {
+                    // End range drag.
+                    self.range_drag_node = None;
                     // End scrollbar drag.
                     if self.inner_v_drag.is_some() || self.inner_h_drag.is_some() {
                         self.inner_v_drag = None;
@@ -3713,6 +3736,36 @@ impl WebView {
 
     /// Page title (z `<title>` ci `document.title = ...`).
     pub fn title(&self) -> &str { &self.title }
+
+    /// Nastavi <input type=range> value dle x pozice (klik/drag) + fire input +
+    /// change event. content_x = x ve content coords (scroll uz pricten).
+    pub(crate) fn set_range_from_x(&mut self, target: &std::rc::Rc<crate::browser::dom::Node>, content_x: f32) {
+        let rect = self.last_layout_root.as_ref()
+            .and_then(|root| crate::browser::paint::find_box_by_node_id(root, std::rc::Rc::as_ptr(target) as usize))
+            .map(|bx| (bx.rect.x, bx.rect.width));
+        let (rx, rw) = match rect { Some(v) => v, None => return };
+        let pf = |n: &str, d: f32| target.attr(n).and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(d);
+        let (min, max) = (pf("min", 0.0), pf("max", 100.0));
+        let step = pf("step", 1.0).max(1e-4);
+        let frac = ((content_x - rx) / rw.max(1.0)).clamp(0.0, 1.0);
+        let raw = min + frac * (max - min);
+        let val = (((raw - min) / step).round() * step + min).clamp(min.min(max), min.max(max));
+        let vs = if (val - val.round()).abs() < 1e-4 { format!("{}", val.round() as i64) }
+                 else { format!("{}", (val * 1000.0).round() / 1000.0) };
+        if target.attr("value").as_deref() == Some(vs.as_str()) { return; }
+        target.set_attr("value", &vs);
+        if let Some(interp) = self.interpreter.as_mut() {
+            interp.bump_dom_version();
+            for evt in ["input", "change"] {
+                let mut event = crate::interpreter::JsObject::new();
+                event.set("type".into(), crate::interpreter::JsValue::Str(evt.into()));
+                event.set("target".into(), crate::interpreter::JsValue::DomNode(std::rc::Rc::clone(target)));
+                let event_val = crate::interpreter::JsValue::Object(std::rc::Rc::new(std::cell::RefCell::new(event)));
+                let _ = interp.dispatch_event(target, evt, event_val);
+            }
+        }
+        self.dirty = true;
+    }
 
     /// offsetX/offsetY pro mouse event = pozice relativni k padding-boxu target
     /// elementu (content coords - box origin). Canvas kresleni + pozicni UI to
