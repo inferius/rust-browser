@@ -696,12 +696,16 @@ pub fn default_display(tag: &str) -> Display {
         | "pre" | "hr" | "figure" | "figcaption"
             => Display::Block,
         "li" => Display::ListItem,
-        // Table tagy: simulate pres flex (tr = flex-row container, td = flex-item).
-        // Pravy table layout je TODO. Tahle aproximace ale dela cells vedle sebe.
+        // Table tagy: tr = flex-row (cells vedle sebe), table = block (rows stack).
+        // Sdilene sirky sloupcu resi prelayout_table_columns (collect/apply
+        // recurzuji do TableHeader). thead/tbody/tfoot MUSI byt TableHeader (ne
+        // Block) jinak collect_table_rows je preskoci -> rows.is_empty() -> kazdy
+        // radek nezavisly flex = rozhozene sloupce. Effective layout (dispatch
+        // 2294) mapuje TableHeader -> Block, takze stacking radku zustava.
         "table" => Display::Table,
         "tr" => Display::TableRow,
         "td" | "th" => Display::TableCell,
-        "thead" | "tbody" | "tfoot" => Display::Block,
+        "thead" | "tbody" | "tfoot" => Display::TableHeader,
         "caption" => Display::TableCaption,
         "span" | "a" | "em" | "strong" | "b" | "i" | "u" | "code" | "small"
         | "br" | "img" | "input" | "label" | "button" | "select" | "textarea"
