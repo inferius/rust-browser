@@ -45,9 +45,16 @@ fn grid_explicit_pos(
 /// Resolve span_row + span_col z grid-{row,column}-span / -end.
 /// Simple form: end < 0 nebo bez start fallback na 1.
 /// Pro full negative-end semantiku viz inline blok v auto-col sizing.
-fn grid_spans(child: &LayoutBox) -> (usize, usize) {
+fn grid_spans(child: &LayoutBox, cols: usize) -> (usize, usize) {
     let span_col = if child.grid_column_span > 0 {
         child.grid_column_span as usize
+    } else if child.grid_column_end < 0 && child.grid_column_start > 0 {
+        // Negativni end (grid-column: 1 / -1 = po posledni linku). Linka -1 =
+        // linka (cols+1). end_line = cols+2+end (pro -1: cols+1). span = end-start.
+        // Bez tohoto span_col=1 -> full-width item zabral jen 1 sloupec -> auto
+        // items vyplnily zbytek rady -> full item render pres ne = OVERLAP.
+        let end_line = cols as i32 + 2 + child.grid_column_end;
+        (end_line - child.grid_column_start).max(1) as usize
     } else if child.grid_column_end > 0 && child.grid_column_start > 0 {
         (child.grid_column_end - child.grid_column_start).max(1) as usize
     } else { 1 };
@@ -491,12 +498,11 @@ pub fn layout_grid(bx: &mut LayoutBox) {
             let exp_row = if child.grid_row_start > 0 { Some(((child.grid_row_start - 1) as usize) + row_prepend) }
                           else if child.grid_row_start < 0 { let k = (-child.grid_row_start) as usize; let total_explicit_lines = row_count_explicit + row_prepend + 1; if k <= total_explicit_lines { Some(total_explicit_lines - k) } else { Some(0) } }
                           else { None };
-            let span_col = if child.grid_column_span > 0 { child.grid_column_span as usize }
-                           else if child.grid_column_end > 0 && child.grid_column_start > 0 { (child.grid_column_end - child.grid_column_start).max(1) as usize }
-                           else { 1 }.min(cols_n);
-            let span_row = if child.grid_row_span > 0 { child.grid_row_span as usize }
-                           else if child.grid_row_end > 0 && child.grid_row_start > 0 { (child.grid_row_end - child.grid_row_start).max(1) as usize }
-                           else { 1 };
+            // grid_spans handluje i negativni end (grid-column: 1/-1 = full span).
+            // Bez tohoto full-width item zabral 1 col -> max_row_used spatne ->
+            // needed_from_placement (row count) maly -> posledni full item wrapnul.
+            let (span_row, span_col_raw) = grid_spans(child, cols_n);
+            let span_col = span_col_raw.min(cols_n);
             let (row, col) = if let (Some(r), Some(c)) = (exp_row, exp_col) { (r, c) }
                 else if let Some(c) = exp_col {
                     let mut r = 0;
@@ -1040,7 +1046,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                 let child = &bx.children[real_idx];
                 let (explicit_row, explicit_col) = grid_explicit_pos(
                     child, cols_explicit, row_count_explicit, col_prepend, row_prepend);
-                let (span_row, span_col) = grid_spans(child);
+                let (span_row, span_col) = grid_spans(child, cols);
                 let (row, col) = grid_flow_place(
                     explicit_row, explicit_col, span_row, span_col, &occupied_d, &mut auto_cursor_d, cols, dense);
                 grid_mark_occupied(row, col, span_row, span_col, &mut occupied_d, cols);
@@ -1180,7 +1186,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
             let child = &bx.children[real_idx];
             let (explicit_row, explicit_col) = grid_explicit_pos(
                 child, cols_explicit, row_count_explicit, col_prepend, row_prepend);
-            let (span_row, span_col) = grid_spans(child);
+            let (span_row, span_col) = grid_spans(child, cols);
             let (row, col) = grid_flow_place(
                 explicit_row, explicit_col, span_row, span_col, &occupied_d, &mut auto_cursor_d, cols, dense);
             grid_mark_occupied(row, col, span_row, span_col, &mut occupied_d, cols);
@@ -1366,7 +1372,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
             let child = &bx.children[real_idx];
             let (explicit_row, explicit_col) = grid_explicit_pos(
                 child, cols_explicit, row_count_explicit, col_prepend, row_prepend);
-            let (span_row, span_col) = grid_spans(child);
+            let (span_row, span_col) = grid_spans(child, cols);
             let (row, col) = grid_flow_place(
                 explicit_row, explicit_col, span_row, span_col, &occupied_d2, &mut auto_cursor_d2, cols, dense);
             grid_mark_occupied(row, col, span_row, span_col, &mut occupied_d2, cols);
@@ -1408,7 +1414,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
             let child = &bx.children[real_idx];
             let (explicit_row, explicit_col) = grid_explicit_pos(
                 child, cols_explicit, row_count_explicit, col_prepend, row_prepend);
-            let (span_row, span_col) = grid_spans(child);
+            let (span_row, span_col) = grid_spans(child, cols);
             let (row, col) = grid_flow_place(
                 explicit_row, explicit_col, span_row, span_col, &occupied_grid, &mut auto_cur, cols, dense);
             grid_mark_occupied(row, col, span_row, span_col, &mut occupied_grid, cols);
