@@ -2231,6 +2231,26 @@ fn transition_apply_interpolates_numeric() {
 }
 
 #[test]
+fn interpolate_transform_perspective_no_degenerate() {
+    use crate::browser::layout::interpolate_css_value;
+    // Navrat z perspective na none NESMI projit perspective(0) = degenerate
+    // matrix (m[14]=-1/0) -> box kolabuje/flipne = "skok pri navratu". Reciprocni
+    // interp 1/d: t=0.5 mezi 400 a nekonecnem (ident z none) -> d=800.
+    let mid = interpolate_css_value("transform",
+        "perspective(400px) rotateY(45deg)", "none", 0.5)
+        .expect("perspective transform interpoluje (ne snap na None)");
+    assert!(mid.contains("rotateY(22.5"), "rotateY pul cesty = 22.5deg: {}", mid);
+    assert!(!mid.contains("perspective(0"), "perspective NESMI byt 0 (degenerate): {}", mid);
+    assert!(mid.contains("perspective(800"), "perspective(400)->inf reciprocne = 800px na t=0.5: {}", mid);
+    // Blizko none (t=0.95): perspective velke = efekt slabne (ne skok).
+    let near_end = interpolate_css_value("transform",
+        "perspective(400px) rotateY(45deg)", "none", 0.95).unwrap();
+    let pv: f32 = near_end.split("perspective(").nth(1).unwrap()
+        .split("px").next().unwrap().parse().unwrap();
+    assert!(pv > 1000.0, "blizko none je perspective velke (slabne efekt): {}", near_end);
+}
+
+#[test]
 fn animation_spec_fill_mode_play_state() {
     use std::collections::HashMap;
     let mut s: HashMap<String, String> = HashMap::new();

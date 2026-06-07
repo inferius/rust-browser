@@ -1982,7 +1982,20 @@ fn interpolate_transform_value(from: &str, to: &str, t: f32) -> Option<String> {
     for (a, c) in f.iter().zip(g.iter()) {
         if a.0 != c.0 || a.1.len() != c.1.len() { return None; }
         let args: Vec<String> = a.1.iter().zip(c.1.iter()).map(|((v0, u0), (v1, u1))| {
-            let v = v0 + (v1 - v0) * t;
+            let v = if a.0 == "perspective" {
+                // RECIPROCNI interpolace (1/d): perspective identity = nekonecno
+                // (1/d -> 0). Linearni interp d by sel pres perspective(0) =
+                // degenerate matrix (m[14]=-1/0) -> box kolabuje/flipne = "skok
+                // pri navratu z perspective na none". 1/d interp je navic
+                // perceptualne spravna (= Chrome decompose matice: m[14]=-1/d
+                // se meni linearne). v=0 (synthesizovany ident z none) -> 1/d=0.
+                let i0 = if *v0 > 1e-6 { 1.0 / v0 } else { 0.0 };
+                let i1 = if *v1 > 1e-6 { 1.0 / v1 } else { 0.0 };
+                let iv = i0 + (i1 - i0) * t;
+                if iv > 1e-9 { 1.0 / iv } else { 1.0e7 }
+            } else {
+                v0 + (v1 - v0) * t
+            };
             let unit = if !u0.is_empty() { u0.as_str() }
                        else if !u1.is_empty() { u1.as_str() }
                        else if a.0.starts_with("rotate") || a.0.starts_with("skew") { "deg" }
