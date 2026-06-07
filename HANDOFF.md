@@ -88,6 +88,24 @@ Pokracovani chyby-rbro doc fixu. Vsechny systemove (no workarounds):
 - **SVG testy (7)**: zastarale (Rect/Circle commandy) -> aktualizovany na resvg
   raster (DisplayCommand::Image + INLINE_SVG_CACHE pixel check).
 
+### 2. kolo feedbacku - OPRAVENO:
+- **Per-side bordery (border-bottom/top/left/right) se VUBEC nekreslily** (velky bug:
+  tabulka row separatory = "tabulce chybi spravny border", underliny, asymetricke
+  bordery). 3 clanky: cascade expand_shorthand neresil side shorthandy (border-bottom
+  spadl do _ => verbatim) + apply_styles cetl jen shorthand border-width + paint
+  emitoval jen pri border_width>0 (uniform). Fix vsech 3 (cascade.rs / layout apply_styles
+  / paint per-side strip). +2 testy.
+- **Form controls (checkbox/radio/range) se nekreslily** = "inputy nefunguji". Pridany
+  layout rozmery + paint (checkbox modry fill+bily check ClippedRect, radio modra tecka,
+  range track+filled+thumb dle value). +2 testy.
+
+### 2. kolo feedbacku - ZBYVA (forms + dalsi):
+- Text/email/number/textarea inputy: border slaby kontrast (gray 118 na svetlem bg) -
+  mozna OK, overit s realnym CSS. Unchecked checkbox/radio slaby kontrast.
+- **Textarea + select obsah se kresli i vlevo nahore (0,0)** = duplikat/artefakt
+  (textarea "text content" + select "One" leakuje na origin). Separatni paint bug.
+- Select: bez dropdown sipky. Range/checkbox interakce (klik/drag) - JS strana.
+
 ### Po user feedbacku (screenshoty) - diagnostikovano, odlozeno (dedikovany fix):
 - **Perspective pravy (vzdaleny) border slaby/chybi**: perspektivne-korektni interp
   (Session N+30 shader fix, opravil zrcadleni textu) KOMPRIMUJE vzdalenou hranu vic
