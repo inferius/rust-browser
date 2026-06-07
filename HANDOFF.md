@@ -59,6 +59,46 @@ plynule + scrollbar/overlay NEzmizel). Revert pri regresi.
 urgence; fast path je velka hot-path zmena s klesajicim perceptualnim prinosem.
 Ale ma hodnotu i mimo FPS (spravna architektura, nizsi spotreba).
 
+## Session N+30: grid padding residual + perspective 3D + flex/table layout
+
+Pokracovani chyby-rbro doc fixu. Vsechny systemove (no workarounds):
+
+- **Grid padding residual (535->496)**: `.page` grid merilo `#main` (flex column)
+  pri rect.width=0 (track sizing) -> width-0 layout cele subtree, labely wrapnuly
+  -> grid-demos vyska 534. Real layout pri 966 to neumel zmensit (flex expand-only
+  guards). Fix: grid pre-pass po dispatch_layout DEEP-RESETne descendant rect
+  (grid.rs ~700, jako flex pre-pass deep_reset_rect).
+- **Perspective text "pulka zrcadlena"**: TRANSFORM_SHADER delal perspective divide
+  manualne + clip.w=1.0 -> AFINNI uv interp -> zlom na diagonale quadu. Fix:
+  homogenni clip (nx*w, ny*w, 0.5*w, w) -> GPU perspective-correct uv interp
+  (shaders.rs). Overeno capture.
+- **Perspective navrat skok**: interpolate_transform_value synthesizoval pri
+  navratu na none perspective(0) = degenerate (m[14]=-1/0). Fix: perspective se
+  interpoluje RECIPROCNE (1/d, identity=nekonecno) - layout/mod.rs.
+- **Sekce 10 calc "nezobrazuje nic"**: layout_block daval flex/grid block-childu
+  placeholder rect.height=20 -> layout_flex to vzal jako definite -> flex-shrink
+  shrinkl items pod explicit vysku (calc-bary height:28 -> 0). Fix: flex/grid
+  block-child placeholder = 0 (auto). SYSTEMOVE - dotyka se vsech flex/grid v
+  block flow. (calc-bar SIRKY = calc/clamp/min/max s % se resolvuji pri kaskade
+  bez parent kontextu -> spawnut samostatny task task_aa5a72b0.)
+- **Tabulka rozhozena**: default_display(thead/tbody/tfoot)=Block ale
+  collect_table_rows/apply recurzuji jen do TableHeader -> rows nenalezeny ->
+  kazdy radek nezavisly. Fix: thead/tbody/tfoot=TableHeader. + content-based
+  column sizing (cell_content_max_width misto rect.width=0).
+- **SVG testy (7)**: zastarale (Rect/Circle commandy) -> aktualizovany na resvg
+  raster (DisplayCommand::Image + INLINE_SVG_CACHE pixel check).
+
+### Zbyva z chyby-rbro doc (pro dalsi tah, mnoho interaktivnich = tezko verifikovat staticky):
+- calc/clamp/min/max s % (task_aa5a72b0 spawnut)
+- Position: sticky (menu zaseknuty), JS klikani/events "nikde nefunguji",
+  nekonecny scroll (runtime feedback, root.rect.height OK staticky), JS Observers
+  + drag&drop, gradienty (animovany neanimuje, "rozjebal vic"), CSS filtry (blur
+  slabsi/brightness barva/drop-shadow glow/multi blur text), mix-blend (cerne
+  artefakty), custom scrollbary (scroll celou strankou misto sekce), typografie
+  (efekty/underline/vertical/column-count/blink/marquee), inline forms (pretika/
+  neinteraktivni/styling), obskurni CSS, canvas API, mousemove (offsetX undefined -
+  inline handler binding OK, verit nelze bez mouse injection).
+
 ## Session N+29: hover transitions + grid template-areas + keyframe animace + hover PERF
 
 Pokracovani chyby-rbro doc fixu. Systemove bugy:
