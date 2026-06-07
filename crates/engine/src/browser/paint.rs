@@ -319,6 +319,22 @@ pub fn emit_main_scrollbar_overlay(
     viewport_w: f32, viewport_h: f32,
     scroll_x: f32, scroll_y: f32,
 ) {
+    // Canvas bg (body/html) jako FIXED full-viewport Rect na index 0 (za vsim).
+    // Body rect.width je zmensena o scrollbar gutter -> body bg ji nepokryva ->
+    // prosvita bily clear (0.95) = "bily pruh u hrany scrollbaru" + bila plocha
+    // pod kratkym contentem. Canvas bg per CSS NEscrolluje (fixed na viewport).
+    let canvas_bg = layout_root.children.first().and_then(|html| {
+        html.children.iter().find(|c| c.tag.as_deref() == Some("body"))
+            .and_then(|b| b.bg_color)
+            .or(html.bg_color)
+    });
+    if let Some(bg) = canvas_bg {
+        if bg[3] > 0 {
+            display_list.insert(0, DisplayCommand::Rect {
+                x: 0.0, y: 0.0, w: viewport_w, h: viewport_h, color: bg, radius: 0.0,
+            });
+        }
+    }
     // Body bg detect pro track/thumb barvy.
     let body_bg_dark = layout_root.children.first().and_then(|html_box| {
         html_box.children.iter().find(|c| c.tag.as_deref() == Some("body"))

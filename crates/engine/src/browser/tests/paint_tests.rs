@@ -1709,11 +1709,17 @@ fn main_scrollbar_emits_when_layout_overflows_viewport() {
     let pre_len = cmds.len();
     paint::emit_main_scrollbar_overlay(&layout_root, &mut cmds, 800.0, 600.0, 0.0, 0.0);
     let post_len = cmds.len();
-    // Scrollbar emits 2 Rects (track + thumb) when only vertical overflow.
-    assert_eq!(post_len - pre_len, 2,
-        "expected 2 scrollbar Rects, got {} ({} -> {})", post_len - pre_len, pre_len, post_len);
-    // Verify rightmost x position = viewport_w - bar_w.
-    let track = &cmds[pre_len];
+    // Emit pridava 3 Rects: canvas bg (body #fff) na index 0 + track + thumb na
+    // konci (canvas bg = fix bileho pruhu ve scrollbar gutter / pod contentem).
+    assert_eq!(post_len - pre_len, 3,
+        "expected 3 Rects (canvas bg + track + thumb), got {} ({} -> {})", post_len - pre_len, pre_len, post_len);
+    // Canvas bg na index 0 = full viewport.
+    if let DisplayCommand::Rect { x, y, w, h, .. } = &cmds[0] {
+        assert!(*x == 0.0 && *y == 0.0 && (*w - 800.0).abs() < 1.0 && (*h - 600.0).abs() < 1.0,
+            "canvas bg by mel byt full viewport, got ({},{},{},{})", x, y, w, h);
+    } else { panic!("cmds[0] mel byt canvas bg Rect"); }
+    // Track = predposledni, thumb = posledni. Track right edge = viewport_w.
+    let track = &cmds[post_len - 2];
     if let DisplayCommand::Rect { x, w, .. } = track {
         assert!((*x + *w - 800.0).abs() < 1.0, "track right edge {} != viewport_w 800", *x + *w);
     } else {
