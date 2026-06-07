@@ -367,6 +367,52 @@ fn mouse_event_with_coords() {
 }
 
 #[test]
+fn click_toggles_checkbox_checked() {
+    // HTML default action: klik na checkbox prepne checked stav (forms interakce).
+    let v = run(r#"
+        const cb = document.createElement('input');
+        cb.setAttribute('type', 'checkbox');
+        document.body.appendChild(cb);
+        const a = cb.hasAttribute('checked');
+        cb.dispatchEvent(new MouseEvent('click'));
+        const b = cb.hasAttribute('checked');
+        cb.dispatchEvent(new MouseEvent('click'));
+        const c = cb.hasAttribute('checked');
+        return a + "|" + b + "|" + c;
+    "#);
+    assert_eq!(as_str(v), "false|true|false");
+}
+
+#[test]
+fn click_radio_unchecks_group_siblings() {
+    // Klik na radio = check tento + uncheck ostatni stejneho name.
+    let v = run(r#"
+        const r1 = document.createElement('input');
+        r1.setAttribute('type','radio'); r1.setAttribute('name','g'); r1.setAttribute('checked','');
+        const r2 = document.createElement('input');
+        r2.setAttribute('type','radio'); r2.setAttribute('name','g');
+        document.body.appendChild(r1); document.body.appendChild(r2);
+        r2.dispatchEvent(new MouseEvent('click'));
+        return r1.hasAttribute('checked') + "|" + r2.hasAttribute('checked');
+    "#);
+    assert_eq!(as_str(v), "false|true");
+}
+
+#[test]
+fn click_checkbox_preventdefault_no_toggle() {
+    // preventDefault zabrani toggle (HTML default action gated).
+    let v = run(r#"
+        const cb = document.createElement('input');
+        cb.setAttribute('type', 'checkbox');
+        cb.addEventListener('click', e => e.preventDefault());
+        document.body.appendChild(cb);
+        cb.dispatchEvent(new MouseEvent('click'));
+        return "checked=" + cb.hasAttribute('checked');
+    "#);
+    assert_eq!(as_str(v), "checked=false");
+}
+
+#[test]
 fn keyboard_event_with_key() {
     let v = run(r#"
         const e = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', shiftKey: true });

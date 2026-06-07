@@ -1680,6 +1680,48 @@ impl Interpreter {
                 }
             }
         }
+        // HTML default action: click na checkbox/radio prepne checked stav (pokud
+        // JS nezavolal preventDefault). Bez tohoto klik na checkbox/radio nic
+        // nedelal = "formulare nefunguji". Po toggle fire 'change' event.
+        if event_type == "click"
+            && !matches!(event_obj.borrow().get("defaultPrevented"), JsValue::Bool(true))
+        {
+            if let Some(target) = chain.first().cloned() {
+                if target.tag_name().as_deref() == Some("input") {
+                    let typ = target.attr("type").unwrap_or_default().to_lowercase();
+                    let mut changed = false;
+                    if typ == "checkbox" {
+                        if target.has_attr("checked") { target.remove_attr("checked"); }
+                        else { target.set_attr("checked", ""); }
+                        changed = true;
+                    } else if typ == "radio" {
+                        // Uncheck ostatni radia stejneho name (radio group).
+                        let name = target.attr("name").unwrap_or_default();
+                        if !name.is_empty() {
+                            let root = self.document.borrow().root.clone();
+                            let tgt = Rc::clone(&target);
+                            root.walk(&mut |n| {
+                                if n.tag_name().as_deref() == Some("input")
+                                    && n.attr("type").map(|t| t.eq_ignore_ascii_case("radio")).unwrap_or(false)
+                                    && n.attr("name").as_deref() == Some(name.as_str())
+                                    && !Rc::ptr_eq(n, &tgt)
+                                { n.remove_attr("checked"); }
+                            });
+                        }
+                        if !target.has_attr("checked") { target.set_attr("checked", ""); }
+                        changed = true;
+                    }
+                    if changed {
+                        self.bump_dom_version();
+                        let mut ev = JsObject::new();
+                        ev.set("type".into(), JsValue::Str("change".into()));
+                        ev.set("target".into(), JsValue::DomNode(Rc::clone(&target)));
+                        let ev_val = JsValue::Object(Rc::new(RefCell::new(ev)));
+                        let _ = self.dispatch_event(&target, "change", ev_val);
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
