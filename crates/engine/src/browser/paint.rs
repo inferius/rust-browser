@@ -1745,14 +1745,20 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
     }
     // <select> dropdown: rounded box + selected text uvnitr + chevron arrow vpravo.
     if bx.tag.as_deref() == Some("select") {
-        cmds.push(DisplayCommand::Rect {
-            x: bx.rect.x, y: bx.rect.y, w: bx.rect.width, h: bx.rect.height,
-            color: [255, 255, 255, 255], radius: 4.0,
-        });
-        cmds.push(DisplayCommand::Border {
-            x: bx.rect.x, y: bx.rect.y, w: bx.rect.width, h: bx.rect.height,
-            width: 1.0, color: [160, 160, 170, 255],
-        });
+        // Fallback bily box + border JEN kdyz select nema vlastni bg/border z CSS
+        // (custom fd-select s appearance:none + dark bg by se prepsal na bily).
+        if bx.bg_color.is_none() {
+            cmds.push(DisplayCommand::Rect {
+                x: bx.rect.x, y: bx.rect.y, w: bx.rect.width, h: bx.rect.height,
+                color: [255, 255, 255, 255], radius: 4.0,
+            });
+        }
+        if bx.bg_color.is_none() && bx.border_width == 0.0 && bx.border_color.is_none() {
+            cmds.push(DisplayCommand::Border {
+                x: bx.rect.x, y: bx.rect.y, w: bx.rect.width, h: bx.rect.height,
+                width: 1.0, color: [160, 160, 170, 255],
+            });
+        }
         // Chevron triangle vpravo.
         let cx = bx.rect.x + bx.rect.width - 12.0;
         let cy = bx.rect.y + bx.rect.height * 0.5;

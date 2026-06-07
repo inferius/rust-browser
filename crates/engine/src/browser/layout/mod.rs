@@ -705,6 +705,11 @@ pub fn default_display(tag: &str) -> Display {
         "script" | "style" | "head" | "meta" | "title" | "link" | "base"
         | "noscript" | "template" | "param" | "source" | "track"
             => Display::None,
+        // <option>/<optgroup>: closed <select> je nerendruje (select extrahuje
+        // selected text z DOM + paint kresli box+chevron+text). Bez display:none
+        // se vsechny options layoutovaly+renderovaly PRES select box = "select
+        // dvojity / expandovany seznam misto jedne hodnoty".
+        "option" | "optgroup" => Display::None,
         "html" | "body" | "div" | "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
         | "ul" | "ol" | "header" | "footer" | "main" | "section" | "article"
         | "nav" | "aside" | "form" | "blockquote"
