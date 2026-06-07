@@ -694,6 +694,19 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         if ch.explicit_width.is_none() { ch.rect.width = 0.0; }
         if ch.explicit_height.is_none() { ch.rect.height = 0.0; }
         super::dispatch_layout(ch, false);
+        // Deep-reset DESCENDANT rects: dispatch_layout merilo cely ch subtree pri
+        // rect.width=0 (intrinsic-width mere kvuli track sizingu). Bez resetu by
+        // width-0 vysky (napr. wrapped text labely v nested grid/flex) prezily do
+        // real layoutu, kde expand-only guards (flex.rs 1155/1357 = grow-only)
+        // je neumi zmensit -> "velky padding pod gridem". ch SAM zustava (grid
+        // cte z nej max-content). Stejny princip jako flex pre-pass deep_reset_rect.
+        fn deep_reset_child_rect(b: &mut super::super::layout::LayoutBox) {
+            if b.explicit_width.is_none() { b.rect.width = 0.0; }
+            if b.explicit_height.is_none() { b.rect.height = 0.0; }
+            b.rect.x = 0.0; b.rect.y = 0.0;
+            for c in b.children.iter_mut() { deep_reset_child_rect(c); }
+        }
+        for c in ch.children.iter_mut() { deep_reset_child_rect(c); }
         ch.rect.x = saved_x; ch.rect.y = saved_y;
         ch.explicit_width = saved_explicit_w;
         ch.explicit_height = saved_explicit_h;
