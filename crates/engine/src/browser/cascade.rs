@@ -740,17 +740,22 @@ fn inner_resolve(value: &str, variables: &HashMap<String, String>) -> String {
         if out.contains("if(") {
             out = resolve_if_function(&out);
         }
-        if out.contains("min(") || out.contains("max(") || out.contains("clamp(")
+        // calc/clamp/min/max s `%` NEresolvuj v cascade - `%` vyzaduje parent
+        // width ktery zname az v layoutu. Drive cascade brala % jako 16px ->
+        // calc(100% - 40px) = -24px, clamp(80px,30%,200px) = 80px. Preservuj
+        // pro parse_length_ctx (zna parent_size). Bez % (calc(100px+2em)) resolvuj.
+        let has_pct = out.contains('%');
+        if !has_pct && (out.contains("min(") || out.contains("max(") || out.contains("clamp(")
             || out.contains("abs(") || out.contains("sign(") || out.contains("sqrt(")
             || out.contains("round(") || out.contains("floor(") || out.contains("ceil(")
             || out.contains("exp(") || out.contains("log(") || out.contains("pow(")
             || out.contains("hypot(") || out.contains("mod(") || out.contains("rem(")
             || out.contains("sin(") || out.contains("cos(") || out.contains("tan(")
-            || out.contains("asin(") || out.contains("acos(") || out.contains("atan(")
+            || out.contains("asin(") || out.contains("acos(") || out.contains("atan("))
         {
             out = resolve_math_func(&out);
         }
-        if out.contains("calc(") {
+        if !has_pct && out.contains("calc(") {
             out = resolve_calc(&out);
         }
         if out == before { break; }

@@ -792,6 +792,10 @@ pub struct LayoutBox {
     /// Explicit width/height pct (0..1) - pri Some, ulozit puvodni percent.
     pub width_pct: Option<f32>,
     pub height_pct: Option<f32>,
+    /// width/height = calc()/clamp()/min()/max() s `%` - raw vyraz, resolvuje se
+    /// v layout pass proti parent content width (cascade `%` neumi -> 16px).
+    pub width_calc: Option<String>,
+    pub height_calc: Option<String>,
     /// margin-*: auto flagy (absorbuji free space, CSS Margin auto).
     pub margin_top_auto: bool,
     pub margin_right_auto: bool,
@@ -1234,6 +1238,8 @@ impl LayoutBox {
             margin_bottom_pct: None,
             margin_left_pct: None,
             width_pct: None,
+            width_calc: None,
+            height_calc: None,
             height_pct: None,
             margin_top_auto: false,
             margin_right_auto: false,
@@ -1571,6 +1577,8 @@ pub fn layout_tree_with_pseudo_cached(
     viewport_height: f32,
     prev_root: Option<&LayoutBox>,
 ) -> LayoutBox {
+    // Ulozi viewport pro layout-time calc()/clamp() vw/vh resolve.
+    set_layout_viewport(viewport_width, viewport_height);
     // Clear subtree hash memo - per-frame valid (style_map se mezi
     // frames mute pres apply_animations, takze cached hashes z prev frame
     // jsou stale). Within-frame still helps deduplikovat recursive volani.
@@ -1688,6 +1696,9 @@ fn collect_prev_box_refs(bx: &LayoutBox, map: &mut HashMap<usize, *const LayoutB
 // Vypocita subtree hash pres DOM walk + style entries + DOM children pointers.
 // Pri cache check porovname s prev.fingerprint.
 thread_local! {
+    /// Aktualni viewport (vw, vh) pro layout-time resolve calc()/clamp() s
+    /// vw/vh jednotkami. Set na layout_tree entry.
+    pub(crate) static LAYOUT_VIEWPORT: std::cell::Cell<(f32, f32)> = const { std::cell::Cell::new((1024.0, 768.0)) };
     /// Memo cache pro compute_subtree_hash. Bez nej je hash O(N*depth)
     /// kvuli rekurzi do children pri kazdem volani. CLEAR pri zmene
     /// style_map / DOM mutace (cascade rebuild).
@@ -1818,6 +1829,14 @@ pub fn get_image_natural_dims(src: &str) -> Option<(f32, f32)> {
 
 pub(crate) fn clear_subtree_hash_cache() {
     SUBTREE_HASH_CACHE.with(|c| c.borrow_mut().clear());
+}
+
+/// Set/get aktualni layout viewport (vw, vh) pro calc()/clamp() vw/vh resolve.
+pub(crate) fn set_layout_viewport(vw: f32, vh: f32) {
+    LAYOUT_VIEWPORT.with(|c| c.set((vw, vh)));
+}
+pub(crate) fn current_layout_viewport() -> (f32, f32) {
+    LAYOUT_VIEWPORT.with(|c| c.get())
 }
 
 fn compute_subtree_hash(node: &Rc<Node>, style_map: &StyleMap) -> u64 {
@@ -3505,6 +3524,11 @@ fn build_box_inner_impl(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &supe
         let v = w.trim();
         match v {
             "auto" => {}
+            _ if v.starts_with("calc(") || v.starts_with("clamp(")
+                || v.starts_with("min(") || v.starts_with("max(") => {
+                // calc s `%` - defer na layout pass (zna parent content width).
+                bx.width_calc = Some(v.to_string());
+            }
             "min-content" | "max-content" | "fit-content" => {
                 // Keyword ulozena pro layout_block - odhadneme per content
                 let text_w = bx.text.as_deref().map(|t| measure_text_width(t, bx.font_size)).unwrap_or(0.0);
@@ -3529,7 +3553,10 @@ fn build_box_inner_impl(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &supe
     if let Some(h) = s.get("height") {
         let v = h.trim();
         if v != "auto" {
-            if v.ends_with('%') {
+            if v.starts_with("calc(") || v.starts_with("clamp(")
+                || v.starts_with("min(") || v.starts_with("max(") {
+                bx.height_calc = Some(v.to_string());
+            } else if v.ends_with('%') {
                 let pct_str = &v[..v.len() - 1];
                 if let Ok(p) = pct_str.parse::<f32>() {
                     bx.height_pct = Some(p / 100.0);
@@ -4459,6 +4486,12 @@ pub fn layout_block(bx: &mut LayoutBox) {
                 // pak fall-back na full available width.
                 child.rect.width = if let Some(px) = child.explicit_width {
                     px
+                } else if let Some(calc) = child.width_calc.clone() {
+                    // calc()/clamp()/min()/max() s `%` - resolve proti parent
+                    // content width (cb_w) + viewport (vw/vh jednotky).
+                    let cb_w = float_avail_w - m_l - m_r;
+                    let (vw, vh) = LAYOUT_VIEWPORT.with(|c| c.get());
+                    parse_length_ctx(&calc, vw, vh, cb_w)
                 } else if let Some(pct) = child.width_pct {
                     (float_avail_w - m_l - m_r) * pct
                 } else {

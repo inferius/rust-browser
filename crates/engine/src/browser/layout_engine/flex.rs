@@ -83,6 +83,29 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         }
     }
 
+    // 0.4 Pre-pass: width_calc/height_calc (calc()/clamp() s `%`) -> explicit
+    // size pred flex algoritmem (container width uz znama -> % resolvitelne).
+    // Pak flex bere jako definite (jinak intrinsic content override prepise width).
+    if !bx.taffy_intrinsic_mode && bx.rect.width > 0.0 {
+        let inner_w = (bx.rect.width - pad_l - pad_r - 2.0 * bx.margin).max(0.0);
+        let inner_h = (bx.rect.height - bx.padding_top.unwrap_or(bx.padding)
+            - bx.padding_bottom.unwrap_or(bx.padding)).max(0.0);
+        let (vw, vh) = crate::browser::layout::current_layout_viewport();
+        for &i in &in_flow {
+            let ch = &mut bx.children[i];
+            if ch.explicit_width.is_none() {
+                if let Some(calc) = ch.width_calc.clone() {
+                    ch.explicit_width = Some(crate::browser::layout::parse_length_ctx(&calc, vw, vh, inner_w));
+                }
+            }
+            if ch.explicit_height.is_none() && bx.rect.height > 0.0 {
+                if let Some(calc) = ch.height_calc.clone() {
+                    ch.explicit_height = Some(crate::browser::layout::parse_length_ctx(&calc, vw, vh, inner_h));
+                }
+            }
+        }
+    }
+
     // 0.5 Pre-pass: pre items bez explicit size, recursivne lay out (do "0,0,0,0")
     // a zmeri grandchildren content. Zachova nature item rect. Toto pomaha intrinsic
     // sizing items v flex contextu.

@@ -3769,3 +3769,25 @@ fn text_decoration_shorthand_parses_style_color_overline() {
     assert_eq!(o.text_decoration_style, "double", "double style");
     assert_eq!(o.text_decoration_color, Some([0, 255, 0, 255]), "overline barva");
 }
+
+#[test]
+fn calc_clamp_width_resolves_against_parent() {
+    // calc()/clamp() s `%` se resolvuje az v layoutu proti parent width.
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let html = r#"<html><body><div class="wrap"><div class="a">a</div><div class="b">b</div></div></body></html>"#;
+    // wrap = 400px flex column; a = calc(100% - 40px) = 360; b = clamp(50px, 30%, 80px) = clamp(50,120,80)=80
+    let css = parse_stylesheet(r#".wrap { width: 400px; display: flex; flex-direction: column; }
+        .a { width: calc(100% - 40px); height: 10px; } .b { width: clamp(50px, 30%, 80px); height: 10px; }"#);
+    let doc = parse_html(html, "");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let lr = layout::layout_tree(&doc.root, &map, 800.0, 600.0);
+    fn find<'a>(b: &'a layout::LayoutBox, cls: &str) -> Option<&'a layout::LayoutBox> {
+        if b.node.as_ref().and_then(|n| n.attr("class")).as_deref() == Some(cls) { return Some(b); }
+        for c in &b.children { if let Some(f) = find(c, cls) { return Some(f); } }
+        None
+    }
+    let wa = find(&lr, "a").map(|b| b.rect.width).unwrap_or(0.0);
+    let wb = find(&lr, "b").map(|b| b.rect.width).unwrap_or(0.0);
+    assert!((wa - 360.0).abs() < 2.0, "calc(100% - 40px) z 400 = 360, got {}", wa);
+    assert!((wb - 80.0).abs() < 2.0, "clamp(50,120,80) = 80, got {}", wb);
+}

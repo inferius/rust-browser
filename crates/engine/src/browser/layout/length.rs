@@ -23,6 +23,30 @@ pub fn parse_length_or_pct(s: &str, parent: f32) -> f32 {
 /// Parse delky s viewport kontextem (pro vw/vh/% support).
 pub fn parse_length_ctx(s: &str, vw: f32, vh: f32, parent_size: f32) -> f32 {
     let s = s.trim();
+    // calc/clamp/min/max s `%` - cascade je nepocita (% = parent width znamy az
+    // tady). Kazdy operand resolvujem rekurzivne pres parse_length_ctx.
+    if let Some(inner) = s.strip_prefix("calc(").and_then(|x| x.strip_suffix(')')) {
+        return eval_calc_ctx(inner, vw, vh, parent_size);
+    }
+    if let Some(inner) = s.strip_prefix("clamp(").and_then(|x| x.strip_suffix(')')) {
+        let a = super::split_top_level_commas(inner);
+        if a.len() == 3 {
+            let lo = parse_length_ctx(a[0].trim(), vw, vh, parent_size);
+            let val = parse_length_ctx(a[1].trim(), vw, vh, parent_size);
+            let hi = parse_length_ctx(a[2].trim(), vw, vh, parent_size);
+            return val.clamp(lo.min(hi), lo.max(hi));
+        }
+    }
+    if let Some(inner) = s.strip_prefix("min(").and_then(|x| x.strip_suffix(')')) {
+        return super::split_top_level_commas(inner).iter()
+            .map(|p| parse_length_ctx(p.trim(), vw, vh, parent_size))
+            .fold(f32::INFINITY, f32::min);
+    }
+    if let Some(inner) = s.strip_prefix("max(").and_then(|x| x.strip_suffix(')')) {
+        return super::split_top_level_commas(inner).iter()
+            .map(|p| parse_length_ctx(p.trim(), vw, vh, parent_size))
+            .fold(f32::NEG_INFINITY, f32::max);
+    }
     if let Some(num) = s.strip_suffix("rem") {
         let v: f32 = num.trim().parse().unwrap_or(0.0);
         return v * 16.0;
@@ -159,4 +183,37 @@ pub fn parse_length_ctx(s: &str, vw: f32, vh: f32, parent_size: f32) -> f32 {
         return v * parent_size / 100.0;
     }
     s.parse().unwrap_or(0.0)
+}
+
+/// Vyhodnoti calc() arithmetiku s kontextem. Operandy resolvuje pres
+/// parse_length_ctx (zna %/em/vw/vh). Precedence: * / pred + -.
+fn eval_calc_ctx(expr: &str, vw: f32, vh: f32, parent_size: f32) -> f32 {
+    let parts: Vec<&str> = expr.split_whitespace().collect();
+    if parts.is_empty() { return 0.0; }
+    let resolve = |p: &str| -> f32 {
+        // Cisty bezrozmerny faktor (pro * /) NEBO delka.
+        if let Ok(n) = p.parse::<f32>() { n }
+        else { parse_length_ctx(p, vw, vh, parent_size) }
+    };
+    // Pass 1: * / left-to-right.
+    let mut vals: Vec<f32> = vec![resolve(parts[0])];
+    let mut ops: Vec<&str> = Vec::new();
+    let mut i = 1;
+    while i + 1 < parts.len() {
+        let op = parts[i];
+        let val = resolve(parts[i + 1]);
+        match op {
+            "*" => { if let Some(l) = vals.last_mut() { *l *= val; } }
+            "/" => { if let Some(l) = vals.last_mut() { if val != 0.0 { *l /= val; } } }
+            "+" | "-" => { ops.push(op); vals.push(val); }
+            _ => break,
+        }
+        i += 2;
+    }
+    // Pass 2: + - left-to-right.
+    let mut acc = vals[0];
+    for (k, op) in ops.iter().enumerate() {
+        match *op { "+" => acc += vals[k + 1], "-" => acc -= vals[k + 1], _ => {} }
+    }
+    acc
 }
