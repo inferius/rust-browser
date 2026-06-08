@@ -1726,6 +1726,29 @@ impl WebView {
             }
             InputEvent::MouseDown { x, y, button, .. } => {
                 if matches!(button, crate::embed::MouseButton::Left) {
+                    // Otevreny <select> popup: vyhodnot klik PRED beznym hit-testem.
+                    // Klik na option -> pick + zavri; klik mimo -> jen zavri. Popup
+                    // geometrie musi sedet s render (find_node_by_ptr branch).
+                    if let Some((sel_id, ax, ay, aw)) = self.open_select {
+                        let opt_h = 24.0_f32;
+                        let popup_x = ax;
+                        let popup_y = ay + 24.0 - self.scroll_y;
+                        let sel_node = self.interpreter.as_ref().and_then(|interp| {
+                            let doc_root = std::rc::Rc::clone(&interp.document.borrow().root);
+                            crate::browser::render::find_node_by_ptr(&doc_root, sel_id)
+                        });
+                        let n_opts = sel_node.as_ref().map(|n| n.children.borrow().iter()
+                            .filter(|c| c.tag_name().as_deref() == Some("option")).count()).unwrap_or(0);
+                        let popup_h = opt_h * n_opts as f32;
+                        if x >= popup_x && x < popup_x + aw && y >= popup_y && y < popup_y + popup_h {
+                            let idx = ((y - popup_y) / opt_h).floor().max(0.0) as usize;
+                            if let Some(sn) = sel_node { self.select_pick_option(&sn, idx); }
+                        }
+                        self.open_select = None;
+                        response.dirty = true;
+                        self.dirty = true;
+                        return response;
+                    }
                     // Scrollbar thumb hit-test PRED page hit-test.
                     let viewport_w = self.viewport_w / self.zoom.max(0.01);
                     let viewport_h = self.viewport_h / self.zoom.max(0.01);
@@ -1913,6 +1936,21 @@ impl WebView {
                     // nikdy nematchnou.
                     crate::browser::cascade::set_active_node(
                         target_node.as_ref().map(|t| std::rc::Rc::as_ptr(t) as usize));
+                    // Klik na zavreny <select> -> otevri popup (anchor x=screen,
+                    // y=content; sedi s render branch webview.rs find_node_by_ptr).
+                    if let Some(target) = target_node.as_ref() {
+                        if target.tag_name().as_deref() == Some("select") {
+                            let sid = std::rc::Rc::as_ptr(target) as usize;
+                            if let Some(bx) = self.last_layout_root.as_ref()
+                                .and_then(|r| crate::browser::paint::find_box_by_node_id(r, sid)) {
+                                self.open_select = Some((sid, bx.rect.x - self.scroll_x,
+                                    bx.rect.y, bx.rect.width));
+                                response.dirty = true;
+                                self.dirty = true;
+                                return response;
+                            }
+                        }
+                    }
                     // Range slider: klik nastavi value dle x pozice + fire input/
                     // change (engine-test range-val span se updatne pres oninput).
                     // Bez tohoto byl range needovladatelny mysi. Nastav drag node
@@ -3835,6 +3873,32 @@ impl WebView {
             }
         }
         self.dirty = true;
+    }
+
+    /// Vybere option v <select> dle indexu - set `selected` attr na zvolenou,
+    /// vymaz z ostatnich, nastav select `value` + fire input/change. Layout pak
+    /// (collapsed text) reflektuje novou hodnotu.
+    pub(crate) fn select_pick_option(&mut self, select_node: &std::rc::Rc<crate::browser::dom::Node>, idx: usize) {
+        let options: Vec<std::rc::Rc<crate::browser::dom::Node>> = select_node.children.borrow()
+            .iter().filter(|c| c.tag_name().as_deref() == Some("option")).cloned().collect();
+        if let Some(opt) = options.get(idx) {
+            for o in &options { o.remove_attr("selected"); }
+            opt.set_attr("selected", "");
+            let val = opt.attr("value")
+                .unwrap_or_else(|| opt.text_content().trim().to_string());
+            select_node.set_attr("value", &val);
+            if let Some(interp) = self.interpreter.as_mut() {
+                interp.bump_dom_version();
+                for evt in ["input", "change"] {
+                    let mut event = crate::interpreter::JsObject::new();
+                    event.set("type".into(), crate::interpreter::JsValue::Str(evt.into()));
+                    event.set("target".into(), crate::interpreter::JsValue::DomNode(std::rc::Rc::clone(select_node)));
+                    let event_val = crate::interpreter::JsValue::Object(std::rc::Rc::new(std::cell::RefCell::new(event)));
+                    let _ = interp.dispatch_event(select_node, evt, event_val);
+                }
+            }
+            self.dirty = true;
+        }
     }
 
     /// offsetX/offsetY pro mouse event = pozice relativni k padding-boxu target
