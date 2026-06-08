@@ -179,11 +179,12 @@ fn paint_filter_bbox_expanded_by_blur() {
     let (fx, fy, fw, fh, br) = filter_bbox.expect("FilterBegin nenalezen");
     let (rx, ry, rw, rh) = bg_rect.expect("bg Rect nenalezen");
     assert!((br - 10.0).abs() < 1e-3, "blur_radius = 10");
-    let pad = 2.0 * br;
-    assert!((fx - (rx - pad)).abs() < 1e-3, "x posunuto o -2*blur");
-    assert!((fy - (ry - pad)).abs() < 1e-3, "y posunuto o -2*blur");
-    assert!((fw - (rw + 2.0 * pad)).abs() < 1e-3, "w expanded 4*blur");
-    assert!((fh - (rh + 2.0 * pad)).abs() < 1e-3, "h expanded 4*blur");
+    // Pad = 3*blur + 2 (rezerva pro Gauss tail - drive 2*blur, blur se useknul nahore).
+    let pad = 3.0 * br + 2.0;
+    assert!((fx - (rx - pad)).abs() < 1e-3, "x posunuto o -pad");
+    assert!((fy - (ry - pad)).abs() < 1e-3, "y posunuto o -pad");
+    assert!((fw - (rw + 2.0 * pad)).abs() < 1e-3, "w expanded 2*pad");
+    assert!((fh - (rh + 2.0 * pad)).abs() < 1e-3, "h expanded 2*pad");
 }
 
 #[test]

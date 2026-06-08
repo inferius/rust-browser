@@ -6155,9 +6155,15 @@ impl Renderer {
     fn run_blur_passes(&mut self, radius: f32) {
         let mut encoder = self.device.create_command_encoder(&Default::default());
 
+        // radius je v LOGICAL CSS px, ale texel = 1/config.width je PHYSICAL.
+        // Offscreen RT je physical-sized + obsah mapovan pres vp (logical->NDC),
+        // takze 1 logical px = zoom*scale_factor physical px. Bez prepoctu byl
+        // blur zoom*scale_factor-krat uzsi (mensi rozmazani pri HiDPI/zoomu).
+        let phys_scale = (self.zoom * self.scale_factor).max(0.01);
+        let r = radius * phys_scale;
         // Pass 1: horizontal RT_a -> RT_b
         let texel_x = 1.0 / self.config.width as f32;
-        let params_h = [1.0_f32, 0.0, radius, texel_x];
+        let params_h = [1.0_f32, 0.0, r, texel_x];
         self.queue.write_buffer(&self.blur_uniform_buf, 0, bytemuck::cast_slice(&params_h));
         let bg_h = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("blur_bg_h"), layout: &self.blur_bind_group_layout,
@@ -6187,7 +6193,7 @@ impl Renderer {
 
         // Pass 2: vertical RT_b -> RT_a
         let texel_y = 1.0 / self.config.height as f32;
-        let params_v = [0.0_f32, 1.0, radius, texel_y];
+        let params_v = [0.0_f32, 1.0, r, texel_y];
         // Pouzijeme stejny buffer (write_buffer)
         let mut encoder2 = self.device.create_command_encoder(&Default::default());
         self.queue.submit(std::iter::once(encoder.finish()));

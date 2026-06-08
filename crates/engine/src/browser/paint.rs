@@ -1623,7 +1623,9 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
     let needs_blur = blur_radius >= 0.5;
     let has_subtree_filter = needs_blur || needs_color;
     if has_subtree_filter {
-        let pad = 2.0 * blur_radius;
+        // Pad pro blur tail - vetsi rezerva (3x + 2) aby se rozmazany okraj
+        // neclampoval (hlavne horni). Drive 2x -> useknuty blur nahore.
+        let pad = 3.0 * blur_radius + 2.0;
         cmds.push(DisplayCommand::FilterBegin {
             x: bx.rect.x - pad,
             y: bx.rect.y - pad,

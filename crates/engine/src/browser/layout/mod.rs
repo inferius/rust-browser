@@ -3787,10 +3787,60 @@ fn build_pseudo_box(parent_node: &Rc<Node>, styles: &HashMap<String, String>, co
         }
     }
     if let Some(fs) = styles.get("font-size") { bx.font_size = parse_length(fs); }
-    // font-weight: zatim nepouzivame na pseudo-box level (LayoutBox tu prop nedrzi).
-    let _ = styles.get("font-weight");
-    if let Some(p) = styles.get("padding") { bx.padding = parse_length(p); }
-    if let Some(m) = styles.get("margin") { bx.margin = parse_length(m); }
+    // Multi-value padding/margin (padding: 0 6px) - drive jen prvni token = chybel
+    // horizontalni padding badge.
+    let parse_box4 = |v: &str| -> (f32, f32, f32, f32) {
+        let p: Vec<f32> = v.split_whitespace().map(parse_length).collect();
+        match p.len() {
+            1 => (p[0], p[0], p[0], p[0]),
+            2 => (p[0], p[1], p[0], p[1]),
+            3 => (p[0], p[1], p[2], p[1]),
+            n if n >= 4 => (p[0], p[1], p[2], p[3]),
+            _ => (0.0, 0.0, 0.0, 0.0),
+        }
+    };
+    if let Some(p) = styles.get("padding") {
+        let (t, r, b, l) = parse_box4(p);
+        bx.padding = t; bx.padding_top = Some(t); bx.padding_right = Some(r);
+        bx.padding_bottom = Some(b); bx.padding_left = Some(l);
+    }
+    if let Some(m) = styles.get("margin") {
+        let (t, r, b, l) = parse_box4(m);
+        bx.margin = t; bx.margin_top = Some(t); bx.margin_right = Some(r);
+        bx.margin_bottom = Some(b); bx.margin_left = Some(l);
+    }
+    // border (shorthand + per-side) - drive ignorovan (::after badge bez ramecku).
+    if let Some(b) = styles.get("border") {
+        for tok in b.split_whitespace() {
+            if tok.ends_with("px") || tok.ends_with("em") || tok.ends_with("rem") {
+                bx.border_width = parse_length(tok);
+            } else if matches!(tok, "solid" | "dashed" | "dotted" | "double" | "none") {
+                bx.border_style = tok.to_string();
+            } else if let Some(c) = parse_color(tok) { bx.border_color = Some(c); }
+        }
+    }
+    if let Some(bw) = styles.get("border-width") { bx.border_width = parse_length(bw); }
+    if let Some(bc) = styles.get("border-color") { bx.border_color = parse_color(bc); }
+    if let Some(bs) = styles.get("border-style") { bx.border_style = bs.trim().to_string(); }
+    // transform (translateY(-50%) centrovani ::before sipky) - drive ignorovan.
+    if let Some(tr) = styles.get("transform") {
+        bx.transform = parse_transform(tr);
+        bx.transforms = parse_transform_chain(tr);
+    }
+    // font props aby measure textu pseudo sedel.
+    if let Some(ff) = styles.get("font-family") { bx.font_family = ff.trim().to_string(); }
+    if let Some(fw) = styles.get("font-weight") {
+        let w = fw.trim();
+        bx.font_weight = match w { "bold" => 700, "normal" => 400, s => s.parse().unwrap_or(400) };
+        bx.bold = bx.font_weight >= 700;
+    }
+    if let Some(ls) = styles.get("letter-spacing") {
+        let v = ls.trim();
+        if v != "normal" {
+            if let Some(n) = v.strip_suffix("em") { bx.letter_spacing = n.trim().parse::<f32>().unwrap_or(0.0) * bx.font_size; }
+            else { bx.letter_spacing = parse_length(v); }
+        }
+    }
     // width/height - bez nich byl pseudo box auto-velky (jen dle textu). Pro
     // dekorativni bary/badge nutne explicitni rozmery.
     if let Some(w) = styles.get("width") { bx.explicit_width = Some(parse_length(w)); }
