@@ -397,6 +397,12 @@ fn emit_inner_scrollbars(
     let _ = scroll_x;
     let _ = scroll_y;
     use crate::browser::scroll::Scrollable;
+    // CSS scrollbar-color: (thumb, track) - override default barev. Driv se
+    // ignorovalo = custom scrollbary vsude sede.
+    let (track_col, thumb_col) = match bx.scrollbar_color {
+        Some((thumb, track)) => (track, thumb),
+        None => (track_col, thumb_col),
+    };
     let needs_y = bx.needs_scrollbar_y();
     let needs_x = bx.needs_scrollbar_x();
     if needs_y {
