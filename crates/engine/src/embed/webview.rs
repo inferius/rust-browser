@@ -529,6 +529,59 @@ fn find_box_dims(bx: &crate::browser::layout::LayoutBox, node_id: usize)
     None
 }
 
+/// Klik na <label> aktivuje jeho asociovany control (browser chovani). Vrati
+/// control pro label, jinak puvodni node. for="id" nebo prvni form-control
+/// descendant (label obaluje input). Bez tohoto klik na text labelu (napr.
+/// "Polozka 1") nic nedelal = checkbox/radio "nereaguji".
+fn resolve_label_target(node: &std::rc::Rc<crate::browser::dom::Node>)
+    -> std::rc::Rc<crate::browser::dom::Node>
+{
+    if node.tag_name().as_deref() != Some("label") {
+        return std::rc::Rc::clone(node);
+    }
+    // for="id" -> dohledej element v dokumentu (walk od rootu).
+    if let Some(for_id) = node.attr("for") {
+        if !for_id.is_empty() {
+            let mut root = std::rc::Rc::clone(node);
+            loop {
+                let parent = root.parent.borrow().upgrade();
+                match parent { Some(p) => root = p, None => break }
+            }
+            if let Some(ctrl) = find_node_by_id(&root, &for_id) {
+                return ctrl;
+            }
+        }
+    }
+    // Jinak prvni form-control descendant (label obaluje input/select/...).
+    if let Some(ctrl) = first_form_control(node) {
+        return ctrl;
+    }
+    std::rc::Rc::clone(node)
+}
+
+fn first_form_control(node: &std::rc::Rc<crate::browser::dom::Node>)
+    -> Option<std::rc::Rc<crate::browser::dom::Node>>
+{
+    for child in node.children.borrow().iter() {
+        if matches!(child.tag_name().as_deref(),
+            Some("input") | Some("select") | Some("textarea") | Some("button")) {
+            return Some(std::rc::Rc::clone(child));
+        }
+        if let Some(c) = first_form_control(child) { return Some(c); }
+    }
+    None
+}
+
+fn find_node_by_id(node: &std::rc::Rc<crate::browser::dom::Node>, id: &str)
+    -> Option<std::rc::Rc<crate::browser::dom::Node>>
+{
+    if node.attr("id").as_deref() == Some(id) { return Some(std::rc::Rc::clone(node)); }
+    for child in node.children.borrow().iter() {
+        if let Some(f) = find_node_by_id(child, id) { return Some(f); }
+    }
+    None
+}
+
 /// Postavi jednoduchy focus/blur event objekt (type + target). Focus/blur
 /// jsou non-bubbling; fire_inline cte `onfocus`/`onblur` atribut na targetu.
 fn make_focus_event(ev_type: &str, node: &std::rc::Rc<crate::browser::dom::Node>)
@@ -1971,7 +2024,9 @@ impl WebView {
                     }
                     let target_node = self.last_layout_root.as_ref()
                         .and_then(|root| root.hit_test(content_x, content_y))
-                        .and_then(|bx| bx.node.clone());
+                        .and_then(|bx| bx.node.clone())
+                        // Klik na <label> -> aktivuj jeho control (focus + toggle).
+                        .map(|n| resolve_label_target(&n));
                     // Focus / blur - per-WebView focused state.
                     // [tabindex] musi byt focusable taky - jinak klik na
                     // <div tabindex="0"> nenastavi focus a keydown/keyup
@@ -2124,7 +2179,10 @@ impl WebView {
                     self.sel_end();
                     let up_target = self.last_layout_root.as_ref()
                         .and_then(|root| root.hit_test(content_x, content_y))
-                        .and_then(|bx| bx.node.clone());
+                        .and_then(|bx| bx.node.clone())
+                        // Klik na <label> -> control (konzistentne s MouseDown aby
+                        // same_target check + click toggle padly na control).
+                        .map(|n| resolve_label_target(&n));
                     // mouseup event dispatch.
                     let mu_off = up_target.as_ref().map(|t| self.event_offset(t, x, y));
                     if let (Some(target), Some(interp)) = (up_target.as_ref(), self.interpreter.as_mut()) {
