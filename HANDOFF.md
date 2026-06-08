@@ -59,6 +59,47 @@ plynule + scrollbar/overlay NEzmizel). Revert pri regresi.
 urgence; fast path je velka hot-path zmena s klesajicim perceptualnim prinosem.
 Ale ma hodnotu i mimo FPS (spravna architektura, nizsi spotreba).
 
+## Session N+33: KRITICKY hit_test fix + canvas + calc + autonomni grind
+
+Autonomni pokracovani (user pryc od PC). Verifikace REALNYM vstupem (SendInput
+hardware mouse/keyboard) + deterministicke Rust testy + dump, NE jen screenshoty.
+
+**KRITICKE (proc "drtiva vetsina nefunguje"):** hit_test mel DVA root cause:
+1. Overflow descent - vyzadoval bod uvnitr rodice PRED rekurzi do deti. html
+   box vysoky jen 496px, obsah do 8000+ -> vse pod nim NEKLIKATELNE. Fix:
+   rekurzuj do deti i mimo self.rect (orezava jen overflow:hidden/scroll/clip).
+2. Pseudo/anonymni pass-through - vracel ::after/anon boxy (node=None) ->
+   target=None -> zadny focus/toggle. Checkbox ma :checked::after fajfku co ho
+   stinila. Fix: hit_test vrati self jen kdyz node.is_some().
+   OVERENO realnym klikem: checkbox toggluje (zluty->prazdny), hit=checkbox
+   v hloubce 8132px, psani funguje. + 2 deterministicke testy.
+
+**Label->control forwarding:** klik na label TEXT (ne 16px ctverec) aktivuje
+jeho input (for=/wrapping). resolve_label_target v MouseDown+MouseUp.
+
+**Canvas API (5 root cause):** canvas.width write se zahazoval (eval_expr) ->
+sirka=0 -> vse degenerovane; RAF zamrzal (has_pending_raf); freehand dirty;
+clearRect leak; globalAlpha ignorovan.
+
+**calc()/clamp()/min()/max() s %:** pocitalo se v cascade kde %=16px ->
+calc(100%-40px)=-24px, clamp=min. Fix: cascade preservuje %-calc, parse_length_ctx
++ width_calc/height_calc resolved v layoutu proti parent width. Block+flex.
+Overeno: cb1=911, cb4 clamp=200, cb6 max=238.
+
+**text-decoration shorthand:** underline wavy var(--a) 2px - style/color/thickness
+ze shorthandu (drive jen solid+text barva) + overline + strikethrough barva.
+
+**Inline SVG var():** stroke="var(--a)" -> resvg neumi -> ROOT_VARS_SNAPSHOT +
+resolve_root_var v serialize_svg.
+
+**:has(input:checked)** matching potvrzen OK (test); webview invaliduje pres
+dom_version bump (checkbox toggle).
+
+ODLOZENO (velke/riziko): mix-blend shader, @container 2-phase, vertical text
+(38 Text konstruktoru), column-count fragmentace, elliptical border-radius
+(Vertex+WGSL), SVG animate, gradient radial circle/ellipse + animated bg-pos,
+::selection per-char, flex item cross-size padding (spawned task), drag gap.
+
 ## Session N+32: chyby-rbro v2 - forms interakce + observers + typografie + perf
 
 Pokracovani dle aktualizovaneho chyby-rbro.docx (~33 bodu) + 9 workflow agent
