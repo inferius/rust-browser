@@ -2,6 +2,26 @@
 
 use super::{TransformOp, parse_length};
 
+/// Parse jednu translate slozku -> (px, pct). "100%" -> (0, 100); "10px" -> (10, 0).
+fn parse_translate_component(s: &str) -> (f32, f32) {
+    let s = s.trim();
+    if let Some(p) = s.strip_suffix('%') {
+        (0.0, p.trim().parse::<f32>().unwrap_or(0.0))
+    } else {
+        (parse_length(s), 0.0)
+    }
+}
+
+/// Zvol Translate (pure px) nebo TranslateMixed (kdyz je % slozka) - pure px
+/// drzi puvodni variantu (zadny ripple v matrix/inverse cestach).
+fn make_translate(x_px: f32, x_pct: f32, y_px: f32, y_pct: f32) -> TransformOp {
+    if x_pct == 0.0 && y_pct == 0.0 {
+        TransformOp::Translate(x_px, y_px)
+    } else {
+        TransformOp::TranslateMixed { x_px, x_pct, y_px, y_pct }
+    }
+}
+
 pub fn parse_transform_chain(s: &str) -> Vec<TransformOp> {
     let mut out = Vec::new();
     let s = s.trim();
@@ -48,15 +68,17 @@ pub fn parse_transform(s: &str) -> Option<TransformOp> {
     if s == "none" { return Some(TransformOp::None); }
     if let Some(inner) = s.strip_prefix("translate(").and_then(|x| x.strip_suffix(')')) {
         let parts: Vec<&str> = inner.split(',').map(str::trim).collect();
-        let tx = parts.first().map(|p| parse_length(p)).unwrap_or(0.0);
-        let ty = parts.get(1).map(|p| parse_length(p)).unwrap_or(0.0);
-        return Some(TransformOp::Translate(tx, ty));
+        let (x_px, x_pct) = parse_translate_component(parts.first().copied().unwrap_or("0"));
+        let (y_px, y_pct) = parse_translate_component(parts.get(1).copied().unwrap_or("0"));
+        return Some(make_translate(x_px, x_pct, y_px, y_pct));
     }
     if let Some(inner) = s.strip_prefix("translateX(").and_then(|x| x.strip_suffix(')')) {
-        return Some(TransformOp::Translate(parse_length(inner), 0.0));
+        let (x_px, x_pct) = parse_translate_component(inner.trim());
+        return Some(make_translate(x_px, x_pct, 0.0, 0.0));
     }
     if let Some(inner) = s.strip_prefix("translateY(").and_then(|x| x.strip_suffix(')')) {
-        return Some(TransformOp::Translate(0.0, parse_length(inner)));
+        let (y_px, y_pct) = parse_translate_component(inner.trim());
+        return Some(make_translate(0.0, 0.0, y_px, y_pct));
     }
     if let Some(inner) = s.strip_prefix("rotate(").and_then(|x| x.strip_suffix(')')) {
         let trimmed = inner.trim();

@@ -63,6 +63,10 @@ pub enum Position {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TransformOp {
     Translate(f32, f32),
+    /// translate s procentni slozkou (% = z border-box width/height elementu) -
+    /// resolvuje se az v paintu kde je bx.rect znamy. px slozka + pct slozka.
+    /// Klic pro marquee (translateX(100%) = sirka elementu, ne 16px default).
+    TranslateMixed { x_px: f32, x_pct: f32, y_px: f32, y_pct: f32 },
     Rotate(f32),  // radians
     Scale(f32, f32),
     /// skew(ax, ay) - ulozene jako tan(uhel) pro x i y osu (2D shear).
@@ -1465,6 +1469,9 @@ fn inverse_transform_for_hit(bx: &LayoutBox, x: f32, y: f32) -> (f32, f32) {
     for op in chain.iter().rev() {
         match op {
             TransformOp::Translate(tx, ty) => { qx -= *tx; qy -= *ty; }
+            // % slozku nelze bez rect kontextu invertovat - px slozka staci pro
+            // hit-test (marquee neni interaktivni).
+            TransformOp::TranslateMixed { x_px, y_px, .. } => { qx -= *x_px; qy -= *y_px; }
             TransformOp::Translate3D { x: tx, y: ty, .. } => { qx -= *tx; qy -= *ty; }
             TransformOp::Scale(sx, sy) => {
                 if sx.abs() > 1e-6 { qx = cx + (qx - cx) / *sx; }

@@ -2734,6 +2734,12 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
                 TransformOp::Translate(tx, ty) => {
                     for cmd in &mut cmds[start..] { shift_cmd(cmd, *tx, *ty); }
                 }
+                TransformOp::TranslateMixed { x_px, x_pct, y_px, y_pct } => {
+                    // % = z border-box width/height elementu (CSS spec).
+                    let tx = x_px + x_pct / 100.0 * bx.rect.width;
+                    let ty = y_px + y_pct / 100.0 * bx.rect.height;
+                    for cmd in &mut cmds[start..] { shift_cmd(cmd, tx, ty); }
+                }
                 TransformOp::Translate3D { x, y, .. } => {
                     for cmd in &mut cmds[start..] { shift_cmd(cmd, *x, *y); }
                 }

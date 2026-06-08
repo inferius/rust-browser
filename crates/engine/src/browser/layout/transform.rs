@@ -37,6 +37,14 @@ fn transform_op_matrix(op: &TransformOp) -> [f32; 16] {
             0.0, 0.0, 1.0, 0.0,
             0.0, 0.0, 0.0, 1.0,
         ],
+        // % slozka neresolvovatelna bez rect kontextu (resoluje se v paint 2D
+        // ceste) - matrix path pouzije jen px slozku.
+        TransformOp::TranslateMixed { x_px, y_px, .. } => [
+            1.0, 0.0, 0.0, *x_px,
+            0.0, 1.0, 0.0, *y_px,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0,
+        ],
         TransformOp::Translate3D { x, y, z } => [
             1.0, 0.0, 0.0, *x,
             0.0, 1.0, 0.0, *y,
