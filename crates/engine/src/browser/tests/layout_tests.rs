@@ -3670,3 +3670,43 @@ fn h2_heading_wraps_at_narrow_viewport() {
     println!("h2 wrapped text: {:?}", text);
     assert!(text.contains('\n'), "h2 should wrap at 320px viewport, got: {:?}", text);
 }
+
+#[test]
+fn hit_test_descends_into_overflowing_child() {
+    // Dite pretekajici rodice (overflow:visible) musi byt hittable i pod vyskou
+    // rodice. Regrese: html box truncated -> vse pod nim neklikatelne.
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(
+        r#"<html><body><div class="clip"><div class="tall">x</div></div></body></html>"#,
+        "",
+    );
+    let css = parse_stylesheet(
+        r#"body { margin: 0; } .clip { height: 10px; } .tall { height: 80px; }"#,
+    );
+    let map = cascade::cascade(&doc.root, &[css]);
+    let lr = layout::layout_tree(&doc.root, &map, 200.0, 200.0);
+    // Klik na y=50 - uvnitr .tall (0..80), ale POD .clip (0..10).
+    let hit = lr.hit_test(5.0, 50.0);
+    assert!(hit.is_some(), "overflowing child musi byt hittable pod vyskou rodice");
+    assert!(hit.unwrap().node.is_some(), "hit musi byt realny element, ne anonymni box");
+}
+
+#[test]
+fn hit_test_returns_node_bearing_box_not_pseudo() {
+    // ::before/::after pseudo (node=None) nesmi stinit originating element.
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(
+        r#"<html><body><button class="b">OK</button></body></html>"#,
+        "",
+    );
+    let css = parse_stylesheet(
+        r#"body { margin: 0; } .b { width: 100px; height: 40px; } .b::before { content: "XX"; }"#,
+    );
+    let map = cascade::cascade(&doc.root, &[css]);
+    let lr = layout::layout_tree(&doc.root, &map, 200.0, 200.0);
+    // Klik kdekoliv na tlacitko - hit musi mit DOM node (button), ne pseudo.
+    let hit = lr.hit_test(10.0, 15.0);
+    assert!(hit.is_some(), "tlacitko musi byt hittable");
+    let n = hit.unwrap().node.as_ref();
+    assert!(n.is_some(), "hit nesmi byt pseudo/anonymni box (node=None)");
+}
