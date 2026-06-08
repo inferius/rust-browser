@@ -853,8 +853,9 @@ pub struct LayoutBox {
     pub z_index: Option<i32>,
     /// Opacity 0..1
     pub opacity: f32,
-    /// Underline / strikethrough flagy
+    /// Underline / overline / strikethrough flagy
     pub text_underline: bool,
+    pub text_overline: bool,
     pub text_strikethrough: bool,
     /// Gradient pozadi (linear/radial/conic) + barevne stops.
     pub bg_gradient: Option<BgGradient>,
@@ -1269,6 +1270,7 @@ impl LayoutBox {
             z_index: None,
             opacity: 1.0,
             text_underline: false,
+            text_overline: false,
             text_strikethrough: false,
             overflow_hidden: false,
             overflow_x: Overflow::Visible,
@@ -2887,16 +2889,40 @@ fn build_box_inner_impl(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &supe
     // tlacitka `<a class="btn">` mela underline.
     if let Some(td) = s.get("text-decoration").or_else(|| s.get("text-decoration-line")) {
         let v = td.trim().to_lowercase();
-        // Multi-value: "underline solid red" - hledat keywordy.
+        // Multi-value SHORTHAND: "underline wavy var(--a) 2px" - line + style +
+        // color + thickness v jedne hodnote. Shorthand se NEexpanduje do
+        // longhandu, takze parsuj vse tady (jinak se wavy/barva/tloustka ztrati).
         let has_none = v.split_whitespace().any(|t| t == "none");
         let has_underline = v.split_whitespace().any(|t| t == "underline");
+        let has_overline = v.split_whitespace().any(|t| t == "overline");
         let has_strike = v.split_whitespace().any(|t| t == "line-through");
         if has_none {
             bx.text_underline = false;
+            bx.text_overline = false;
             bx.text_strikethrough = false;
         } else {
             if has_underline { bx.text_underline = true; }
+            if has_overline { bx.text_overline = true; }
             if has_strike { bx.text_strikethrough = true; }
+            // Style keyword ze shorthandu (jen pokud sub-prop nenastavil).
+            for tok in v.split_whitespace() {
+                if matches!(tok, "solid" | "double" | "dotted" | "dashed" | "wavy") {
+                    bx.text_decoration_style = tok.to_string();
+                }
+            }
+            // Thickness (Npx) + barva (zbyle tokeny) ze shorthandu.
+            for tok in td.split_whitespace() {
+                let tl = tok.to_lowercase();
+                if matches!(tl.as_str(), "underline" | "overline" | "line-through"
+                    | "solid" | "double" | "dotted" | "dashed" | "wavy" | "none") {
+                    continue;
+                }
+                if tl.ends_with("px") || tl.ends_with("em") || tl.ends_with("rem") {
+                    bx.text_decoration_thickness = parse_length(tok);
+                } else if let Some(c) = parse_color(tok) {
+                    bx.text_decoration_color = Some(c);
+                }
+            }
         }
     }
     // text-decoration L4 detail props

@@ -2524,13 +2524,27 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
                 }
             }
         }
+        // Overline - cara NAD textem (text-decoration: overline).
+        if bx.text_overline {
+            let dec_color = bx.text_decoration_color.map(with_alpha).unwrap_or(text_color);
+            let thickness = bx.text_decoration_thickness.max(1.0);
+            let over_y = text_y + bx.font_size * 0.15;
+            if bx.text_decoration_style == "double" {
+                cmds.push(DisplayCommand::Rect { x: text_x, y: over_y, w: text_w, h: thickness, color: dec_color, radius: 0.0 });
+                cmds.push(DisplayCommand::Rect { x: text_x, y: over_y + thickness + 2.0, w: text_w, h: thickness, color: dec_color, radius: 0.0 });
+            } else {
+                cmds.push(DisplayCommand::Rect { x: text_x, y: over_y, w: text_w, h: thickness, color: dec_color, radius: 0.0 });
+            }
+        }
         if bx.text_strikethrough {
+            // text-decoration-color (var(--c)) - drive ignorovano (text_color).
+            let dec_color = bx.text_decoration_color.map(with_alpha).unwrap_or(text_color);
             cmds.push(DisplayCommand::Rect {
                 x: text_x,
                 y: text_y + bx.font_size * 0.55,
                 w: text_w,
-                h: 1.0,
-                color: text_color,
+                h: bx.text_decoration_thickness.max(1.0),
+                color: dec_color,
                 radius: 0.0,
             });
         }

@@ -3745,3 +3745,27 @@ fn has_selector_reevaluates_after_checked_change() {
     let bc_after = find_item(&lr2).and_then(|b| b.border_color);
     assert_eq!(bc_after, Some([255, 0, 0, 255]), ":has(input:checked) musi prebarvit border na cerveny");
 }
+
+#[test]
+fn text_decoration_shorthand_parses_style_color_overline() {
+    // text-decoration shorthand: line + style + color + thickness v jedne hodnote.
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let html = r#"<html><body><span class="u">u</span><span class="o">o</span></body></html>"#;
+    let css = parse_stylesheet(r#".u { text-decoration: underline wavy #ff0000 2px; } .o { text-decoration: overline double #00ff00; }"#);
+    let doc = parse_html(html, "");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let lr = layout::layout_tree(&doc.root, &map, 200.0, 200.0);
+    fn find<'a>(b: &'a layout::LayoutBox, cls: &str) -> Option<&'a layout::LayoutBox> {
+        if b.node.as_ref().and_then(|n| n.attr("class")).as_deref() == Some(cls) { return Some(b); }
+        for c in &b.children { if let Some(f) = find(c, cls) { return Some(f); } }
+        None
+    }
+    let u = find(&lr, "u").expect("u span");
+    assert!(u.text_underline, "underline flag");
+    assert_eq!(u.text_decoration_style, "wavy", "wavy style ze shorthandu");
+    assert_eq!(u.text_decoration_color, Some([255, 0, 0, 255]), "barva ze shorthandu");
+    let o = find(&lr, "o").expect("o span");
+    assert!(o.text_overline, "overline flag");
+    assert_eq!(o.text_decoration_style, "double", "double style");
+    assert_eq!(o.text_decoration_color, Some([0, 255, 0, 255]), "overline barva");
+}
