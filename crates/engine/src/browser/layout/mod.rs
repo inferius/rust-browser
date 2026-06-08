@@ -888,6 +888,9 @@ pub struct LayoutBox {
     /// color-scheme: "light" | "dark" | "light dark" | "normal" - preference.
     /// accent-color: vlastni barva accent (form controls).
     pub accent_color: Option<[u8; 4]>,
+    /// appearance: none - potlaci nativni vykresleni form controlu (checkbox/
+    /// radio/range/select overlay) aby se uplatnily CSS bg/border/pseudo styly.
+    pub appearance_none: bool,
     /// CSS Containment - bitfield: layout / paint / size / style.
     /// 1 = layout, 2 = paint, 4 = size, 8 = style.
     pub contain: u8,
@@ -1287,6 +1290,7 @@ impl LayoutBox {
             word_spacing: 0.0,
             aspect_ratio: None,
             accent_color: None,
+            appearance_none: false,
             contain: 0,
             scrollbar_width: String::new(),
             scrollbar_color: None,
@@ -2893,6 +2897,12 @@ fn build_box_inner_impl(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &supe
         if ac.trim() != "auto" {
             bx.accent_color = parse_color(ac);
         }
+    }
+    // appearance: none (vc. -webkit-/-moz- prefixu) -> potlac nativni overlay.
+    if let Some(ap) = s.get("appearance")
+        .or_else(|| s.get("-webkit-appearance"))
+        .or_else(|| s.get("-moz-appearance")) {
+        bx.appearance_none = ap.trim().eq_ignore_ascii_case("none");
     }
     // border-image: url(...) <slice> / <width> [/ <outset>] <repeat>
     if let Some(src) = s.get("border-image-source") {
