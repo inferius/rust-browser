@@ -1394,6 +1394,9 @@ impl Interpreter {
         // Snapshot observers list (Rc clone) - mutace callbacku nesmi invalidovat iter.
         let observers = Rc::clone(&self.resize_observers);
         let obs_list = observers.borrow();
+        // Sber (callback, entries) PRES vsechny observery, az pak drop+call.
+        // Drive byl `return` po prvnim fire -> ostatni observery se preskocily.
+        let mut pending: Vec<(JsValue, JsValue)> = Vec::new();
         for obs in obs_list.iter() {
             let targets: Vec<JsValue> = obs.targets.borrow().clone();
             let mut entries: Vec<JsValue> = Vec::new();
@@ -1428,10 +1431,11 @@ impl Interpreter {
             }
             if entries.is_empty() { continue; }
             let arr = JsValue::Array(Rc::new(RefCell::new(entries)));
-            let cb = obs.callback.clone();
-            drop(obs_list);
+            pending.push((obs.callback.clone(), arr));
+        }
+        drop(obs_list);
+        for (cb, arr) in pending {
             let _ = self.call_function(cb, vec![arr], None);
-            return; // Iter restart pri dalsim fire - obvykle ma 1-2 observers anyway.
         }
     }
 
@@ -1448,6 +1452,10 @@ impl Interpreter {
     {
         let observers = Rc::clone(&self.intersection_observers);
         let obs_list = observers.borrow();
+        // Sber (callback, entries) PRES vsechny observery, az pak drop+call.
+        // Drive byl `return` po prvnim fire -> druhy observer (sectionObs)
+        // nikdy nefire-nul ten frame = ztracene entries.
+        let mut pending: Vec<(JsValue, JsValue)> = Vec::new();
         for obs in obs_list.iter() {
             let (vx, vy, vw, vh) = viewport;
             let (mt, mr, mb, ml) = obs.root_margin;
@@ -1499,10 +1507,11 @@ impl Interpreter {
             }
             if entries.is_empty() { continue; }
             let arr = JsValue::Array(Rc::new(RefCell::new(entries)));
-            let cb = obs.callback.clone();
-            drop(obs_list);
+            pending.push((obs.callback.clone(), arr));
+        }
+        drop(obs_list);
+        for (cb, arr) in pending {
             let _ = self.call_function(cb, vec![arr], None);
-            return;
         }
     }
 
