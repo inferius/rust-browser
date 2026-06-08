@@ -453,6 +453,10 @@ pub struct ShellApp {
     /// `CoalesceMouseMovesIfPossible`.
     pending_mouse_pos: Option<(f32, f32)>,
     pending_coalesced: Vec<(f32, f32)>,
+    /// Coalesced window resize - winit posila Resized 1/pixel pri tazeni okna.
+    /// Drz posledni velikost, aplikuj realny resize (texture realloc + reflow)
+    /// jen 1x v RedrawRequested misto per-event = plynule tazeni.
+    pending_resize: Option<(u32, u32)>,
     /// Posledni redraw cas - FPS counter (EMA 30 frames).
     frame_times_ms: std::collections::VecDeque<f32>,
     last_frame_time: std::time::Instant,
@@ -520,6 +524,7 @@ impl ShellApp {
             cdp_last_dom_emit: std::time::Instant::now(),
             last_mouse_move: std::time::Instant::now(),
             pending_mouse_pos: None,
+            pending_resize: None,
             pending_coalesced: Vec::new(),
             frame_times_ms: std::collections::VecDeque::with_capacity(30),
             last_frame_time: std::time::Instant::now(),
@@ -1668,10 +1673,10 @@ impl ApplicationHandler for ShellApp {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
-                if let Some(r) = &mut self.renderer {
-                    r.resize_surface(size.width, size.height);
-                }
-                self.resize_views();
+                // Coalesce - jen uloz posledni velikost, realny resize (texture
+                // realloc + reflow) az v RedrawRequested. Bez toho winit per-pixel
+                // Resized = N realloc+reflow per frame = trhane tazeni okna.
+                self.pending_resize = Some((size.width, size.height));
                 if let Some(w) = &self.window { w.request_redraw(); }
             }
             WindowEvent::ScaleFactorChanged { .. } => {
@@ -1679,6 +1684,13 @@ impl ApplicationHandler for ShellApp {
                 if let Some(w) = &self.window { w.request_redraw(); }
             }
             WindowEvent::RedrawRequested => {
+                // Aplikuj coalesced resize jednou (posledni velikost) pred redraw.
+                if let Some((rw, rh)) = self.pending_resize.take() {
+                    if let Some(r) = &mut self.renderer {
+                        r.resize_surface(rw, rh);
+                    }
+                    self.resize_views();
+                }
                 // Flush coalesced MouseMove buffer pred redraw - single dispatch
                 // s history pres PointerEvent.getCoalescedEvents() API.
                 self.flush_pending_mouse_move();

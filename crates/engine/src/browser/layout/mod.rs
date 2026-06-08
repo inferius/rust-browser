@@ -2203,7 +2203,10 @@ fn prelayout_table_columns(bx: &mut LayoutBox) {
     use super::layout::tables::{TableCellSpec, compute_column_widths_auto, compute_column_widths_fixed};
     let pad_l = bx.padding_left.unwrap_or(bx.padding);
     let pad_r = bx.padding_right.unwrap_or(bx.padding);
-    let inner_w = (bx.rect.width - pad_l - pad_r - 2.0 * bx.border_width).max(0.0);
+    // Floor na celou px - drobne float rozdily v rect.width (font async load,
+    // scrollbar toggle) by jinak menily column distribuci mezi passy = tabulka
+    // "skace" o par px. Floor = stabilni vstup pro compute_column_widths_auto.
+    let inner_w = (bx.rect.width - pad_l - pad_r - 2.0 * bx.border_width).max(0.0).floor();
     if inner_w <= 0.0 { return; }
 
     let mut rows: Vec<usize> = Vec::new();
