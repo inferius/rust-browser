@@ -526,6 +526,17 @@ fn find_box_dims(bx: &crate::browser::layout::LayoutBox, node_id: usize)
     None
 }
 
+/// Postavi jednoduchy focus/blur event objekt (type + target). Focus/blur
+/// jsou non-bubbling; fire_inline cte `onfocus`/`onblur` atribut na targetu.
+fn make_focus_event(ev_type: &str, node: &std::rc::Rc<crate::browser::dom::Node>)
+    -> crate::interpreter::JsValue
+{
+    let mut event = crate::interpreter::JsObject::new();
+    event.set("type".into(), crate::interpreter::JsValue::Str(ev_type.into()));
+    event.set("target".into(), crate::interpreter::JsValue::DomNode(std::rc::Rc::clone(node)));
+    crate::interpreter::JsValue::Object(std::rc::Rc::new(std::cell::RefCell::new(event)))
+}
+
 impl WebView {
     /// Vytvori prazdny WebView s viewportem dane velikosti. Offscreen RT
     /// alokovan az v Phase 5 - Phase 2 nech `target_texture = None`.
@@ -1675,19 +1686,41 @@ impl WebView {
                             response.dirty = true;
                         }
                     }
-                    // Cursor icon dle hovered tag. PERF: reuse hit_tag + hit_over_text
-                    // z single hit_test vyse (drive 3 hit_test calls per mouse move =
-                    // 300% over-work pres 5000-box layout = 100 FPS drop pri pohybu mysi).
-                    response.cursor = Some(match hit_tag.as_deref() {
-                        Some("a") | Some("button") => crate::embed::CursorIcon::Pointer,
-                        Some("input") | Some("textarea") => crate::embed::CursorIcon::Text,
-                        _ => {
-                            if hit_over_text {
-                                crate::embed::CursorIcon::Text
-                            } else {
-                                crate::embed::CursorIcon::Default
-                            }
+                    // Cursor icon: nejdriv CSS `cursor` property (LayoutBox.cursor,
+                    // inherited - span pod divem dedi). Az fallback na tag/text.
+                    // Drive se CSS cursor ignoroval -> `cursor:text` na divu se
+                    // zahodil, I-beam jen nad spany s textem = "jen nekdy spravne".
+                    let css_cursor = hit_id.and_then(|nid| self.last_layout_root.as_ref()
+                        .and_then(|root| crate::browser::paint::find_box_by_node_id(root, nid))
+                        .and_then(|bx| bx.cursor.clone()));
+                    let fallback = |hit_tag: &Option<String>, hit_over_text: bool| {
+                        match hit_tag.as_deref() {
+                            Some("a") | Some("button") => crate::embed::CursorIcon::Pointer,
+                            Some("input") | Some("textarea") => crate::embed::CursorIcon::Text,
+                            _ => if hit_over_text { crate::embed::CursorIcon::Text }
+                                 else { crate::embed::CursorIcon::Default },
                         }
+                    };
+                    response.cursor = Some(match css_cursor.as_deref() {
+                        Some("pointer") => crate::embed::CursorIcon::Pointer,
+                        Some("text") | Some("vertical-text") => crate::embed::CursorIcon::Text,
+                        Some("wait") | Some("progress") => crate::embed::CursorIcon::Wait,
+                        Some("help") => crate::embed::CursorIcon::Help,
+                        Some("crosshair") | Some("cell") => crate::embed::CursorIcon::Crosshair,
+                        Some("move") | Some("all-scroll") => crate::embed::CursorIcon::Move,
+                        Some("not-allowed") | Some("no-drop") => crate::embed::CursorIcon::NotAllowed,
+                        Some("grab") => crate::embed::CursorIcon::Grab,
+                        Some("grabbing") => crate::embed::CursorIcon::Grabbing,
+                        Some("ew-resize") | Some("col-resize") | Some("e-resize") | Some("w-resize")
+                            => crate::embed::CursorIcon::ResizeEw,
+                        Some("ns-resize") | Some("row-resize") | Some("n-resize") | Some("s-resize")
+                            => crate::embed::CursorIcon::ResizeNs,
+                        Some("nesw-resize") | Some("ne-resize") | Some("sw-resize")
+                            => crate::embed::CursorIcon::ResizeNesw,
+                        Some("nwse-resize") | Some("nw-resize") | Some("se-resize")
+                            => crate::embed::CursorIcon::ResizeNwse,
+                        Some("default") | Some("auto") | None => fallback(&hit_tag, hit_over_text),
+                        _ => fallback(&hit_tag, hit_over_text),
                     });
                 }
             }
@@ -1838,22 +1871,42 @@ impl WebView {
                         .and_then(|root| root.hit_test(content_x, content_y))
                         .and_then(|bx| bx.node.clone());
                     // Focus / blur - per-WebView focused state.
-                    if let Some(target) = target_node.as_ref() {
+                    // [tabindex] musi byt focusable taky - jinak klik na
+                    // <div tabindex="0"> nenastavi focus a keydown/keyup
+                    // (routovany na focused node) se nikdy nedispatchnou.
+                    let old_focus_id = self.focused_node_local;
+                    let new_id = target_node.as_ref().and_then(|target| {
                         let focusable = matches!(target.tag_name().as_deref(),
                             Some("input") | Some("textarea") | Some("button")
-                            | Some("a") | Some("select"));
-                        let new_id = if focusable {
-                            Some(std::rc::Rc::as_ptr(target) as usize)
-                        } else { None };
-                        self.focused_node_local = new_id;
-                        // Cascade global = mirror per-WebView pro :focus styling
-                        // (cascade.rs PSEUDO :focus check). Single thread,
-                        // posledni MouseDown wins. Multi-WebView problem: posledni
-                        // klik prepise styling pro vsechny - akceptace pri F12.
-                        crate::browser::cascade::set_focused_node(new_id);
-                    } else {
-                        self.focused_node_local = None;
-                        crate::browser::cascade::set_focused_node(None);
+                            | Some("a") | Some("select"))
+                            || target.attr("tabindex").is_some();
+                        if focusable { Some(std::rc::Rc::as_ptr(target) as usize) } else { None }
+                    });
+                    self.focused_node_local = new_id;
+                    // Cascade global = mirror per-WebView pro :focus styling
+                    // (cascade.rs PSEUDO :focus check). Single thread,
+                    // posledni MouseDown wins. Multi-WebView problem: posledni
+                    // klik prepise styling pro vsechny - akceptace pri F12.
+                    crate::browser::cascade::set_focused_node(new_id);
+                    // Dispatch blur(stary) + focus(novy) JS event - bez toho se
+                    // onfocus/onblur inline handlery (napr. border highlight)
+                    // nikdy nezavolaji.
+                    if old_focus_id != new_id {
+                        if let Some(interp) = self.interpreter.as_mut() {
+                            let doc_root = std::rc::Rc::clone(&interp.document.borrow().root);
+                            if let Some(oid) = old_focus_id {
+                                if let Some(old_node) = crate::browser::render::find_node_by_ptr(&doc_root, oid) {
+                                    let ev = make_focus_event("blur", &old_node);
+                                    let _ = interp.dispatch_event(&old_node, "blur", ev);
+                                }
+                            }
+                            if let Some(nid) = new_id {
+                                if let Some(new_node) = crate::browser::render::find_node_by_ptr(&doc_root, nid) {
+                                    let ev = make_focus_event("focus", &new_node);
+                                    let _ = interp.dispatch_event(&new_node, "focus", ev);
+                                }
+                            }
+                        }
                     }
                     // Range slider: klik nastavi value dle x pozice + fire input/
                     // change (engine-test range-val span se updatne pres oninput).
