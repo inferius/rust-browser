@@ -2393,20 +2393,35 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         };
         let text_y = bx.rect.y + border + pad_t + v_offset;
         let text_color = with_alpha(bx.text_color.unwrap_or([0, 0, 0, 255]));
-        // Text shadow - emit pred main text aby byl v pozadi
-        if let Some((ox, oy, _blur, color)) = bx.text_shadow {
+        // Text shadow - vsechny vrstvy v reverse poradi (posledni vrstva nejvic
+        // vzadu) pred main text. Blur aproximovan: pri blur>1.5 emit ring 8 kopii
+        // na polomeru ~blur*0.5 se snizenou alpha = fake glow/spread (real Gaussian
+        // na text = TODO). Pri blur<=1.5 jedna ostra kopie (offset 3D shadow).
+        let mk_shadow = |cmds: &mut Vec<DisplayCommand>, px: f32, py: f32, col: [u8; 4]| {
             cmds.push(DisplayCommand::Text {
-                x: text_x + ox,
-                y: text_y + oy,
-                content: text.clone(),
-                color: with_alpha(color),
-                font_size: bx.font_size,
-                bold: bx.bold,
-                font_weight: bx.effective_weight(),
-                italic: bx.italic,
+                x: px, y: py, content: text.clone(), color: col,
+                font_size: bx.font_size, bold: bx.bold,
+                font_weight: bx.effective_weight(), italic: bx.italic,
                 font_family: bx.font_family.clone(),
                 strikethrough: false, underline: false,
             });
+        };
+        for &(ox, oy, blur, color) in bx.text_shadow.iter().rev() {
+            let base = with_alpha(color);
+            if blur > 1.5 {
+                let r = blur * 0.5;
+                let ring = [(1.0_f32, 0.0_f32), (0.7, 0.7), (0.0, 1.0), (-0.7, 0.7),
+                            (-1.0, 0.0), (-0.7, -0.7), (0.0, -1.0), (0.7, -0.7)];
+                let a = ((base[3] as f32 / 3.0) as u8).max(1);
+                let col = [base[0], base[1], base[2], a];
+                for (dx, dy) in ring {
+                    mk_shadow(cmds, text_x + ox + dx * r, text_y + oy + dy * r, col);
+                }
+                // Stredni jasnejsi jadro.
+                mk_shadow(cmds, text_x + ox, text_y + oy, base);
+            } else {
+                mk_shadow(cmds, text_x + ox, text_y + oy, base);
+            }
         }
         // Strike-through pri <s>/<del>/<strike> tagu (line-through default).
         let is_strike_tag = matches!(bx.tag.as_deref(),

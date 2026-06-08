@@ -1,18 +1,26 @@
 //! Parse text-shadow + box-shadow.
 
-use super::{parse_color, parse_length};
+use super::{parse_color, parse_length, split_top_level_commas};
 
-/// Parse text-shadow: "offset_x offset_y blur color" / "offset_x offset_y color".
-pub fn parse_text_shadow(s: &str) -> Option<(f32, f32, f32, [u8; 4])> {
+/// Parse text-shadow - vsechny vrstvy (oddelene comma). Kazda vrstva =
+/// "offset_x offset_y [blur] color". Multi-layer glow/3D = vice vrstev.
+pub fn parse_text_shadow(s: &str) -> Vec<(f32, f32, f32, [u8; 4])> {
     let s = s.trim();
-    if s == "none" || s.is_empty() { return None; }
+    if s == "none" || s.is_empty() { return Vec::new(); }
+    split_top_level_commas(s).iter()
+        .filter_map(|layer| parse_text_shadow_layer(layer.trim()))
+        .collect()
+}
+
+/// Parse jedna text-shadow vrstva: "offset_x offset_y blur color" / "ox oy color".
+fn parse_text_shadow_layer(s: &str) -> Option<(f32, f32, f32, [u8; 4])> {
     let parts: Vec<&str> = s.split_whitespace().collect();
     if parts.len() < 3 { return None; }
     let ox = parse_length(parts[0]);
     let oy = parse_length(parts[1]);
     let mut blur = 0.0f32;
     let mut color_idx = 2;
-    if parts[2].chars().next().map(|c| c.is_ascii_digit() || c == '.').unwrap_or(false)
+    if parts[2].chars().next().map(|c| c.is_ascii_digit() || c == '.' || c == '-').unwrap_or(false)
         || parts[2].ends_with("px") || parts[2].ends_with("em")
     {
         blur = parse_length(parts[2]);

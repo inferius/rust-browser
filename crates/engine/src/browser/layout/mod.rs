@@ -863,8 +863,8 @@ pub struct LayoutBox {
     pub backgrounds: Vec<BgLayer>,
     /// CSS clip-path: inset(...) / circle(...) / ellipse(...) / polygon(...).
     pub clip_path: Option<ClipPath>,
-    /// text-shadow: (offset_x, offset_y, blur, color).
-    pub text_shadow: Option<(f32, f32, f32, [u8; 4])>,
+    /// text-shadow vrstvy: (offset_x, offset_y, blur, color). Multi-layer glow/3D.
+    pub text_shadow: Vec<(f32, f32, f32, [u8; 4])>,
     /// text-transform: none / uppercase / lowercase / capitalize
     pub text_transform: TextTransform,
     /// font-family - prvni nazev z comma-separated list (nejvyssi prio).
@@ -1281,7 +1281,7 @@ impl LayoutBox {
             backdrop_filter: Vec::new(),
             backgrounds: Vec::new(),
             clip_path: None,
-            text_shadow: None,
+            text_shadow: Vec::new(),
             text_transform: TextTransform::None,
             font_family: String::new(),
             text_decoration_color: None,

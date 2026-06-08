@@ -1569,7 +1569,9 @@ fn aspect_ratio_parsed_from_decimal() {
 
 #[test]
 fn parse_text_shadow_basic() {
-    let s = layout::parse_text_shadow("2px 4px 8px black").unwrap();
+    let v = layout::parse_text_shadow("2px 4px 8px black");
+    assert_eq!(v.len(), 1);
+    let s = v[0];
     assert_eq!(s.0, 2.0);
     assert_eq!(s.1, 4.0);
     assert_eq!(s.2, 8.0);
@@ -1578,11 +1580,22 @@ fn parse_text_shadow_basic() {
 
 #[test]
 fn parse_text_shadow_no_blur() {
-    let s = layout::parse_text_shadow("1px 1px red").unwrap();
+    let v = layout::parse_text_shadow("1px 1px red");
+    assert_eq!(v.len(), 1);
+    let s = v[0];
     assert_eq!(s.0, 1.0);
     assert_eq!(s.1, 1.0);
     assert_eq!(s.2, 0.0);
     assert_eq!(s.3, [255, 0, 0, 255]);
+}
+
+#[test]
+fn parse_text_shadow_multi_layer() {
+    let v = layout::parse_text_shadow("2px 2px 0 black, 4px 4px 0 red");
+    assert_eq!(v.len(), 2);
+    assert_eq!(v[0].3, [0, 0, 0, 255]);
+    assert_eq!(v[1].0, 4.0);
+    assert_eq!(v[1].3, [255, 0, 0, 255]);
 }
 
 #[test]
