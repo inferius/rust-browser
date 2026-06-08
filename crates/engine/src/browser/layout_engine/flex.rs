@@ -103,6 +103,15 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                     ch.explicit_height = Some(crate::browser::layout::parse_length_ctx(&calc, vw, vh, inner_h));
                 }
             }
+            // aspect-ratio + definite width -> definite height (jinak flex cross-
+            // stretch prepise aspect-ratio: ar-16x9 width:120 -> 67.5, ne stretch 80).
+            if ch.explicit_height.is_none() && ch.height_calc.is_none() {
+                if let (Some(w), Some(ar)) = (ch.explicit_width, ch.aspect_ratio) {
+                    if ar > 0.0 {
+                        ch.explicit_height = Some((w / ar).max(0.0));
+                    }
+                }
+            }
         }
     }
 

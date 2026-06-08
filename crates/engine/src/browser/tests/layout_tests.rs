@@ -3804,3 +3804,23 @@ fn counter_decimal_leading_zero_and_roman() {
     assert_eq!(format_counter_value(1, "upper-alpha"), "A");
     assert_eq!(format_counter_value(27, "lower-alpha"), "aa");
 }
+
+#[test]
+fn aspect_ratio_flex_item_definite_height() {
+    // aspect-ratio + definite width ve flex -> height z width/ratio (ne stretch).
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let html = r#"<html><body><div class="row"><div class="a">a</div><div class="b">b</div></div></body></html>"#;
+    let css = parse_stylesheet(r#".row { display: flex; }
+        .a { width: 160px; aspect-ratio: 16 / 9; } .b { width: 100px; height: 100px; }"#);
+    let doc = parse_html(html, "");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let lr = layout::layout_tree(&doc.root, &map, 800.0, 600.0);
+    fn find<'a>(b: &'a layout::LayoutBox, cls: &str) -> Option<&'a layout::LayoutBox> {
+        if b.node.as_ref().and_then(|n| n.attr("class")).as_deref() == Some(cls) { return Some(b); }
+        for c in &b.children { if let Some(f) = find(c, cls) { return Some(f); } }
+        None
+    }
+    let a = find(&lr, "a").expect("a");
+    // 160 * 9/16 = 90 (NE stretch na 100 = vyska sourozence b).
+    assert!((a.rect.height - 90.0).abs() < 2.0, "aspect 16/9 z 160 = 90, got {}", a.rect.height);
+}
