@@ -891,6 +891,9 @@ pub struct LayoutBox {
     /// appearance: none - potlaci nativni vykresleni form controlu (checkbox/
     /// radio/range/select overlay) aby se uplatnily CSS bg/border/pseudo styly.
     pub appearance_none: bool,
+    /// resize: none|both|horizontal|vertical - user-resizable element (grip
+    /// vpravo dole). Prazdne = none.
+    pub resize: String,
     /// CSS Containment - bitfield: layout / paint / size / style.
     /// 1 = layout, 2 = paint, 4 = size, 8 = style.
     pub contain: u8,
@@ -1291,6 +1294,7 @@ impl LayoutBox {
             aspect_ratio: None,
             accent_color: None,
             appearance_none: false,
+            resize: String::new(),
             contain: 0,
             scrollbar_width: String::new(),
             scrollbar_color: None,
@@ -2903,6 +2907,11 @@ fn build_box_inner_impl(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &supe
         .or_else(|| s.get("-webkit-appearance"))
         .or_else(|| s.get("-moz-appearance")) {
         bx.appearance_none = ap.trim().eq_ignore_ascii_case("none");
+    }
+    // resize (user-resizable element).
+    if let Some(rz) = s.get("resize") {
+        let v = rz.trim().to_lowercase();
+        if v != "none" { bx.resize = v; }
     }
     // border-image: url(...) <slice> / <width> [/ <outset>] <repeat>
     if let Some(src) = s.get("border-image-source") {

@@ -2277,6 +2277,26 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         }
     }
 
+    // Resize grip (vpravo dole) - element s resize != none. Klasicke 3 diagonalni
+    // cary v rohu (jako Chrome textarea grip).
+    if !bx.resize.is_empty() {
+        let gx = bx.rect.x + bx.rect.width;
+        let gy = bx.rect.y + bx.rect.height;
+        let col = bx.text_color.map(|c| [c[0], c[1], c[2], 140]).unwrap_or([120, 120, 130, 160]);
+        // 3 kratke diagonalni cary (jako proužky), kreslene jako male Rect body.
+        for (i, off) in [3.0_f32, 7.0, 11.0].iter().enumerate() {
+            let len = 4.0 + i as f32 * 3.0;
+            // diagonala z (gx-off, gy) do (gx, gy-off) aproximovana segmenty
+            let steps = (len as i32).max(2);
+            for s in 0..steps {
+                let f = s as f32 / steps as f32;
+                let px = gx - off + f * off;
+                let py = gy - f * off;
+                cmds.push(DisplayCommand::Rect { x: px - 0.8, y: py - 0.8, w: 1.6, h: 1.6, color: col, radius: 0.0 });
+            }
+        }
+    }
+
     // Outline (mimo border, posunuto o offset, neovlivnuje layout)
     if bx.outline_width > 0.0 && bx.outline_style != "none" && !bx.outline_style.is_empty() {
         if let Some(oc) = bx.outline_color {

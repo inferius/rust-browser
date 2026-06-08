@@ -170,6 +170,9 @@ pub struct WebView {
     /// Range slider drag - Some(node) pri drag thumb (mousedown az mouseup).
     /// MouseMove pak nastavuje value dle x pozice.
     pub(crate) range_drag_node: Option<std::rc::Rc<crate::browser::dom::Node>>,
+    /// Element resize drag (CSS resize): (node, start_mouse_x, start_mouse_y,
+    /// start_w, start_h, axis "both"/"horizontal"/"vertical").
+    pub(crate) resize_drag: Option<(std::rc::Rc<crate::browser::dom::Node>, f32, f32, f32, f32, String)>,
     pub(crate) layout_dumped: bool,
     /// Scrollbar drag state - Some(grab_offset_y) pri V thumb drag.
     /// Inner element scrollbar drag: (node_id, grab_y_offset, max_scroll, bar_y, bar_h).
@@ -537,6 +540,53 @@ fn make_focus_event(ev_type: &str, node: &std::rc::Rc<crate::browser::dom::Node>
     crate::interpreter::JsValue::Object(std::rc::Rc::new(std::cell::RefCell::new(event)))
 }
 
+/// Nastav/nahrad jednu CSS property v inline `style` atributu node (merge s
+/// existujicimi). Pouzito pro element resize override (width/height).
+fn set_inline_style_prop(node: &std::rc::Rc<crate::browser::dom::Node>, prop: &str, value: &str) {
+    let existing = node.attr("style").unwrap_or_default();
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    let mut found = false;
+    for decl in existing.split(';') {
+        let decl = decl.trim();
+        if decl.is_empty() { continue; }
+        if let Some((k, v)) = decl.split_once(':') {
+            let key = k.trim().to_string();
+            if key.eq_ignore_ascii_case(prop) {
+                pairs.push((key, value.to_string()));
+                found = true;
+            } else {
+                pairs.push((key, v.trim().to_string()));
+            }
+        }
+    }
+    if !found { pairs.push((prop.to_string(), value.to_string())); }
+    let s = pairs.iter().map(|(k, v)| format!("{}:{}", k, v)).collect::<Vec<_>>().join(";");
+    node.set_attr("style", &s);
+}
+
+/// Najde nejhlubsi box s resize != none jehoz grip zona (pravy dolni roh ~16px)
+/// obsahuje (cx, cy) content coords. Vrati (node, rect_w, rect_h, axis).
+fn find_resize_grip(bx: &crate::browser::layout::LayoutBox, cx: f32, cy: f32)
+    -> Option<(std::rc::Rc<crate::browser::dom::Node>, f32, f32, String)>
+{
+    // Deti maji prioritu (nejhlubsi).
+    for ch in &bx.children {
+        if let Some(r) = find_resize_grip(ch, cx, cy) { return Some(r); }
+    }
+    if !bx.resize.is_empty() {
+        let gx0 = bx.rect.x + bx.rect.width - 16.0;
+        let gy0 = bx.rect.y + bx.rect.height - 16.0;
+        let gx1 = bx.rect.x + bx.rect.width;
+        let gy1 = bx.rect.y + bx.rect.height;
+        if cx >= gx0 && cx <= gx1 && cy >= gy0 && cy <= gy1 {
+            if let Some(n) = bx.node.as_ref() {
+                return Some((std::rc::Rc::clone(n), bx.rect.width, bx.rect.height, bx.resize.clone()));
+            }
+        }
+    }
+    None
+}
+
 impl WebView {
     /// Vytvori prazdny WebView s viewportem dane velikosti. Offscreen RT
     /// alokovan az v Phase 5 - Phase 2 nech `target_texture = None`.
@@ -583,6 +633,7 @@ impl WebView {
             last_synced_scroll_pos: (0.0, 0.0),
             focused_node_local: None,
             range_drag_node: None,
+            resize_drag: None,
             layout_dumped: false,
             v_scrollbar_drag: None,
             h_scrollbar_drag: None,
@@ -1459,6 +1510,25 @@ impl WebView {
                     // Inner scrollbar drag - prepocet thumb pos -> element_scroll.
                     let cx_inner = x + self.scroll_x;
                     let cy_inner = y + self.scroll_y;
+                    // Element resize drag: prepocet novou sirku/vysku z mouse delta,
+                    // zapis jako inline style override -> reflow -> ResizeObserver fire.
+                    if let Some((node, sx, sy, sw, sh, axis)) = self.resize_drag.clone() {
+                        let horiz = axis == "both" || axis == "horizontal";
+                        let vert = axis == "both" || axis == "vertical";
+                        if horiz {
+                            let nw = (sw + (cx_inner - sx)).max(24.0);
+                            set_inline_style_prop(&node, "width", &format!("{}px", nw.round()));
+                        }
+                        if vert {
+                            let nh = (sh + (cy_inner - sy)).max(24.0);
+                            set_inline_style_prop(&node, "height", &format!("{}px", nh.round()));
+                        }
+                        if let Some(interp) = self.interpreter.as_mut() { interp.bump_dom_version(); }
+                        self.hit_rtree = None;
+                        self.dirty = true;
+                        response.dirty = true;
+                        return response;
+                    }
                     // Range drag: drzime-li range thumb (mousedown na range), nastav
                     // value dle x pozice (set_range_from_x fire input/change).
                     if let Some(rn) = self.range_drag_node.clone() {
@@ -1890,6 +1960,15 @@ impl WebView {
                     // pos pro MouseUp click-vs-drag distinguish.
                     let content_x = x + self.scroll_x;
                     let content_y = y + self.scroll_y;
+                    // Resize grip (CSS resize): klik do praveho dolniho rohu
+                    // resizable elementu -> start resize drag (PRED hit-testem).
+                    if let Some((node, w, h, axis)) = self.last_layout_root.as_ref()
+                        .and_then(|root| find_resize_grip(root, content_x, content_y)) {
+                        self.resize_drag = Some((node, content_x, content_y, w, h, axis));
+                        response.dirty = true;
+                        self.dirty = true;
+                        return response;
+                    }
                     let target_node = self.last_layout_root.as_ref()
                         .and_then(|root| root.hit_test(content_x, content_y))
                         .and_then(|bx| bx.node.clone());
@@ -2019,6 +2098,11 @@ impl WebView {
                 if matches!(button, crate::embed::MouseButton::Left) {
                     // Clear :active pseudo-class (set na MouseDown).
                     crate::browser::cascade::set_active_node(None);
+                    // End element resize drag.
+                    if self.resize_drag.take().is_some() {
+                        response.dirty = true;
+                        self.dirty = true;
+                    }
                     // End range drag.
                     self.range_drag_node = None;
                     // End scrollbar drag.
