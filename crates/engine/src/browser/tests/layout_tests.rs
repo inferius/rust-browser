@@ -3710,3 +3710,38 @@ fn hit_test_returns_node_bearing_box_not_pseudo() {
     let n = hit.unwrap().node.as_ref();
     assert!(n.is_some(), "hit nesmi byt pseudo/anonymni box (node=None)");
 }
+
+#[test]
+fn has_selector_reevaluates_after_checked_change() {
+    // :has(input:checked) musi reflektovat zmenu checked atributu (re-cascade).
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    use std::rc::Rc;
+    let html = r#"<html><body><label class="item"><input type="checkbox" id="cb"></label></body></html>"#;
+    let css = parse_stylesheet(r#".item { border: 1px solid #000; } .item:has(input:checked) { border-color: #ff0000; }"#);
+    let doc = parse_html(html, "");
+    // Najdi checkbox node.
+    fn find_cb(n: &Rc<crate::browser::dom::Node>) -> Option<Rc<crate::browser::dom::Node>> {
+        if n.attr("id").as_deref() == Some("cb") { return Some(Rc::clone(n)); }
+        for c in n.children.borrow().iter() { if let Some(f) = find_cb(c) { return Some(f); } }
+        None
+    }
+    let cb = find_cb(&doc.root).expect("checkbox");
+    // Pred zaskrtnutim: .item border = cerny (default).
+    let map1 = cascade::cascade(&doc.root, &[css.clone()]);
+    let lr1 = layout::layout_tree(&doc.root, &map1, 200.0, 200.0);
+    fn find_item(b: &layout::LayoutBox) -> Option<&layout::LayoutBox> {
+        if b.node.as_ref().and_then(|n| n.attr("class")).as_deref() == Some("item") { return Some(b); }
+        for c in &b.children { if let Some(f) = find_item(c) { return Some(f); } }
+        None
+    }
+    let bc_before = find_item(&lr1).and_then(|b| b.border_color);
+    assert_eq!(bc_before, Some([0, 0, 0, 255]), "pred zaskrtnutim cerny border");
+    // Zaskrtni + re-cascade. Clear matched-decls cache (webview to dela pres
+    // dom_version bump v cache klici; v testu simulujeme clearem).
+    cb.set_attr("checked", "");
+    cascade::clear_matched_decls_cache();
+    let map2 = cascade::cascade(&doc.root, &[css]);
+    let lr2 = layout::layout_tree(&doc.root, &map2, 200.0, 200.0);
+    let bc_after = find_item(&lr2).and_then(|b| b.border_color);
+    assert_eq!(bc_after, Some([255, 0, 0, 255]), ":has(input:checked) musi prebarvit border na cerveny");
+}
