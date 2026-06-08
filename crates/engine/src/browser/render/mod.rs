@@ -7067,37 +7067,49 @@ impl Renderer {
                     first_pass = false;
                 }
                 Seg::BackdropFilter { inner, x, y, w, h, radius, color_matrix } => {
-                    // 1. Snapshot main_rt -> offscreen_tex (scena za elementem)
-                    let mut enc = self.device.create_command_encoder(&Default::default());
-                    enc.copy_texture_to_texture(
-                        wgpu::TexelCopyTextureInfo {
-                            texture: &self.main_rt,
-                            mip_level: 0,
-                            origin: wgpu::Origin3d::ZERO,
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        wgpu::TexelCopyTextureInfo {
-                            texture: &self.offscreen_tex,
-                            mip_level: 0,
-                            origin: wgpu::Origin3d::ZERO,
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        wgpu::Extent3d {
-                            width: self.config.width.max(1),
-                            height: self.config.height.max(1),
-                            depth_or_array_layers: 1,
-                        },
-                    );
-                    self.queue.submit(std::iter::once(enc.finish()));
+                    // V layer-GPU rasteru (VIEWPORT_OVERRIDE aktivni) main_rt
+                    // NEOBSAHUJE page za hlavickou (sklada se po vrstvach do
+                    // target_view) -> snapshot by byl cerny -> rgba(10,10,12,0.7)
+                    // pres cernou = plna tmave seda (= "top bar je sedy"). V tom
+                    // pripade preskoc backdrop snapshot/blur/compose a vykresli jen
+                    // inner obsah; layer compose ho alpha-blendne pres realny page
+                    // content = "lehka rgba" (bez blur efektu, ale spravna barva).
+                    let in_layer_raster = VIEWPORT_OVERRIDE.with(|c| c.get()) != (0.0, 0.0);
+                    if !in_layer_raster {
+                        // 1. Snapshot main_rt -> offscreen_tex (scena za elementem)
+                        let mut enc = self.device.create_command_encoder(&Default::default());
+                        enc.copy_texture_to_texture(
+                            wgpu::TexelCopyTextureInfo {
+                                texture: &self.main_rt,
+                                mip_level: 0,
+                                origin: wgpu::Origin3d::ZERO,
+                                aspect: wgpu::TextureAspect::All,
+                            },
+                            wgpu::TexelCopyTextureInfo {
+                                texture: &self.offscreen_tex,
+                                mip_level: 0,
+                                origin: wgpu::Origin3d::ZERO,
+                                aspect: wgpu::TextureAspect::All,
+                            },
+                            wgpu::Extent3d {
+                                width: self.config.width.max(1),
+                                height: self.config.height.max(1),
+                                depth_or_array_layers: 1,
+                            },
+                        );
+                        self.queue.submit(std::iter::once(enc.finish()));
 
-                    // 2. Blur snapshot
-                    if radius >= 0.5 {
-                        self.run_blur_passes(radius);
+                        // 2. Blur snapshot
+                        if radius >= 0.5 {
+                            self.run_blur_passes(radius);
+                        }
+
+                        // 3. Composit filtrovany snapshot jako podklad do view
+                        self.compose_offscreen(view, x, y, w, h, &color_matrix, first_pass);
+                        first_pass = false;
+                    } else {
+                        let _ = (x, y, w, h, radius, &color_matrix);
                     }
-
-                    // 3. Composit filtrovany snapshot jako podklad do view
-                    self.compose_offscreen(view, x, y, w, h, &color_matrix, first_pass);
-                    first_pass = false;
 
                     // 4. Render inner obsah elementu nahoru (primo do view)
                     let inner_segs = partition_filter_segments(inner);
