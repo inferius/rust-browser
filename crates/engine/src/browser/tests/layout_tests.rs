@@ -3791,3 +3791,16 @@ fn calc_clamp_width_resolves_against_parent() {
     assert!((wa - 360.0).abs() < 2.0, "calc(100% - 40px) z 400 = 360, got {}", wa);
     assert!((wb - 80.0).abs() < 2.0, "clamp(50,120,80) = 80, got {}", wb);
 }
+
+#[test]
+fn counter_decimal_leading_zero_and_roman() {
+    // counter(name, style) - decimal-leading-zero / roman formatovani.
+    use crate::browser::layout::format_counter_value;
+    assert_eq!(format_counter_value(1, "decimal-leading-zero"), "01");
+    assert_eq!(format_counter_value(9, "decimal-leading-zero"), "09");
+    assert_eq!(format_counter_value(12, "decimal-leading-zero"), "12");
+    assert_eq!(format_counter_value(4, "upper-roman"), "IV");
+    assert_eq!(format_counter_value(9, "lower-roman"), "ix");
+    assert_eq!(format_counter_value(1, "upper-alpha"), "A");
+    assert_eq!(format_counter_value(27, "lower-alpha"), "aa");
+}

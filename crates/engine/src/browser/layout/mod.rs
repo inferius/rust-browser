@@ -4051,6 +4051,46 @@ fn unescape_css_string(s: &str) -> String {
     out
 }
 
+/// Formatuje counter hodnotu dle list-style-type (counter 2. arg).
+pub(crate) fn format_counter_value(val: i32, style: &str) -> String {
+    match style {
+        "decimal-leading-zero" => format!("{:02}", val),
+        "lower-roman" | "upper-roman" => {
+            let roman = to_roman_numeral(val.max(0) as u32);
+            if style == "lower-roman" { roman.to_lowercase() } else { roman }
+        }
+        "lower-alpha" | "lower-latin" | "upper-alpha" | "upper-latin" => {
+            let alpha = to_alpha_label(val.max(1) as u32);
+            if style.starts_with("lower") { alpha.to_lowercase() } else { alpha }
+        }
+        "none" => String::new(),
+        _ => val.to_string(),
+    }
+}
+
+/// 1 -> I, 4 -> IV, 9 -> IX (upper). 0/zaporne -> prazdne.
+fn to_roman_numeral(mut n: u32) -> String {
+    if n == 0 { return String::new(); }
+    let table = [(1000,"M"),(900,"CM"),(500,"D"),(400,"CD"),(100,"C"),(90,"XC"),
+        (50,"L"),(40,"XL"),(10,"X"),(9,"IX"),(5,"V"),(4,"IV"),(1,"I")];
+    let mut out = String::new();
+    for (v, sym) in table {
+        while n >= v { out.push_str(sym); n -= v; }
+    }
+    out
+}
+
+/// 1 -> A, 26 -> Z, 27 -> AA (upper).
+fn to_alpha_label(mut n: u32) -> String {
+    let mut out = String::new();
+    while n > 0 {
+        n -= 1;
+        out.insert(0, (b'A' + (n % 26) as u8) as char);
+        n /= 26;
+    }
+    out
+}
+
 fn parse_content_value(raw: &str, parent: &Rc<Node>, counters: &HashMap<String, i32>) -> Option<String> {
     let s = raw.trim();
     if s.is_empty() || s == "none" || s == "normal" { return None; }
@@ -4069,19 +4109,22 @@ fn parse_content_value(raw: &str, parent: &Rc<Node>, counters: &HashMap<String, 
         return parent.attr(name).or(Some(String::new()));
     }
 
-    // counter(name) - vrati hodnotu z counter state
+    // counter(name [, style]) - vrati hodnotu z counter state. Style (2. arg):
+    // decimal-leading-zero/lower-roman/.../ - drive ignorovan = "1" misto "01".
     if let Some(inner) = s.strip_prefix("counter(").and_then(|s| s.strip_suffix(')')) {
         let parts: Vec<&str> = inner.split(',').map(|p| p.trim()).collect();
         let name = parts[0];
         let val = counters.get(name).copied().unwrap_or(0);
-        return Some(val.to_string());
+        let style = parts.get(1).copied().unwrap_or("decimal");
+        return Some(format_counter_value(val, style));
     }
-    // counters(name, separator) - hierarchicky concat (zjednoduseni: jen aktualni)
+    // counters(name, separator [, style]) - hierarchicky concat (jen aktualni).
     if let Some(inner) = s.strip_prefix("counters(").and_then(|s| s.strip_suffix(')')) {
         let parts: Vec<&str> = inner.split(',').map(|p| p.trim()).collect();
         let name = parts[0];
         let val = counters.get(name).copied().unwrap_or(0);
-        return Some(val.to_string());
+        let style = parts.get(2).copied().unwrap_or("decimal");
+        return Some(format_counter_value(val, style));
     }
 
     // url(...) - placeholder
