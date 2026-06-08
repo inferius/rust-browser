@@ -1421,9 +1421,16 @@ impl LayoutBox {
         // tohoto rotated element hit-test stale jako axis-aligned rect.
         // Inspired by Chromium core/paint/HitTestLocation::ApplyTransform.
         let (qx, qy) = inverse_transform_for_hit(self, x, y);
-        if qx < self.rect.x || qx > self.rect.x + self.rect.width
-            || qy < self.rect.y || qy > self.rect.y + self.rect.height
-        {
+        let inside_self = !(qx < self.rect.x || qx > self.rect.x + self.rect.width
+            || qy < self.rect.y || qy > self.rect.y + self.rect.height);
+        // KLICOVE: deti mohou PRETEKAT rodice (overflow:visible = default).
+        // Drive `return None` mimo self.rect zastavil descent -> cokoliv pod
+        // vyskou rodice (napr. html box truncated na 496px) bylo NEKLIKATELNE
+        // = "drtiva vetsina formularu/tlacitek nefunguje". Pro overflow:visible
+        // rekurzuj do deti i kdyz je bod mimo self.rect. Orezava jen
+        // overflow:hidden/scroll/auto/clip (clips()).
+        let clips = self.overflow_x.clips() || self.overflow_y.clips();
+        if clips && !inside_self {
             return None;
         }
         // Per-element scroll: descendants jsou v CLEAN layout (un-shifted), takze
@@ -1431,19 +1438,27 @@ impl LayoutBox {
         // pri (qx,qy).
         let cx = qx + self.scroll_offset_x;
         let cy = qy + self.scroll_offset_y;
-        // Recursivne pres deti vzdy - i kdyz self je visibility:hidden, child
-        // s visibility:visible muze byt hit.
-        for child in &self.children {
+        // Recursivne pres deti (reverse = top-most z-order wins). I kdyz self je
+        // mimo bod / visibility:hidden, child muze byt hit.
+        for child in self.children.iter().rev() {
             if let Some(hit) = child.hit_test(cx, cy) {
                 return Some(hit);
             }
         }
-        // Self hit jen pokud visibility:visible.
+        // Self hit jen pokud bod uvnitr self.rect + visibility:visible + ma DOM
+        // node. Pseudo-elementy (::before/::after) a anonymni boxy (inline
+        // wrappery) maji node=None - NEJSOU samostatne hittable, jsou pass-through
+        // na originating/containing element. Drive vracely sebe -> target_node=None
+        // -> klik na checkbox (ma ::after fajfku) / span s ::before vratil nic =
+        // "klik nefunguje". Parent (s nodem) se stane hitem.
         use super::computed_style::Visibility;
-        if matches!(self.visibility, Visibility::Hidden | Visibility::Collapse) {
-            return None;
+        if inside_self
+            && self.node.is_some()
+            && !matches!(self.visibility, Visibility::Hidden | Visibility::Collapse)
+        {
+            return Some(self);
         }
-        Some(self)
+        None
     }
 }
 
