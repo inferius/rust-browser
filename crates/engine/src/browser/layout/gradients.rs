@@ -5,6 +5,10 @@ use super::{parse_color, BgGradient, BgGradientKind, split_top_level_commas};
 /// Parsuje linear-gradient / radial-gradient / conic-gradient.
 pub fn parse_any_gradient(s: &str) -> Option<BgGradient> {
     let s = s.trim();
+    // repeating-linear/radial/conic-gradient: drive vracelo None (parser prefix
+    // neznal) -> 11,12 se nevykreslily vubec. Strip 'repeating-' a parsuj jako
+    // neopakovany (aspon prvni cyklus). Plne opakovani (fract v shaderu) = TODO.
+    let s = s.strip_prefix("repeating-").unwrap_or(s);
     if s.starts_with("linear-gradient(") {
         let (angle, stops) = parse_linear_gradient(s)?;
         return Some(BgGradient {
@@ -130,6 +134,23 @@ pub fn parse_conic_gradient(s: &str) -> Option<BgGradient> {
 /// Bez double-position handlingu se "color P1 P2" parsoval jako color="color P1"
 /// (invalid) -> cely stop DROPNUT = chybejici barevny pas v gradientu.
 fn parse_stop_part(trimmed: &str, i: usize, n: usize) -> Vec<(f32, [u8; 4])> {
+    // Conic deg pozice (color 90deg / color 90deg 180deg) - drive jen %, deg stopy
+    // se dropovaly (parse_color("color 90deg") selhal) -> conic-quadrant prazdny.
+    // deg/360 = fraction (0..1).
+    if trimmed.contains("deg") {
+        let toks: Vec<&str> = trimmed.split_whitespace().collect();
+        let degs: Vec<f32> = toks.iter()
+            .filter_map(|t| t.strip_suffix("deg").and_then(|d| d.trim().parse::<f32>().ok()))
+            .map(|d| (d / 360.0).clamp(0.0, 1.0))
+            .collect();
+        if !degs.is_empty() {
+            let color_str: String = toks.iter().take_while(|t| !t.ends_with("deg"))
+                .cloned().collect::<Vec<_>>().join(" ");
+            if let Some(c) = parse_color(color_str.trim()) {
+                return degs.into_iter().map(|d| (d, c)).collect();
+            }
+        }
+    }
     let pct_positions: Vec<usize> = trimmed.match_indices('%').map(|(idx, _)| idx).collect();
     if pct_positions.len() >= 2 {
         let first = pct_positions[0];

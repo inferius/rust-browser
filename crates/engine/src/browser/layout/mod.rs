@@ -2734,7 +2734,16 @@ fn build_box_inner_impl(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &supe
     };
     if let Some(c) = bg_value {
         if c.contains("linear-gradient(") || c.contains("radial-gradient(") || c.contains("conic-gradient(") {
-            bx.bg_gradient = parse_any_gradient(&c);
+            // Multi-layer (vice top-level vrstev oddelenych carkou) -> NEnastavovat
+            // bg_gradient (parse_any_gradient by smichal stopy vsech vrstev =
+            // garbage). Vyresi backgrounds Vec nize (per-vrstva). Single vrstva OK.
+            let layers = split_top_level_commas(&c);
+            let gradient_layers = layers.iter()
+                .filter(|l| l.contains("linear-gradient(") || l.contains("radial-gradient(") || l.contains("conic-gradient("))
+                .count();
+            if gradient_layers <= 1 {
+                bx.bg_gradient = parse_any_gradient(&c);
+            }
         } else {
             bx.bg_color = parse_color(&c);
         }
