@@ -515,3 +515,19 @@ fn canvas_is_point_in_path_stub() {
     );
     assert_eq!(as_bool(result), false);
 }
+
+#[test]
+fn canvas_width_height_write_persists() {
+    // canvas.width = N musi persistovat (drive se tise zahazovalo -> 0 ->
+    // vsechna kreslici matematika degenerovana).
+    let r = run_with_doc(
+        r#"<html><body><canvas id="c"></canvas></body></html>"#,
+        r#"
+            const c = document.getElementById("c");
+            c.width = 200;
+            c.height = 120;
+            return c.width + "x" + c.height;
+        "#,
+    );
+    assert_eq!(r.to_string(), "200x120");
+}

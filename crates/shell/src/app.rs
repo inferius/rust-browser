@@ -1661,7 +1661,7 @@ impl ApplicationHandler for ShellApp {
         }
         // Has pending JS intervals/timers / has_pending_intervals across views?
         // Then schedule redraw to keep them ticking.
-        let needs_tick = self.webview.as_ref().map(|w| w.has_pending_intervals()).unwrap_or(false)
+        let needs_tick = self.webview.as_ref().map(|w| w.has_pending_intervals() || w.has_pending_raf()).unwrap_or(false)
             || self.chrome.as_ref().map(|w| w.has_pending_intervals()).unwrap_or(false)
             || self.devtools.as_ref().map(|w| w.has_pending_intervals()).unwrap_or(false);
         if needs_tick {

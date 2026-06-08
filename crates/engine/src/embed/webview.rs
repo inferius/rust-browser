@@ -802,6 +802,15 @@ impl WebView {
             .unwrap_or(false)
     }
 
+    /// Pending requestAnimationFrame callbacky. Bez tohoto check by RAF-driven
+    /// canvas animace (particles/wave) provedly max 1 frame a zamrzly (event
+    /// loop usnul, callbacky se nedrainovaly).
+    pub fn has_pending_raf(&self) -> bool {
+        self.interpreter.as_ref()
+            .map(|i| !i.raf_callbacks.borrow().is_empty())
+            .unwrap_or(false)
+    }
+
     /// Posledni render_via per-phase timing (ms): (cascade, layout, paint, gpu).
     /// Pro diagnostiku - shell title bar nebo overlay.
     pub fn render_phase_times(&self) -> (f32, f32, f32, f32) {
@@ -1785,7 +1794,18 @@ impl WebView {
                                 std::rc::Rc::clone(&t)));
                             let event_val = crate::interpreter::JsValue::Object(
                                 std::rc::Rc::new(std::cell::RefCell::new(event)));
+                            // Canvas freehand: handler pushne kreslici ops, ale ty
+                            // nebumpnou dom_version -> bez dirty by se novy tah
+                            // neprekreslil. Porovnej pocet ops pred/po dispatch.
+                            let ops_before: usize = interp.canvas_ops.borrow()
+                                .values().map(|v| v.len()).sum();
                             let _ = interp.dispatch_event(&t, "mousemove", event_val);
+                            let ops_after: usize = interp.canvas_ops.borrow()
+                                .values().map(|v| v.len()).sum();
+                            if ops_after != ops_before {
+                                self.dirty = true;
+                                response.dirty = true;
+                            }
                         }
                     }
                     if self.open_select.is_some() {
@@ -3955,6 +3975,7 @@ impl WebView {
             || (self.scroll_target_x - self.scroll_x).abs() > 0.5
             || self.focused_is_input()
             || self.has_pending_intervals()
+            || self.has_pending_raf()
     }
 
     /// Nastav zoom level. Stejne jako resize trigger relayout.

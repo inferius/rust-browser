@@ -6,12 +6,26 @@ use std::cell::RefCell;
 use super::{JsValue, JsObject};
 use super::helpers::native;
 
+/// Precte fill/stroke styl z props + aplikuje globalAlpha na alpha kanal.
+/// Drive se globalAlpha (`ctx.globalAlpha = 0.5`) ignoroval -> particle fade
+/// (globalAlpha = p.life) se neaplikoval = plne opaque misto mizejici.
+fn style_color_with_alpha(obj: &Rc<RefCell<JsObject>>, prop: &str) -> [u8; 4] {
+    let b = obj.borrow();
+    let style_str = b.props.get(prop).map(|v| v.to_string())
+        .unwrap_or_else(|| "black".into());
+    let mut color = crate::browser::layout::parse_color(&style_str)
+        .unwrap_or([0, 0, 0, 255]);
+    let ga = b.props.get("globalAlpha").map(|v| v.to_number()).unwrap_or(1.0)
+        .clamp(0.0, 1.0);
+    color[3] = (color[3] as f64 * ga).round() as u8;
+    color
+}
+
 pub(crate) fn create_canvas_2d_context(
     canvas_ptr: usize,
     ops_storage: Rc<RefCell<std::collections::HashMap<usize, Vec<crate::browser::paint::CanvasOp>>>>,
 ) -> JsValue {
     use crate::browser::paint::CanvasOp;
-    use crate::browser::layout::parse_color;
 
     let obj_rc: Rc<RefCell<JsObject>> = Rc::new(RefCell::new(JsObject::new()));
     {
@@ -40,9 +54,7 @@ pub(crate) fn create_canvas_2d_context(
             let y = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
             let w = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
             let h = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
-            let style_str = obj_clone.borrow().props.get("fillStyle")
-                .map(|v| v.to_string()).unwrap_or_else(|| "black".into());
-            let color = parse_color(&style_str).unwrap_or([0, 0, 0, 255]);
+            let color = style_color_with_alpha(&obj_clone, "fillStyle");
             push(CanvasOp::FillStyle(color));
             push(CanvasOp::FillRect { x, y, w, h });
             Ok(JsValue::Undefined)
@@ -58,9 +70,7 @@ pub(crate) fn create_canvas_2d_context(
             let y = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
             let w = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
             let h = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
-            let style_str = obj_clone.borrow().props.get("strokeStyle")
-                .map(|v| v.to_string()).unwrap_or_else(|| "black".into());
-            let color = parse_color(&style_str).unwrap_or([0, 0, 0, 255]);
+            let color = style_color_with_alpha(&obj_clone, "strokeStyle");
             let lw = obj_clone.borrow().props.get("lineWidth")
                 .map(|v| v.to_number()).unwrap_or(1.0) as f32;
             push(CanvasOp::StrokeStyle(color));
@@ -72,13 +82,22 @@ pub(crate) fn create_canvas_2d_context(
     // clearRect
     {
         let push = push_op.clone();
+        let storage = Rc::clone(&ops_storage);
         obj_rc.borrow_mut().set("clearRect".into(), native("clearRect", move |args| {
             let mut it = args.into_iter();
             let x = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
             let y = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
             let w = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
             let h = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
-            push(CanvasOp::ClearRect { x, y, w, h });
+            // Full-canvas clear (origin) = RESET op historie. Bez tohoto buffer
+            // rostl do nekonecna (kazdy RAF frame pushne desitky ops) -> paint
+            // replayuje celou historii = leak + progresivni zpomaleni. Po clearu
+            // se pushou jen ops daneho framu (clear -> bg fill -> particles).
+            if x <= 0.0 && y <= 0.0 {
+                storage.borrow_mut().entry(canvas_ptr).or_default().clear();
+            } else {
+                push(CanvasOp::ClearRect { x, y, w, h });
+            }
             Ok(JsValue::Undefined)
         }));
     }
@@ -91,9 +110,7 @@ pub(crate) fn create_canvas_2d_context(
             let text = it.next().map(|v| v.to_string()).unwrap_or_default();
             let x = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
             let y = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
-            let style_str = obj_clone.borrow().props.get("fillStyle")
-                .map(|v| v.to_string()).unwrap_or_else(|| "black".into());
-            let color = parse_color(&style_str).unwrap_or([0, 0, 0, 255]);
+            let color = style_color_with_alpha(&obj_clone, "fillStyle");
             let font_str = obj_clone.borrow().props.get("font")
                 .map(|v| v.to_string()).unwrap_or_else(|| "14px sans-serif".into());
             let (size, family) = parse_canvas_font(&font_str);
@@ -155,9 +172,7 @@ pub(crate) fn create_canvas_2d_context(
         let push = push_op.clone();
         let obj_clone = Rc::clone(&obj_rc);
         obj_rc.borrow_mut().set("stroke".into(), native("stroke", move |_| {
-            let style_str = obj_clone.borrow().props.get("strokeStyle")
-                .map(|v| v.to_string()).unwrap_or_else(|| "black".into());
-            let color = parse_color(&style_str).unwrap_or([0, 0, 0, 255]);
+            let color = style_color_with_alpha(&obj_clone, "strokeStyle");
             let lw = obj_clone.borrow().props.get("lineWidth")
                 .map(|v| v.to_number()).unwrap_or(1.0) as f32;
             push(CanvasOp::StrokeStyle(color));
@@ -170,9 +185,7 @@ pub(crate) fn create_canvas_2d_context(
         let push = push_op.clone();
         let obj_clone = Rc::clone(&obj_rc);
         obj_rc.borrow_mut().set("fill".into(), native("fill", move |_| {
-            let style_str = obj_clone.borrow().props.get("fillStyle")
-                .map(|v| v.to_string()).unwrap_or_else(|| "black".into());
-            let color = parse_color(&style_str).unwrap_or([0, 0, 0, 255]);
+            let color = style_color_with_alpha(&obj_clone, "fillStyle");
             push(CanvasOp::FillStyle(color));
             push(CanvasOp::Fill);
             Ok(JsValue::Undefined)

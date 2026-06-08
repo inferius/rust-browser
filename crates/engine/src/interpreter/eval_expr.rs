@@ -612,6 +612,21 @@ impl Interpreter {
                                 if key == "scrollTop" { entry.1 = v; } else { entry.0 = v; }
                                 return Ok(());
                             }
+                            "width" | "height" if matches!(n.tag_name().as_deref(),
+                                Some("canvas") | Some("img") | Some("svg")) => {
+                                // canvas.width/height = N -> zapis do attr (layout +
+                                // getter to ctou). Drive se write tise zahodil ->
+                                // canvas.width vracelo 0 -> vsechna kreslici matematika
+                                // degenerovana (particles na x=0, wave 0 iteraci).
+                                let num = match val {
+                                    JsValue::Number(num) => num,
+                                    JsValue::Str(ref s) => s.trim().parse::<f64>().unwrap_or(0.0),
+                                    _ => 0.0,
+                                };
+                                n.set_attr(&key, &(num as i64).to_string());
+                                self.bump_dom_version();
+                                return Ok(());
+                            }
                             _ => {
                                 // Ostatni props - ignorujeme (DomNode nema generic prop store)
                                 return Ok(());
