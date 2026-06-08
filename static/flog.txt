@@ -1,3 +1,0 @@
-[HOVER SET] 0 affected nodes
-[HOVER SET] 4 affected nodes
-[run_script] url=<inline #1> (641 bytes) line1: 
