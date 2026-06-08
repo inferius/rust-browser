@@ -702,6 +702,23 @@ fn node_id(node: &Rc<Node>) -> usize {
     Rc::as_ptr(node) as usize
 }
 
+thread_local! {
+    /// Snapshot :root CSS variables z posledniho cascade - pro paint-time
+    /// resolve var() v SVG presentation atributech (resvg neumi CSS vars).
+    static ROOT_VARS_SNAPSHOT: std::cell::RefCell<HashMap<String, String>>
+        = std::cell::RefCell::new(HashMap::new());
+}
+
+pub(crate) fn set_root_vars_snapshot(vars: &HashMap<String, String>) {
+    ROOT_VARS_SNAPSHOT.with(|c| *c.borrow_mut() = vars.clone());
+}
+
+/// Resolvuje var() v hodnote pres :root snapshot (pouziti z paint pro SVG attr).
+pub fn resolve_root_var(value: &str) -> String {
+    if !value.contains("var(") { return value.to_string(); }
+    ROOT_VARS_SNAPSHOT.with(|c| resolve_value(value, &c.borrow()))
+}
+
 /// Resolvuje CSS var(--name), env(), calc(), min(), max(), clamp() expressions.
 /// Pri var(--x, fallback): pokud --x v variables, pouzij ho, jinak fallback.
 pub fn resolve_value(value: &str, variables: &HashMap<String, String>) -> String {
@@ -2667,6 +2684,8 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
         }
         eprintln!("[var] (total {} vars)", variables.len());
     }
+    // Snapshot :root vars pro paint (SVG presentation attr var() resolve).
+    set_root_vars_snapshot(&variables);
     let prof_t_keys = std::time::Instant::now();
     // PERF: precompute selector keys (rightmost simple part) per rule -
     // quick reject O(num_classes+1) misto plne matches_selector walk per node.

@@ -627,6 +627,10 @@ fn serialize_svg(bx: &LayoutBox) -> Option<String> {
         for (k, v) in node.attributes.borrow().iter() {
             let v_resolved = if v.eq_ignore_ascii_case("currentcolor") {
                 current_color.to_string()
+            } else if v.contains("var(") {
+                // SVG presentation attr stroke="var(--a)" - resvg neumi CSS vars,
+                // resolvuj pres :root snapshot.
+                crate::browser::cascade::resolve_root_var(v)
             } else { v.clone() };
             out.push(' ');
             out.push_str(k);
