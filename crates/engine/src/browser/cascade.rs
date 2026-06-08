@@ -195,6 +195,7 @@ pub fn cascade_prof_snapshot() -> CascadeProfile {
 pub fn set_hovered_node(id: Option<usize>) { HOVERED_NODE.with(|c| *c.borrow_mut() = id); }
 pub fn get_hovered_node() -> Option<usize> { HOVERED_NODE.with(|c| *c.borrow()) }
 pub fn set_active_node(id: Option<usize>) { ACTIVE_NODE.with(|c| *c.borrow_mut() = id); }
+pub fn get_active_node() -> Option<usize> { ACTIVE_NODE.with(|c| *c.borrow()) }
 pub fn set_focused_node(id: Option<usize>) { FOCUSED_NODE.with(|c| *c.borrow_mut() = id); }
 pub fn get_focused_node() -> Option<usize> { FOCUSED_NODE.with(|c| *c.borrow()) }
 

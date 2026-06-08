@@ -1908,6 +1908,11 @@ impl WebView {
                             }
                         }
                     }
+                    // :active pseudo-class - target stisknute mysi (cleared v MouseUp).
+                    // Bez toho :active styly (button click efekt, cursor:grabbing)
+                    // nikdy nematchnou.
+                    crate::browser::cascade::set_active_node(
+                        target_node.as_ref().map(|t| std::rc::Rc::as_ptr(t) as usize));
                     // Range slider: klik nastavi value dle x pozice + fire input/
                     // change (engine-test range-val span se updatne pres oninput).
                     // Bez tohoto byl range needovladatelny mysi. Nastav drag node
@@ -1974,6 +1979,8 @@ impl WebView {
             }
             InputEvent::MouseUp { x, y, button, .. } => {
                 if matches!(button, crate::embed::MouseButton::Left) {
+                    // Clear :active pseudo-class (set na MouseDown).
+                    crate::browser::cascade::set_active_node(None);
                     // End range drag.
                     self.range_drag_node = None;
                     // End scrollbar drag.
@@ -2525,6 +2532,8 @@ impl WebView {
             .any(|s| crate::browser::cascade::stylesheet_uses_pseudo(s, "hover"));
         let uses_focus = self.stylesheets.iter()
             .any(|s| crate::browser::cascade::stylesheet_uses_pseudo(s, "focus"));
+        let uses_active = self.stylesheets.iter()
+            .any(|s| crate::browser::cascade::stylesheet_uses_pseudo(s, "active"));
         let cache_key = {
             use std::hash::{Hash, Hasher};
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -2540,6 +2549,11 @@ impl WebView {
             }
             if uses_focus {
                 self.focused_node_local.unwrap_or(0).hash(&mut hasher);
+            }
+            // :active node (set na MouseDown). Bez tohoto by se :active styly
+            // nepromitly (cache hit -> stara cascade).
+            if uses_active {
+                crate::browser::cascade::get_active_node().unwrap_or(0).hash(&mut hasher);
             }
             // viewport rounded
             (viewport_w as u32).hash(&mut hasher);

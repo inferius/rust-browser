@@ -1467,6 +1467,40 @@ pub fn parse_svg_path(d: &str) -> Vec<(f32, f32)> {
     pts
 }
 
+/// Emituje dashed/dotted box border jako serii malych Rect segmentu podel 4 hran.
+/// DisplayCommand::Border nezna styl (kresli vzdy solidne), takze dashed/dotted
+/// se musi rozlozit na segmenty. dotted = ctverecky width x width s mezerou width;
+/// dashed = obdelniky delky ~3*width s mezerou ~2*width.
+fn emit_dashed_rect_border(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, w: f32, h: f32,
+                           width: f32, color: [u8; 4], dotted: bool) {
+    let bw = width.max(0.5);
+    let dash = if dotted { bw } else { bw * 3.0 };
+    let gap = if dotted { bw } else { bw * 2.0 };
+    let step = dash + gap;
+    // Horizontalni hrana (top/bottom): segmenty po x. Inset o bw na koncich aby
+    // se rohy neprekryvaly dvojite.
+    let mut emit_run = |start: f32, len: f32, fixed: f32, horizontal: bool| {
+        if len <= 0.0 { return; }
+        let mut p = 0.0_f32;
+        while p < len {
+            let seg = dash.min(len - p);
+            if seg <= 0.0 { break; }
+            if horizontal {
+                cmds.push(DisplayCommand::Rect { x: start + p, y: fixed, w: seg, h: bw, color, radius: 0.0 });
+            } else {
+                cmds.push(DisplayCommand::Rect { x: fixed, y: start + p, w: bw, h: seg, color, radius: 0.0 });
+            }
+            p += step;
+        }
+    };
+    // Top + bottom (horizontalni), inset levy/pravy roh o bw.
+    emit_run(x + bw, (w - 2.0 * bw).max(0.0), y, true);
+    emit_run(x + bw, (w - 2.0 * bw).max(0.0), y + h - bw, true);
+    // Left + right (vertikalni), plna vyska.
+    emit_run(y, h, x, false);
+    emit_run(y, h, x + w - bw, false);
+}
+
 fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective: Option<f32>) {
     // Viewport culling - skip cely subtree mimo viewport (+ buffer).
     if culled_out(bx) { return; }
@@ -2119,6 +2153,11 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
                         radius: inner_radius,
                     });
                 }
+            } else if matches!(bx.border_style.as_str(), "dashed" | "dotted") {
+                // Dashed/dotted: rozloz na segmenty (Border kresli vzdy solidne).
+                emit_dashed_rect_border(cmds, bx.rect.x, bx.rect.y,
+                    bx.rect.width, bx.rect.height, bx.border_width,
+                    with_alpha(bc), bx.border_style == "dotted");
             } else {
                 cmds.push(DisplayCommand::Border {
                     x: bx.rect.x,
