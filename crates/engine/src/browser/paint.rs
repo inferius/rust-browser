@@ -1600,7 +1600,16 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
 
     // PERF: vetsina boxu (99%+) nema filter ani backdrop_filter. Fast-path
     // bail bez iter/sum kdyz oba empty.
-    let alpha_mul = (bx.opacity * 255.0) as u8;
+    // Opacity layer root: compose aplikuje layer.opacity na cely layer quad ->
+    // NEaplikuj ji znovu v alpha_mul, jinak DOUBLE-fade (paint 0.3 x compose 0.3
+    // = 0.09) -> box+text moc vybledle (= "spatna barva textu" u opacity boxu).
+    // Nested boundaries uz return-ly vyse, takze is_layer_boundary zde = layer
+    // root. V monolithic mode neni compose -> opacity aplikuj normalne.
+    let opacity_by_layer_compose = !monolithic
+        && cur_scope.is_some()
+        && super::compositor::is_layer_boundary(bx);
+    let alpha_mul = if opacity_by_layer_compose { 255u8 }
+                    else { (bx.opacity * 255.0) as u8 };
     let filter_empty = bx.filter.is_empty();
     let backdrop_empty = bx.backdrop_filter.is_empty();
     let blur_radius: f32 = if filter_empty { 0.0 } else {
