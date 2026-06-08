@@ -59,6 +59,62 @@ plynule + scrollbar/overlay NEzmizel). Revert pri regresi.
 urgence; fast path je velka hot-path zmena s klesajicim perceptualnim prinosem.
 Ale ma hodnotu i mimo FPS (spravna architektura, nizsi spotreba).
 
+## Session N+32: chyby-rbro v2 - forms interakce + observers + typografie + perf
+
+Pokracovani dle aktualizovaneho chyby-rbro.docx (~33 bodu) + 9 workflow agent
+reportu (F:\Projects\_reports\). Implementovano cluster-by-cluster, build+test+
+commit kazdy. Vsech 4175 testu pass.
+
+**Forms + JS events:**
+- Keyboard focus na [tabindex] - MouseDown focusable set rozsiren -> keydown/
+  keyup se dispatchnou (driv mrtve). + dispatch focus/blur JS event (onfocus
+  border highlight).
+- CSS `cursor` property - MouseMove cte bx.cursor (inherited) + mapuje na
+  CursorIcon (grab/text/pointer/resize/...). Driv ignorovano = I-beam jen nad
+  textem.
+- appearance:none form controls - LayoutBox.appearance_none, native overlay
+  (checkbox/radio/range) respektuje -> CSS bg/border/thumb se uplatni. accent
+  z bx.accent_color, accent-color do INHERITED.
+- Dashed/dotted box border - emit_dashed_rect_border (segmenty; Border kreslil
+  vzdy solidne).
+- :active pseudo-class - set_active_node MouseDown/clear MouseUp + cache_key
+  uses_active -> re-cascade (button click efekt, cursor:grabbing).
+- Select dropdown - open/close/pick option (popup render existoval, open_select
+  se nikdy nenastavil). select_pick_option helper.
+
+**Observers + resize:**
+- Intersection/ResizeObserver `return` bug - smycka fire-la jen PRVNI observer
+  (predcasny return) -> sber pending + drop + call vsechny. Druhy IO (sectionObs
+  nav highlight) konecne fire.
+- Element resize (CSS resize) - LayoutBox.resize, paint grip (3 proužky),
+  resize_drag state (grip hit-test -> drag -> inline style width/height override
+  -> reflow -> ResizeObserver fire).
+
+**Typografie + paint:**
+- text-shadow multi-layer (Option->Vec) + fake glow (blur ring aproximace).
+- Marquee - TransformOp::TranslateMixed: translate % resolvuje proti bx.rect
+  (driv 100%=16px viewport default -> wiggle misto sweep).
+- Opacity layer double-fade - opacity<1 = layer boundary, compose aplikoval
+  opacity ALE paint_box take (alpha_mul) -> 0.3x0.3=0.09 moc vybledle. Layer
+  root preskoci v alpha_mul (compose ji aplikuje). Resi nth-child box5 "spatna
+  barva textu" + rgba pos-z boxy.
+- Backdrop-filter v layer rasteru - top bar seda misto rgba (main_rt snapshot
+  cerny v layer rezimu) -> preskoc snapshot, jen inner obsah (compose blend
+  pres page).
+
+**Perf + stabilita:**
+- Resize okna coalescing - shell Resized jen uklada pending_resize, realny
+  resize (texture realloc + reflow) 1x v RedrawRequested (driv winit per-pixel
+  = N realloc/frame = extreme zpomaleni).
+- Table inner_w floor - drobne float rozdily menily column distribuci = tabulka
+  "skakala".
+
+**ODLOZENO (velke/riziko):** elliptical/per-corner border-radius (Vertex+WGSL),
+@container two-phase layout (cascade_with_container_sizes je dead), mix-blend
+real shader, vertical text glyph stacking (38 Text konstruktoru), column-count
+inline fragmentace, scrollbar arrows, drop-shadow Gaussian, radial circle/ellipse,
+gradient animated bg-position. Detaily v F:\Projects\_reports\*.md.
+
 ## Session N+30: grid padding residual + perspective 3D + flex/table layout
 
 Pokracovani chyby-rbro doc fixu. Vsechny systemove (no workarounds):
