@@ -1358,7 +1358,10 @@ impl WebView {
         collect_path(root, content_x, content_y, &mut path);
         for bx in path.iter().rev() {
             if !bx.needs_scrollbar_y() && !bx.needs_scrollbar_x() { continue; }
-            let node = bx.node.as_ref()?;
+            // `?` (early-return None) shodil cele hledani kdyz scrollable box nemel
+            // DOM node (anonymni box) -> wheel pak scrolloval STRANKU misto inner
+            // elementu. continue = preskoc jen tenhle box, hledej dal v ceste.
+            let node = match bx.node.as_ref() { Some(n) => n, None => continue };
             let node_id = std::rc::Rc::as_ptr(node) as usize;
             // Construct read-only handle pres trait has_room. Map iz parent self,
             // pro read jen .get(node_id) - vsechno z snapshot.

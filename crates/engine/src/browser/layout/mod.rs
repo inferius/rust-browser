@@ -1871,15 +1871,20 @@ pub fn apply_sticky(root: &mut LayoutBox, scroll_y: f32) {
             let original_y = bx.sticky_original_y.unwrap();
             let top = bx.offset_top.unwrap_or(0.0);
             let viewport_top = scroll_y + top;
-            // Pokud element je nad viewport_top, posunout dolu (visible at viewport_top)
-            if original_y < viewport_top {
-                let new_y = viewport_top;
-                // Don't push past parent bottom
+            // Posun CELY subtree (box + deti) o delta, ne jen bx.rect.y. V layer-GPU
+            // rezimu se obsah layeru rastruje relativne k root_rect; kdyz se posune
+            // jen box a ne deti, deti vyjedou mimo layer texturu -> sticky #header
+            // text + #sidebar menu obsah ZMIZEL. shift_subtree posune box i deti.
+            let target_y = if original_y < viewport_top {
                 let max_y = parent_bottom - bx.rect.height;
-                bx.rect.y = new_y.min(max_y).max(original_y);
+                viewport_top.min(max_y).max(original_y)
             } else {
                 // Mimo sticky range - reset na original (kdyz scroll_y zpet).
-                bx.rect.y = original_y;
+                original_y
+            };
+            let delta = target_y - bx.rect.y;
+            if delta.abs() > 0.01 {
+                shift_subtree(bx, 0.0, delta);
             }
         }
         let pb = bx.rect.y + bx.rect.height;
