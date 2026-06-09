@@ -40,7 +40,14 @@ pub(crate) fn create_canvas_2d_context(
     let push_op = {
         let storage = Rc::clone(&ops_storage);
         move |op: CanvasOp| {
-            storage.borrow_mut().entry(canvas_ptr).or_default().push(op);
+            let mut s = storage.borrow_mut();
+            let v = s.entry(canvas_ptr).or_default();
+            // Safety cap - kdyby kreslici loop nikdy nevolal clear/full-fillRect,
+            // buffer by rostl do nekonecna (O(n^2) replay). Drop nejstarsi pulku.
+            if v.len() >= 20000 {
+                v.drain(0..10000);
+            }
+            v.push(op);
         }
     };
 
@@ -48,6 +55,7 @@ pub(crate) fn create_canvas_2d_context(
     {
         let push = push_op.clone();
         let obj_clone = Rc::clone(&obj_rc);
+        let storage_fr = Rc::clone(&ops_storage);
         obj_rc.borrow_mut().set("fillRect".into(), native("fillRect", move |args| {
             let mut it = args.into_iter();
             let x = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
@@ -55,6 +63,14 @@ pub(crate) fn create_canvas_2d_context(
             let w = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
             let h = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
             let color = style_color_with_alpha(&obj_clone, "fillStyle");
+            // Full-canvas fillRect na originu = typicky frame bg/trail fade
+            // (particle/wave loop pouziva fillRect(0,0,w,h) misto clearRect).
+            // RESET op buffer (jako clearRect) - jinak roste neomezene -> paint
+            // replayuje O(n^2) = po par sekundach <1 FPS. (Op-replay model neumi
+            // akumulovat trail fade; persistent bitmap = TODO.)
+            if x <= 0.0 && y <= 0.0 && w >= 64.0 && h >= 64.0 {
+                storage_fr.borrow_mut().entry(canvas_ptr).or_default().clear();
+            }
             push(CanvasOp::FillStyle(color));
             push(CanvasOp::FillRect { x, y, w, h });
             Ok(JsValue::Undefined)
