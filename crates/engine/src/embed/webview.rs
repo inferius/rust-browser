@@ -1507,6 +1507,9 @@ impl WebView {
     pub fn try_inner_wheel_scroll(&mut self, mx: f32, my: f32, dy: f32) -> bool {
         use crate::browser::scroll::{ScrollableMut, ElementScroll};
         let target = self.find_scroll_target(mx, my, 0.0, dy);
+        if std::env::var("RWE_SCROLL_DBG").is_ok() {
+            eprintln!("[INNER] find_scroll_target(mx={:.0},my={:.0},dy={:.1}) = {:?}", mx, my, dy, target);
+        }
         if let Some(node_id) = target {
             if let Some(root) = &self.last_layout_root {
                 if let Some((rw, rh, cw, ch)) = find_box_dims(root, node_id) {

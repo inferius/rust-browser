@@ -91,6 +91,40 @@ fn paint_border_left_emits_strip() {
 }
 
 #[test]
+fn overflow_hidden_clamps_straddling_child_bg() {
+    // Box vysky 30px, overflow:hidden, dite vysky 60px s cervenym pozadim.
+    // Dite straddluje hranici -> bg Rect se musi clampnout na clip (<=30px),
+    // ne pretekat ven (driv "partial overlap necham byt" -> pretekani).
+    let cmds = build_dl(
+        r#"<html><body><div class="ov"><div class="ch"></div></div></body></html>"#,
+        r#".ov { width: 100px; height: 30px; overflow: hidden; }
+           .ch { width: 100px; height: 60px; background: #ff0000; }"#,
+    );
+    // Najdi cerveny child bg Rect - jeho vyska musi byt clampnuta na <= ~30.
+    let red_h = cmds.iter().find_map(|c| match c {
+        DisplayCommand::Rect { h, color: [255, 0, 0, 255], .. } => Some(*h),
+        _ => None,
+    });
+    let h = red_h.expect("cerveny child bg Rect existuje");
+    assert!(h <= 31.0, "overflow:hidden clampuje child bg na clip vysku, h={} (ma byt <=30)", h);
+}
+
+#[test]
+fn overflow_hidden_drops_fully_below_text() {
+    // Box 30px, dite s textem na y~80 (kompletne pod boxem) -> text command
+    // se musi zahodit (ne emit pod boxem).
+    let cmds = build_dl(
+        r#"<html><body><div class="ov"><div class="tall">AAAA</div></div></body></html>"#,
+        r#".ov { width: 200px; height: 30px; overflow: hidden; }
+           .tall { margin-top: 80px; font-size: 16px; }"#,
+    );
+    // Zadny Text command nesmi mit y > clip bottom + rezerva (box ~ y=8..38).
+    let bad_text = cmds.iter().any(|c| matches!(c,
+        DisplayCommand::Text { y, .. } if *y > 60.0));
+    assert!(!bad_text, "text kompletne pod overflow:hidden boxem se musi zahodit");
+}
+
+#[test]
 fn paint_checkbox_checked_emits_accent_check() {
     // Nativni checkbox control - drive se nekreslil vubec.
     let cmds = build_dl(r#"<html><body><input type="checkbox" checked></body></html>"#, "");

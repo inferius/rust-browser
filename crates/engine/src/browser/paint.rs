@@ -2632,36 +2632,74 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
     let oh_x = bx.overflow_x.clips();
     let oh_y = bx.overflow_y.clips();
     if (oh_x || oh_y) && cmds.len() > children_start {
-        let bx_x0 = bx.rect.x;
-        let bx_y0 = bx.rect.y;
-        let bx_x1 = bx.rect.x + bx.rect.width;
-        let bx_y1 = bx.rect.y + bx.rect.height;
+        // Clip area = content box (rect minus border). Children straddlujici
+        // hranici se musi orezat, ne jen kompletne-venku zahodit (driv "partial
+        // overlap necham byt" -> radek pres hranu pretekal mimo box = "overflow
+        // pretika mimo"). Pro solid Rect/Border clampneme geometrii na hranice;
+        // pro Text/Image/Gradient/Shadow (nelze partial clipnout bez scissoru)
+        // zahodime command kdyz jeho STRED je mimo clip -> spilling text/obrazky
+        // zmizi misto pretekani. (Pixel-presny scissor = TODO clip stack.)
+        let bw = bx.border_width;
+        let bx_x0 = bx.rect.x + bw;
+        let bx_y0 = bx.rect.y + bw;
+        let bx_x1 = bx.rect.x + bx.rect.width - bw;
+        let bx_y1 = bx.rect.y + bx.rect.height - bw;
         let cull_x_min = if oh_x { bx_x0 } else { f32::NEG_INFINITY };
         let cull_x_max = if oh_x { bx_x1 } else { f32::INFINITY };
         let cull_y_min = if oh_y { bx_y0 } else { f32::NEG_INFINITY };
         let cull_y_max = if oh_y { bx_y1 } else { f32::INFINITY };
-        let cmd_outside = |c: &DisplayCommand| -> bool {
+        let bbox = |c: &DisplayCommand| -> Option<(f32, f32, f32, f32)> {
             use DisplayCommand::*;
-            let (x, y, w, h) = match c {
-                Rect { x, y, w, h, .. } => (*x, *y, *w, *h),
+            match c {
+                Rect { x, y, w, h, .. } => Some((*x, *y, *w, *h)),
                 Text { x, y, font_size, content, .. } => {
                     let est_w = content.chars().count() as f32 * font_size * 0.6;
-                    (*x, *y, est_w, *font_size * 1.4)
+                    Some((*x, *y, est_w, *font_size * 1.4))
                 }
-                Image { x, y, w, h, .. } => (*x, *y, *w, *h),
-                Gradient { x, y, w, h, .. } => (*x, *y, *w, *h),
-                Shadow { x, y, w, h, .. } => (*x, *y, *w, *h),
-                Border { x, y, w, h, .. } => (*x, *y, *w, *h),
-                _ => return false,  // markers, polygons, transform begin/end - nedotvkat
-            };
-            x + w < cull_x_min || x > cull_x_max
-                || y + h < cull_y_min || y > cull_y_max
+                Image { x, y, w, h, .. } => Some((*x, *y, *w, *h)),
+                Gradient { x, y, w, h, .. } => Some((*x, *y, *w, *h)),
+                Shadow { x, y, w, h, .. } => Some((*x, *y, *w, *h)),
+                Border { x, y, w, h, .. } => Some((*x, *y, *w, *h)),
+                _ => None,  // markers, polygons, transform begin/end - nedotykat
+            }
         };
-        cmds[children_start..].iter().enumerate()
-            .filter(|(_, c)| cmd_outside(c))
-            .map(|(i, _)| children_start + i)
-            .collect::<Vec<_>>()
-            .into_iter().rev().for_each(|i| { cmds.remove(i); });
+        let mut to_remove: Vec<usize> = Vec::new();
+        for i in children_start..cmds.len() {
+            let (x, y, w, h) = match bbox(&cmds[i]) { Some(b) => b, None => continue };
+            // Kompletne mimo clip -> zahodit.
+            if x + w < cull_x_min || x > cull_x_max || y + h < cull_y_min || y > cull_y_max {
+                to_remove.push(i);
+                continue;
+            }
+            // Plne uvnitr -> nechat byt.
+            if x >= cull_x_min && x + w <= cull_x_max && y >= cull_y_min && y + h <= cull_y_max {
+                continue;
+            }
+            // Partial overlap.
+            match &mut cmds[i] {
+                // Solid geometrie - clamp rect na clip hranice.
+                DisplayCommand::Rect { x, y, w, h, radius, .. } => {
+                    let nx0 = (*x).max(cull_x_min); let ny0 = (*y).max(cull_y_min);
+                    let nx1 = (*x + *w).min(cull_x_max); let ny1 = (*y + *h).min(cull_y_max);
+                    // Pri orezu zrus radius (jinak zaobleni na orezane strane vypada divne).
+                    if nx0 > *x || ny0 > *y || nx1 < *x + *w || ny1 < *y + *h { *radius = 0.0; }
+                    *x = nx0; *y = ny0; *w = (nx1 - nx0).max(0.0); *h = (ny1 - ny0).max(0.0);
+                }
+                DisplayCommand::Border { x, y, w, h, .. } => {
+                    let nx0 = (*x).max(cull_x_min); let ny0 = (*y).max(cull_y_min);
+                    let nx1 = (*x + *w).min(cull_x_max); let ny1 = (*y + *h).min(cull_y_max);
+                    *x = nx0; *y = ny0; *w = (nx1 - nx0).max(0.0); *h = (ny1 - ny0).max(0.0);
+                }
+                // Text/Image/Gradient/Shadow - drop kdyz stred mimo clip.
+                _ => {
+                    let cx = x + w * 0.5; let cy = y + h * 0.5;
+                    if cx < cull_x_min || cx > cull_x_max || cy < cull_y_min || cy > cull_y_max {
+                        to_remove.push(i);
+                    }
+                }
+            }
+        }
+        to_remove.into_iter().rev().for_each(|i| { cmds.remove(i); });
     }
 
     // CSS Multi-column Layout L1 - column-rule mezi sloupci. Vykresleno PO

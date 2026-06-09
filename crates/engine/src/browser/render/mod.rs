@@ -2489,6 +2489,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         let inner = self.webview.as_mut()
                             .map(|w| w.try_inner_wheel_scroll(self.mouse_x, self.mouse_y, dy_inner))
                             .unwrap_or(false);
+                        if std::env::var("RWE_SCROLL_DBG").is_ok() {
+                            eprintln!("[WHEEL] mouse=({:.0},{:.0}) dy_inner={:.1} inner_scrolled={}",
+                                self.mouse_x, self.mouse_y, dy_inner, inner);
+                        }
                         if !inner {
                             self.set_scroll_target_y((self.scroll_target_y() - logical_scroll).max(0.0));
                             self.clamp_scroll_to_layout();
