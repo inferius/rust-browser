@@ -826,6 +826,12 @@ pub struct Interpreter {
     /// (SVG points/d/cx/... = animace) -> cascade cache prezije = no full
     /// re-cascade per frame. Cascade cache klicuje na TENTO counter.
     pub dom_style_version: Rc<std::cell::Cell<u64>>,
+    /// Layout-relevantni mutation counter: style zmeny + textContent/value
+    /// (meni velikost textu -> re-layout) ALE NE SVG geometry (points = jen
+    /// re-paint). Layout cache klicuje na TENTO counter. Tim textContent
+    /// re-layoutuje BEZ re-cascade (dom_style_version) a SVG points re-paint
+    /// BEZ re-layout.
+    pub dom_layout_version: Rc<std::cell::Cell<u64>>,
 }
 
 /// True pro atributy ktere NEMOHOU ovlivnit CSS kaskadu (selector matching) -
@@ -1026,6 +1032,7 @@ impl Interpreter {
             stylesheets_lookup: None,
             dom_version: Rc::new(std::cell::Cell::new(0)),
             dom_style_version: Rc::new(std::cell::Cell::new(0)),
+            dom_layout_version: Rc::new(std::cell::Cell::new(0)),
         }
     }
 
@@ -1036,15 +1043,26 @@ impl Interpreter {
     #[inline]
     pub fn bump_dom_version(&self) {
         self.dom_version.set(self.dom_version.get().wrapping_add(1));
-        // Default: kazda mutace muze ovlivnit kaskadu -> bump i style verzi.
+        // Default: kazda mutace muze ovlivnit kaskadu -> bump style + layout verzi.
         // Geometry-only setAttribute pouziva bump_dom_version_content_only().
         self.dom_style_version.set(self.dom_style_version.get().wrapping_add(1));
+        self.dom_layout_version.set(self.dom_layout_version.get().wrapping_add(1));
     }
 
-    /// Bump JEN content (dom_version), ne style verzi. Pro mutace co nemohou
-    /// zmenit kaskadu - geometry-only SVG attrs (points/d/cx/cy/r/...). Cascade
-    /// cache (klicovana na dom_style_version) tak prezije = no full re-cascade
-    /// pri SVG animaci ktera meni 'points' kazdy frame.
+    /// Bump content + LAYOUT verzi, ne style. Pro textContent/value - meni
+    /// velikost textu (re-layout) ale neovlivnuje kaskadu (krome vzacneho
+    /// :empty). Cascade cache (dom_style_version) prezije = no re-cascade per
+    /// frame pri FPS counter / log / input psani.
+    #[inline]
+    pub fn bump_dom_version_layout(&self) {
+        self.dom_version.set(self.dom_version.get().wrapping_add(1));
+        self.dom_layout_version.set(self.dom_layout_version.get().wrapping_add(1));
+    }
+
+    /// Bump JEN content (dom_version), ne style/layout. Pro mutace co nemenni
+    /// layout ANI kaskadu - geometry-only SVG attrs (points/d/cx/cy/r/...).
+    /// Cascade i layout cache prezije = jen re-paint (SVG re-raster) per frame
+    /// pri SVG animaci, bez re-cascade ani re-layout.
     #[inline]
     pub fn bump_dom_version_content_only(&self) {
         self.dom_version.set(self.dom_version.get().wrapping_add(1));
@@ -1054,6 +1072,12 @@ impl Interpreter {
     #[inline]
     pub fn dom_style_version(&self) -> u64 {
         self.dom_style_version.get()
+    }
+
+    /// Layout-relevantni DOM mutation counter (style + textContent, NE SVG geo).
+    #[inline]
+    pub fn dom_layout_version(&self) -> u64 {
+        self.dom_layout_version.get()
     }
 
     /// Aktualni DOM mutation counter. DevTools host porovnava proti

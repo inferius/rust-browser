@@ -552,20 +552,19 @@ impl Interpreter {
                         match key.as_str() {
                             "textContent" | "innerText" => {
                                 n.set_text_content(&val.to_string());
-                                // Content-only bump: text NEovlivnuje kaskadu (krome
-                                // :empty/content() - vzacne) -> cascade cache PREZIJE.
-                                // Bez tohoto FPS counter / log updaty textContent
-                                // kazdy frame = full re-cascade (12ms) = <1 FPS pri
-                                // animaci/RAF. Layout keyuje na dom_version (content)
-                                // takze text se prelayoutuje.
-                                self.bump_dom_version_content_only();
+                                // Layout bump (NE style): text meni velikost ->
+                                // re-layout, ale NEovlivnuje kaskadu -> cascade cache
+                                // PREZIJE. Bez toho FPS counter / log / psani meni
+                                // textContent kazdy frame = full re-cascade (12ms)
+                                // = <1 FPS pri animaci/RAF.
+                                self.bump_dom_version_layout();
                                 return Ok(());
                             }
                             "value" => {
                                 // Form inputs - ulozit jako attribute "value".
-                                // Content (input text), neovlivnuje kaskadu.
+                                // Layout bump (input text size), neovlivnuje kaskadu.
                                 n.set_attr("value", &val.to_string());
-                                self.bump_dom_version_content_only();
+                                self.bump_dom_version_layout();
                                 return Ok(());
                             }
                             "checked" => {
