@@ -4413,10 +4413,22 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             }
             // Cursor icon stack - jeden compute_cursor_icon() s prioritou:
             // 1. Devtools panel? -> dle hit_test (search/console = Text, scrollbar/btn = Default/Pointer)
-            // 2-5: Page hit (layout_root dead na App vrstve -> target=None).
-            if let Some(window) = &self.window {
-                let icon = self.compute_cursor_icon(None);
-                window.set_cursor(icon);
+            // 2-5: Page hit - hit-test webview layout root na mouse content pos.
+            //   Drive target=None (layout_root dead na App) -> page cursor (pointer
+            //   nad button/a, I-beam nad textem) se NIKDY neaplikoval. Ted hit-test
+            //   pres webview.last_layout_root().
+            if self.window.is_some() {
+                let target_box = self.webview.as_ref()
+                    .and_then(|wv| wv.last_layout_root())
+                    .and_then(|root| root.hit_test(self.mouse_x, self.mouse_y));
+                if std::env::var("RWE_CURSOR_DBG").is_ok() {
+                    let tag = target_box.and_then(|b| b.node.as_ref())
+                        .and_then(|n| n.tag_name()).unwrap_or_else(|| "?".into());
+                    eprintln!("[CURSOR] mouse=({:.0},{:.0}) hit_tag={} icon={:?}",
+                        self.mouse_x, self.mouse_y, tag, self.compute_cursor_icon(target_box));
+                }
+                let icon = self.compute_cursor_icon(target_box);
+                if let Some(window) = &self.window { window.set_cursor(icon); }
             }
         }
 
