@@ -1,0 +1,21 @@
+<!DOCTYPE html><html><head><style>
+body{margin:0;font-family:sans-serif;padding:20px;font-size:15px;}
+section{margin-bottom:24px;border:1px solid #ccc;padding:10px;}
+h3{margin:0 0 8px;color:#1a73e8;}
+.cols{column-count:3;column-gap:20px;}
+.vert{writing-mode:vertical-rl;height:120px;background:#eef;padding:8px;}
+@keyframes blink{50%{opacity:0;}}
+.blink{animation:blink 1s step-end infinite;color:#d00;font-weight:bold;}
+@keyframes slide{from{transform:translateX(0);}to{transform:translateX(200px);}}
+.slide{animation:slide 2s linear infinite;display:inline-block;background:#0a0;color:#fff;padding:4px;}
+</style></head><body>
+<section><h3>column-count: 3</h3>
+<div class="cols">Lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna aliqua ut enim ad minim veniam quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.</div>
+</section>
+<section><h3>writing-mode: vertical-rl</h3>
+<div class="vert">Vertikalni text shora dolu</div>
+</section>
+<section><h3>blink + slide animace</h3>
+<span class="blink">BLIKAM</span> &nbsp; <span class="slide">JEDU</span>
+</section>
+</body></html>

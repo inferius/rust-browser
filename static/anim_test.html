@@ -1,0 +1,12 @@
+<!DOCTYPE html><html><head><style>
+body{margin:0;font-family:sans-serif;}
+.track{position:relative;height:60px;background:#eee;margin:20px;}
+.ball{position:absolute;top:10px;left:0;width:40px;height:40px;background:#d00;border-radius:50%;animation:move 10s linear infinite;}
+@keyframes move{from{transform:translateX(0);}to{transform:translateX(400px);}}
+.tick{margin:20px;font-size:30px;color:#1a73e8;}
+.tick span{animation:cnt 4s step-end infinite;}
+@keyframes cnt{0%{opacity:1;}50%{opacity:0.15;}}
+</style></head><body>
+<div class="track"><div class="ball"></div></div>
+<div class="tick"><span>OPACITY PULSE</span></div>
+</body></html>

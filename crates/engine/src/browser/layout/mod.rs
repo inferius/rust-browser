@@ -4233,28 +4233,52 @@ fn layout_block_vertical(bx: &mut LayoutBox) {
     // horizontalne (= horizontal-tb fallback) - real CSS by mel rotate text.
     // Pro plnou compliance bychom potrebovali inline_layout_vertical pass.
     // Tato implementace = block-level only writing mode.
-    let inner_x = bx.rect.x + bx.padding + bx.border_width;
     let inner_y = bx.rect.y + bx.padding + bx.border_width;
     let inner_h = bx.rect.height - 2.0 * (bx.padding + bx.border_width);
-    // Pro vertical-rl startujeme od prava; pro lr od leva.
     let right_to_left = matches!(bx.writing_mode, WritingMode::VerticalRl | WritingMode::SidewaysRl);
+    let has_explicit_w = bx.explicit_width.is_some();
 
-    let mut cursor_x = if right_to_left {
-        inner_x + (bx.rect.width - 2.0 * (bx.padding + bx.border_width))
-    } else {
-        inner_x
-    };
-
+    // PASS 1: stack text + urci child sirky (block-axis size kazdeho sloupce).
+    let mut total_w = 0.0_f32;
     for child in bx.children.iter_mut() {
         if matches!(child.display, Display::None) { continue; }
-        // CSS Writing Modes 4: explicit_width na vertical box = block-axis
-        // size (= physical X). explicit_height = inline-axis size (= physical Y).
-        // Map intuitivne: pokud user nezada, default inline_size = inner_h.
-        let child_w = child.explicit_width.unwrap_or(20.0);
-        let child_h = child.explicit_height.unwrap_or(inner_h);
-        child.rect.height = child_h;
-        child.rect.width  = child_w;
-        // Inherit writing_mode na deti (jen pokud nemaji explicit override).
+        // Vertical text approx: text child -> upright char-stacking (kazdy znak na
+        // vlastni radek pres \n). Bez tohoto byl text v ~20px horizontalnim boxu
+        // = wordwrap selhal / clipnuto = prazdny box ("vertikalni text v hajzlu").
+        // Pravy CSS rotuje glyphy, my je skladame upright (validni pro CJK +
+        // citelna aproximace pro latinku).
+        if let Some(t) = child.text.as_ref() {
+            if !t.contains('\n') {
+                let stacked: String = t.chars()
+                    .map(|c| if c == ' ' { '\u{00A0}' } else { c })
+                    .flat_map(|c| [c, '\n'])
+                    .collect();
+                child.text = Some(stacked.trim_end_matches('\n').to_string());
+            }
+        }
+        // Text child block-axis sirka = ~1 znak (font_size); jinak explicit_width
+        // nebo 20px default.
+        let default_w = if child.text.is_some() { (child.font_size * 1.4).max(14.0) } else { 20.0 };
+        let child_w = child.explicit_width.unwrap_or(default_w);
+        child.rect.width = child_w;
+        child.rect.height = child.explicit_height.unwrap_or(inner_h);
+        total_w += child_w;
+    }
+
+    // Vertical block bez explicit width = shrink-to-fit na content (block-axis).
+    // Bez tohoto box bral full parent width (1218px) a text (positioned od prava)
+    // skoncil daleko vpravo mimo viditelnou oblast = prazdny box.
+    if !has_explicit_w {
+        bx.rect.width = total_w + 2.0 * (bx.padding + bx.border_width);
+    }
+    let inner_x = bx.rect.x + bx.padding + bx.border_width;
+    let content_w = bx.rect.width - 2.0 * (bx.padding + bx.border_width);
+
+    // PASS 2: pozicuj sloupce (vertical-rl od prava, lr od leva).
+    let mut cursor_x = if right_to_left { inner_x + content_w } else { inner_x };
+    for child in bx.children.iter_mut() {
+        if matches!(child.display, Display::None) { continue; }
+        let child_w = child.rect.width;
         if matches!(child.writing_mode, WritingMode::HorizontalTb) {
             child.writing_mode = bx.writing_mode;
         }
@@ -4267,16 +4291,6 @@ fn layout_block_vertical(bx: &mut LayoutBox) {
         }
         child.rect.y = inner_y;
         layout_dispatch(child);
-    }
-
-    // Auto-vypocet sirky podle children
-    let used_w = if right_to_left {
-        (inner_x + bx.rect.width - 2.0 * (bx.padding + bx.border_width)) - cursor_x
-    } else {
-        cursor_x - inner_x
-    };
-    if bx.rect.width < used_w + 2.0 * (bx.padding + bx.border_width) {
-        bx.rect.width = used_w + 2.0 * (bx.padding + bx.border_width);
     }
 }
 

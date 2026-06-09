@@ -3824,3 +3824,29 @@ fn aspect_ratio_flex_item_definite_height() {
     // 160 * 9/16 = 90 (NE stretch na 100 = vyska sourozence b).
     assert!((a.rect.height - 90.0).abs() < 2.0, "aspect 16/9 z 160 = 90, got {}", a.rect.height);
 }
+
+#[test]
+fn vertical_writing_mode_shrinks_and_stacks_text() {
+    // writing-mode:vertical-rl bez explicit width: box shrink-to-fit (NE full
+    // viewport width = jinak text positioned vpravo mimo obrazovku = "prazdny
+    // box") + text child char-stacked (upright vertical).
+    let doc = parse_html(
+        r#"<html><body><div class="v">ABC</div></body></html>"#, "");
+    let css = parse_stylesheet(".v { writing-mode: vertical-rl; height: 120px; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let layout = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    fn find<'a>(b: &'a layout::LayoutBox, cls: &str) -> Option<&'a layout::LayoutBox> {
+        if b.node.as_ref().and_then(|n| n.attr("class")).as_deref() == Some(cls) { return Some(b); }
+        for c in &b.children { if let Some(f) = find(c, cls) { return Some(f); } }
+        None
+    }
+    let v = find(&layout, "v").expect("vertical box");
+    // Shrink-to-fit: sirka << viewport (ne ~1024).
+    assert!(v.rect.width < 100.0, "vertical box shrink-to-fit, width={}", v.rect.width);
+    // Text child char-stacked (obsahuje \n).
+    fn any_stacked(b: &layout::LayoutBox) -> bool {
+        if let Some(t) = &b.text { if t.contains('\n') { return true; } }
+        b.children.iter().any(any_stacked)
+    }
+    assert!(any_stacked(v), "text child ma byt char-stacked (\n mezi znaky)");
+}
