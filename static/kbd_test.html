@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  body { margin: 0; font-family: sans-serif; background: #fff; }
+  #zone {
+    margin: 40px; width: 400px; height: 150px;
+    border: 4px solid #999; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 24px; color: #333; cursor: text;
+  }
+  #zone:focus, #zone.focused { border-color: #1a73e8; }
+  #status { margin: 0 40px; font-size: 28px; color: #d00; font-weight: bold; }
+</style>
+</head>
+<body>
+  <div id="zone" tabindex="0"
+    onfocus="this.classList.add('focused'); document.getElementById('status').textContent='FOCUSED';"
+    onblur="this.classList.remove('focused');"
+    onkeydown="document.getElementById('status').textContent='KEYDOWN: '+event.key;">
+    <span>Klikni a zmackni klavesu</span>
+  </div>
+  <div id="status">WAITING</div>
+</body>
+</html>

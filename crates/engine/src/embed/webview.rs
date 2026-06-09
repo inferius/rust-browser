@@ -609,6 +609,37 @@ fn find_node_by_id(node: &std::rc::Rc<crate::browser::dom::Node>, id: &str)
     None
 }
 
+/// Vraci true pokud element je focusable (nativne nebo pres tabindex >= -... ).
+/// tabindex="-1" je focusable programaticky/klikem, ne pres Tab - pro klik OK.
+fn is_focusable_element(node: &std::rc::Rc<crate::browser::dom::Node>) -> bool {
+    let native = matches!(node.tag_name().as_deref(),
+        Some("input") | Some("textarea") | Some("button")
+        | Some("a") | Some("select"));
+    if native {
+        // <a> bez href neni focusable.
+        if node.tag_name().as_deref() == Some("a") {
+            return node.attr("href").is_some();
+        }
+        return true;
+    }
+    // [tabindex] na libovolnem elementu = focusable klikem.
+    node.attr("tabindex").is_some()
+}
+
+/// Walk od `node` nahoru, vrati nejblizsi focusable element (vc. node samotneho).
+/// Prohlizece pri kliku na potomka tabindex elementu focusuji ten predka -
+/// klik na <span> uvnitr <div tabindex=0> focusuje div, ne span.
+fn nearest_focusable(node: &std::rc::Rc<crate::browser::dom::Node>)
+    -> Option<std::rc::Rc<crate::browser::dom::Node>>
+{
+    let mut cur = Some(std::rc::Rc::clone(node));
+    while let Some(n) = cur {
+        if is_focusable_element(&n) { return Some(n); }
+        cur = n.parent.borrow().upgrade();
+    }
+    None
+}
+
 /// Postavi jednoduchy focus/blur event objekt (type + target). Focus/blur
 /// jsou non-bubbling; fire_inline cte `onfocus`/`onblur` atribut na targetu.
 fn make_focus_event(ev_type: &str, node: &std::rc::Rc<crate::browser::dom::Node>)
@@ -2088,13 +2119,12 @@ impl WebView {
                     // <div tabindex="0"> nenastavi focus a keydown/keyup
                     // (routovany na focused node) se nikdy nedispatchnou.
                     let old_focus_id = self.focused_node_local;
-                    let new_id = target_node.as_ref().and_then(|target| {
-                        let focusable = matches!(target.tag_name().as_deref(),
-                            Some("input") | Some("textarea") | Some("button")
-                            | Some("a") | Some("select"))
-                            || target.attr("tabindex").is_some();
-                        if focusable { Some(std::rc::Rc::as_ptr(target) as usize) } else { None }
-                    });
+                    // Walk nahoru k nejblizsimu focusable predkovi - klik na <span>
+                    // uvnitr <div tabindex=0> musi focusovat ten div (jinak keydown/
+                    // keyup routovany na focused node se nikdy nedispatchnou).
+                    let focus_target = target_node.as_ref().and_then(nearest_focusable);
+                    let new_id = focus_target.as_ref()
+                        .map(|t| std::rc::Rc::as_ptr(t) as usize);
                     self.focused_node_local = new_id;
                     // Cascade global = mirror per-WebView pro :focus styling
                     // (cascade.rs PSEUDO :focus check). Single thread,

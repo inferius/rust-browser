@@ -1233,6 +1233,29 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
     use winit::window::{Window, WindowId};
     use winit::keyboard::{Key, NamedKey};
 
+    // Mapuje winit logical_key na JS KeyboardEvent.key string (pro page keydown/
+    // keyup dispatch do webview). Shoduje se s shell/app.rs konverzi.
+    fn logical_key_to_js(key: &Key) -> Option<String> {
+        Some(match key {
+            Key::Named(NamedKey::Enter) => "Enter".into(),
+            Key::Named(NamedKey::Escape) => "Escape".into(),
+            Key::Named(NamedKey::Backspace) => "Backspace".into(),
+            Key::Named(NamedKey::Tab) => "Tab".into(),
+            Key::Named(NamedKey::Delete) => "Delete".into(),
+            Key::Named(NamedKey::ArrowLeft) => "ArrowLeft".into(),
+            Key::Named(NamedKey::ArrowRight) => "ArrowRight".into(),
+            Key::Named(NamedKey::ArrowUp) => "ArrowUp".into(),
+            Key::Named(NamedKey::ArrowDown) => "ArrowDown".into(),
+            Key::Named(NamedKey::Home) => "Home".into(),
+            Key::Named(NamedKey::End) => "End".into(),
+            Key::Named(NamedKey::PageUp) => "PageUp".into(),
+            Key::Named(NamedKey::PageDown) => "PageDown".into(),
+            Key::Named(NamedKey::Space) => " ".into(),
+            Key::Character(s) => s.to_string(),
+            _ => return None,
+        })
+    }
+
     struct App {
         // html/css/base_url/current_path fields smazany (polarity invert
         // kompletni). Initial data drzeny v `initial: Option<InitialData>`
@@ -2499,7 +2522,18 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 // Alt+Left = back, Alt+Right = forward (browser history).
                 // Ctrl++ / Ctrl+- / Ctrl+0 = zoom in/out/reset (page reflow).
                 WindowEvent::KeyboardInput { event: key_event, .. } => {
-                    if key_event.state != ElementState::Pressed { return; }
+                    if key_event.state != ElementState::Pressed {
+                        // KeyUp: forward page keyup JS do webview (focused element).
+                        if let Some(js_key) = logical_key_to_js(&key_event.logical_key) {
+                            if let Some(wv) = self.webview.as_mut() {
+                                let resp = wv.handle_input(crate::embed::InputEvent::KeyUp {
+                                    key: js_key, modifiers: Default::default(),
+                                });
+                                if resp.dirty { if let Some(w) = &self.window { w.request_redraw(); } }
+                            }
+                        }
+                        return;
+                    }
                     // Esc zavre vsechny popupy (color picker / settings / class
                     // manager / tab overflow) pred ostatnim handlingom.
                     if matches!(&key_event.logical_key, Key::Named(NamedKey::Escape)) {
@@ -2998,6 +3032,19 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 }
                                 _ => {}
                             }
+                        }
+                    }
+                    // Page keydown JS dispatch: zadna chrome/devtools UI klavesu
+                    // nezkonzumovala -> forward do webview (dispatch na focused page
+                    // element). Diky tomu funguji onkeydown handlery (napr. JS Events
+                    // keyboard zone, tabindex divy). Scroll/F-key default akce nize
+                    // bezi dal (browser-like: keydown fire pak default action).
+                    if let Some(js_key) = logical_key_to_js(&key_event.logical_key) {
+                        if let Some(wv) = self.webview.as_mut() {
+                            let resp = wv.handle_input(crate::embed::InputEvent::KeyDown {
+                                key: js_key, modifiers: Default::default(),
+                            });
+                            if resp.dirty { if let Some(w) = &self.window { w.request_redraw(); } }
                         }
                     }
                     match key_event.logical_key {
