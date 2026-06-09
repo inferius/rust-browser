@@ -3108,7 +3108,7 @@ fn propagate_inherited(root: &Rc<Node>, style_map: &mut StyleMap) {
         "text-indent", "text-transform", "white-space", "word-break", "overflow-wrap",
         "direction", "writing-mode", "visibility", "cursor", "list-style", "list-style-type",
         "list-style-position", "list-style-image", "quotes", "tab-size",
-        "accent-color", "scrollbar-color", "scrollbar-width",
+        "accent-color", "scrollbar-color", "scrollbar-width", "user-select",
     ];
     type Subset = Rc<Vec<(String, String)>>;
     let empty: Subset = Rc::new(Vec::new());

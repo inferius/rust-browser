@@ -947,7 +947,9 @@ pub struct LayoutBox {
     /// mix-blend-mode: normal | multiply | screen | overlay | darken | lighten | ...
     /// pointer-events: auto | none
     pub pointer_events: PointerEvents,
-    /// user-select: auto | none | text | all
+    /// user-select: none -> element nelze textove selektovat (true = none).
+    /// Inherited (cascade) -> box ma efektivni hodnotu.
+    pub user_select_none: bool,
     /// caret-color
     pub caret_color: Option<[u8; 4]>,
     /// touch-action: auto | none | pan-x | pan-y | manipulation
@@ -1325,6 +1327,7 @@ impl LayoutBox {
             counter_increment: Vec::new(),
             perspective: None,
             pointer_events: PointerEvents::default(),
+            user_select_none: false,
             caret_color: None,
             tab_size: 8.0,
             word_break: String::new(),
@@ -3396,6 +3399,7 @@ fn build_box_inner_impl(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &supe
         if v.trim() != "none" { bx.perspective = Some(parse_length(v)); }
     }
     if let Some(v) = s.get("pointer-events") { bx.pointer_events = PointerEvents::parse(v); }
+    if let Some(v) = s.get("user-select") { bx.user_select_none = v.trim() == "none"; }
     if let Some(v) = s.get("caret-color") {
         if v.trim() != "auto" { bx.caret_color = parse_color(v); }
     }

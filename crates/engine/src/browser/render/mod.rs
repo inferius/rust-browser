@@ -1884,15 +1884,32 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         .and_then(|bx| bx.node.clone())
                         .and_then(|n| crate::embed::webview::find_draggable_ancestor(&n))
                         .is_some();
+                    // user-select:none (button/UI/draggable) -> NEselektovat. Walk
+                    // root->point: hit vraci nejhlubsi box (text node bez vlastniho
+                    // user-select), ale ancestor div ho ma -> kontrola cele cesty.
+                    let on_unselectable = self.webview.as_ref()
+                        .and_then(|w| w.last_layout_root())
+                        .map(|root| {
+                            fn path_unsel(b: &super::layout::LayoutBox, mx: f32, my: f32) -> bool {
+                                if mx < b.rect.x || mx >= b.rect.x + b.rect.width
+                                    || my < b.rect.y || my >= b.rect.y + b.rect.height { return false; }
+                                if b.user_select_none { return true; }
+                                let cx = mx + b.scroll_offset_x;
+                                let cy = my + b.scroll_offset_y;
+                                b.children.iter().any(|c| path_unsel(c, cx, cy))
+                            }
+                            path_unsel(root, self.mouse_x, self.mouse_y)
+                        })
+                        .unwrap_or(false);
                     if std::env::var("RWE_INPUT_DBG").is_ok() {
                         let tag = self.webview.as_ref().and_then(|w| w.last_layout_root())
                             .and_then(|r| r.hit_test(self.mouse_x, self.mouse_y))
                             .and_then(|b| b.node.clone())
                             .and_then(|n| n.tag_name()).unwrap_or_else(|| "?".into());
-                        eprintln!("[SEL] MouseDown mouse=({:.0},{:.0}) hit={} on_grip={} on_drag={}",
-                            self.mouse_x, self.mouse_y, tag, on_resize_grip, on_draggable);
+                        eprintln!("[SEL] MouseDown mouse=({:.0},{:.0}) hit={} on_grip={} on_drag={} unsel={}",
+                            self.mouse_x, self.mouse_y, tag, on_resize_grip, on_draggable, on_unselectable);
                     }
-                    if !on_resize_grip && !on_draggable {
+                    if !on_resize_grip && !on_draggable && !on_unselectable {
                         self.page_sel_begin((self.mouse_x, self.mouse_y));
                     }
                     // Devtools panel hit-test ma prioritu nad page hit-testem.
