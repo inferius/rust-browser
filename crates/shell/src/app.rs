@@ -753,7 +753,11 @@ impl ShellApp {
         // DOM mutation detekce - pri rozdilu emit DOM.documentUpdated.
         // Throttle 500ms - pri velkem DOMu s castymi mutacemi (animations,
         // setInterval timers) by sync rerender zaplavil frontend a srazil FPS.
-        let cur_dom = page.dom_version();
+        // dom_STYLE_version (strukturalni), NE dom_version - jinak SVG geometry
+        // animace (points kazdy frame) trigger DOM.documentUpdated kazdych 500ms
+        // -> devtools tree re-fetch + 1s render = <1 FPS. Tree se meni jen pri
+        // strukturalni/class/style zmene.
+        let cur_dom = page.dom_style_version();
         if cur_dom != self.cdp_last_dom_version {
             if self.cdp_last_dom_emit.elapsed().as_millis() >= 500 {
                 let evt = rwe_devtools_proto::DevtoolsEvent {

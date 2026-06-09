@@ -876,6 +876,14 @@ impl WebView {
         self.interpreter.as_ref().map(|i| i.dom_version()).unwrap_or(0)
     }
 
+    /// Style/strukturalni DOM mutation counter (class/id/style/add/remove,
+    /// NE textContent/SVG geometry). DevTools to pouziva pro DOM.documentUpdated
+    /// - tree re-fetch jen pri strukturalni zmene, ne pri SVG points animaci
+    /// (jinak by se tree re-fetchoval kazdych 500ms = 1s render = <1 FPS).
+    pub fn dom_style_version(&self) -> u64 {
+        self.interpreter.as_ref().map(|i| i.dom_style_version()).unwrap_or(0)
+    }
+
     /// Navigation counter. Inkrementuje pri kazdem `load_html` startu.
     /// DevTools host porovnava proti svemu `last_nav_id` snapshotu.
     pub fn nav_id(&self) -> u64 {
