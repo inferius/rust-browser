@@ -1,0 +1,15 @@
+<!DOCTYPE html><html><head><style>
+body{margin:0;font-family:sans-serif;padding:20px;}
+.src{width:120px;height:40px;margin:8px;background:#1a73e8;color:#fff;font-size:18px;padding:10px;cursor:grab;display:inline-block;}
+#zone{width:300px;height:120px;margin:16px 8px;border:3px dashed #888;font-size:20px;padding:12px;color:#666;}
+#zone.over{border-color:#0a0;background:#efe;}
+</style></head><body>
+<div class="src" draggable="true" ondragstart="event.dataTransfer.setData('text/plain', this.textContent)">ALPHA</div>
+<div class="src" draggable="true" ondragstart="event.dataTransfer.setData('text/plain', this.textContent)">BETA</div>
+<div id="zone"
+  ondragover="event.preventDefault(); this.classList.add('over');"
+  ondragleave="this.classList.remove('over');"
+  ondrop="event.preventDefault(); this.textContent='DROPPED: '+event.dataTransfer.getData('text/plain'); this.classList.remove('over');">
+  Pustit sem
+</div>
+</body></html>

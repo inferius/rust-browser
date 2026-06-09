@@ -173,6 +173,8 @@ pub struct WebView {
     /// Element resize drag (CSS resize): (node, start_mouse_x, start_mouse_y,
     /// start_w, start_h, axis "both"/"horizontal"/"vertical").
     pub(crate) resize_drag: Option<(std::rc::Rc<crate::browser::dom::Node>, f32, f32, f32, f32, String)>,
+    /// HTML5 drag&drop session - Some od MouseDown na draggable=true element.
+    pub(crate) drag: Option<DragSession>,
     pub(crate) layout_dumped: bool,
     /// Scrollbar drag state - Some(grab_offset_y) pri V thumb drag.
     /// Inner element scrollbar drag: (node_id, grab_y_offset, max_scroll, bar_y, bar_h).
@@ -677,6 +679,52 @@ fn set_inline_style_prop(node: &std::rc::Rc<crate::browser::dom::Node>, prop: &s
 
 /// Najde nejhlubsi box s resize != none jehoz grip zona (pravy dolni roh ~16px)
 /// obsahuje (cx, cy) content coords. Vrati (node, rect_w, rect_h, axis).
+/// HTML5 drag&drop session. Drzi source element + sdileny DataTransfer napric
+/// dragstart -> dragover -> drop. Inspired by Chromium DragController.
+pub(crate) struct DragSession {
+    pub source: std::rc::Rc<crate::browser::dom::Node>,
+    pub data_transfer: crate::interpreter::JsValue,
+    pub started: bool,
+    pub start_x: f32,
+    pub start_y: f32,
+    /// Posledni dragover target (pro dragenter/dragleave hranice).
+    pub last_over: Option<std::rc::Rc<crate::browser::dom::Node>>,
+    /// Aktualni drop target - element jehoz dragover zavolal preventDefault
+    /// (= "tady lze dropnout"). None = drop se nesmi.
+    pub drop_target: Option<std::rc::Rc<crate::browser::dom::Node>>,
+}
+
+/// Walk od node nahoru, vrati nejblizsi element s draggable="true".
+pub(crate) fn find_draggable_ancestor(node: &std::rc::Rc<crate::browser::dom::Node>)
+    -> Option<std::rc::Rc<crate::browser::dom::Node>>
+{
+    let mut cur = Some(std::rc::Rc::clone(node));
+    while let Some(n) = cur {
+        if n.attr("draggable").as_deref() == Some("true") {
+            return Some(n);
+        }
+        cur = n.parent.borrow().upgrade();
+    }
+    None
+}
+
+/// Postavi drag event objekt (type + clientX/Y + dataTransfer + target).
+/// Vraci (JsValue pro dispatch, Rc pro precteni defaultPrevented po dispatch).
+fn make_drag_event(ty: &str, target: &std::rc::Rc<crate::browser::dom::Node>,
+                   dt: &crate::interpreter::JsValue, x: f32, y: f32)
+    -> (crate::interpreter::JsValue, std::rc::Rc<std::cell::RefCell<crate::interpreter::JsObject>>)
+{
+    use crate::interpreter::{JsObject, JsValue};
+    let mut ev = JsObject::new();
+    ev.set("type".into(), JsValue::Str(ty.into()));
+    ev.set("clientX".into(), JsValue::Number(x as f64));
+    ev.set("clientY".into(), JsValue::Number(y as f64));
+    ev.set("dataTransfer".into(), dt.clone());
+    ev.set("target".into(), JsValue::DomNode(std::rc::Rc::clone(target)));
+    let rc = std::rc::Rc::new(std::cell::RefCell::new(ev));
+    (JsValue::Object(std::rc::Rc::clone(&rc)), rc)
+}
+
 pub(crate) fn find_resize_grip(bx: &crate::browser::layout::LayoutBox, cx: f32, cy: f32)
     -> Option<(std::rc::Rc<crate::browser::dom::Node>, f32, f32, String)>
 {
@@ -745,6 +793,7 @@ impl WebView {
             focused_node_local: None,
             range_drag_node: None,
             resize_drag: None,
+            drag: None,
             layout_dumped: false,
             v_scrollbar_drag: None,
             h_scrollbar_drag: None,
@@ -1661,6 +1710,68 @@ impl WebView {
                         response.dirty = true;
                         return response;
                     }
+                    // HTML5 drag&drop state machine. drag session zalozena v MouseDown
+                    // na draggable elementu; dragstart az pri pohybu > threshold.
+                    if self.drag.is_some() {
+                        let (started, sx, sy, dt, source, last_over) = {
+                            let d = self.drag.as_ref().unwrap();
+                            (d.started, d.start_x, d.start_y, d.data_transfer.clone(),
+                             std::rc::Rc::clone(&d.source), d.last_over.clone())
+                        };
+                        let moved = (cx_inner - sx).abs() > 4.0 || (cy_inner - sy).abs() > 4.0;
+                        if moved {
+                            use crate::interpreter::JsValue;
+                            // 1. dragstart (jednou).
+                            if !started {
+                                let (ev, _) = make_drag_event("dragstart", &source, &dt, x, y);
+                                if let Some(interp) = self.interpreter.as_mut() {
+                                    let _ = interp.dispatch_event(&source, "dragstart", ev);
+                                }
+                                if let Some(d) = self.drag.as_mut() { d.started = true; }
+                            }
+                            // 2. Element pod kurzorem.
+                            let over = self.last_layout_root.as_ref()
+                                .and_then(|r| r.hit_test(cx_inner, cy_inner))
+                                .and_then(|b| b.node.clone());
+                            let same = match (&over, &last_over) {
+                                (Some(a), Some(b)) => std::rc::Rc::ptr_eq(a, b),
+                                (None, None) => true,
+                                _ => false,
+                            };
+                            // 3. dragleave (stary) + dragenter (novy) pri zmene.
+                            if !same {
+                                if let Some(lo) = last_over.as_ref() {
+                                    let (ev, _) = make_drag_event("dragleave", lo, &dt, x, y);
+                                    if let Some(interp) = self.interpreter.as_mut() {
+                                        let _ = interp.dispatch_event(lo, "dragleave", ev);
+                                    }
+                                }
+                                if let Some(o) = over.as_ref() {
+                                    let (ev, _) = make_drag_event("dragenter", o, &dt, x, y);
+                                    if let Some(interp) = self.interpreter.as_mut() {
+                                        let _ = interp.dispatch_event(o, "dragenter", ev);
+                                    }
+                                }
+                                if let Some(d) = self.drag.as_mut() { d.last_over = over.clone(); }
+                            }
+                            // 4. dragover na current target + preventDefault check.
+                            let mut prevented = false;
+                            if let Some(o) = over.as_ref() {
+                                let (ev, rc) = make_drag_event("dragover", o, &dt, x, y);
+                                if let Some(interp) = self.interpreter.as_mut() {
+                                    let _ = interp.dispatch_event(o, "dragover", ev);
+                                }
+                                prevented = matches!(rc.borrow().get("defaultPrevented"), JsValue::Bool(true));
+                            }
+                            if let Some(d) = self.drag.as_mut() {
+                                d.drop_target = if prevented { over.clone() } else { None };
+                            }
+                            self.hit_rtree = None;
+                            self.dirty = true;
+                            response.dirty = true;
+                            return response;
+                        }
+                    }
                     // Range drag: drzime-li range thumb (mousedown na range), nastav
                     // value dle x pozice (set_range_from_x fire input/change).
                     if let Some(rn) = self.range_drag_node.clone() {
@@ -2127,9 +2238,23 @@ impl WebView {
                         self.dirty = true;
                         return response;
                     }
-                    let target_node = self.last_layout_root.as_ref()
+                    let hit_node = self.last_layout_root.as_ref()
                         .and_then(|root| root.hit_test(content_x, content_y))
-                        .and_then(|bx| bx.node.clone())
+                        .and_then(|bx| bx.node.clone());
+                    // HTML5 drag&drop: klik na draggable=true element (nebo potomka)
+                    // -> zaloz drag session (dragstart az pri pohybu > threshold).
+                    if let Some(hn) = hit_node.as_ref() {
+                        if let Some(src) = find_draggable_ancestor(hn) {
+                            self.drag = Some(DragSession {
+                                source: src,
+                                data_transfer: crate::interpreter::helpers::make_data_transfer(),
+                                started: false,
+                                start_x: content_x, start_y: content_y,
+                                last_over: None, drop_target: None,
+                            });
+                        }
+                    }
+                    let target_node = hit_node
                         // Klik na <label> -> aktivuj jeho control (focus + toggle).
                         .map(|n| resolve_label_target(&n));
                     // Focus / blur - per-WebView focused state.
@@ -2261,6 +2386,28 @@ impl WebView {
                     if self.resize_drag.take().is_some() {
                         response.dirty = true;
                         self.dirty = true;
+                    }
+                    // HTML5 drag&drop release: drop (na drop_target s preventDefault) +
+                    // dragend (na source). Pri pouhem kliku bez pohybu (!started) jen
+                    // zrus session a nech klik/mouseup probehnout normalne (no return).
+                    if let Some(d) = self.drag.take() {
+                        if d.started {
+                            let dt = d.data_transfer.clone();
+                            if let Some(tgt) = d.drop_target.as_ref() {
+                                let (ev, _) = make_drag_event("drop", tgt, &dt, x, y);
+                                if let Some(interp) = self.interpreter.as_mut() {
+                                    let _ = interp.dispatch_event(tgt, "drop", ev);
+                                }
+                            }
+                            let (ev, _) = make_drag_event("dragend", &d.source, &dt, x, y);
+                            if let Some(interp) = self.interpreter.as_mut() {
+                                let _ = interp.dispatch_event(&d.source, "dragend", ev);
+                            }
+                            self.hit_rtree = None;
+                            response.dirty = true;
+                            self.dirty = true;
+                            return response;
+                        }
                     }
                     // End range drag.
                     self.range_drag_node = None;

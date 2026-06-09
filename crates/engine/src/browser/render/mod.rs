@@ -1876,7 +1876,15 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         .and_then(|root| crate::embed::webview::find_resize_grip(
                             root, self.mouse_x, self.mouse_y))
                         .is_some();
-                    if !on_resize_grip {
+                    // Klik na draggable=true element -> NEselektovat (tah = drag&drop,
+                    // ne text selection).
+                    let on_draggable = self.webview.as_ref()
+                        .and_then(|w| w.last_layout_root())
+                        .and_then(|root| root.hit_test(self.mouse_x, self.mouse_y))
+                        .and_then(|bx| bx.node.clone())
+                        .and_then(|n| crate::embed::webview::find_draggable_ancestor(&n))
+                        .is_some();
+                    if !on_resize_grip && !on_draggable {
                         self.page_sel_begin((self.mouse_x, self.mouse_y));
                     }
                     // Devtools panel hit-test ma prioritu nad page hit-testem.

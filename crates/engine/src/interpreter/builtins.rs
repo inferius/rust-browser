@@ -3063,38 +3063,9 @@ pub fn setup_builtins(
     }));
 
     // ─── DataTransfer / DataTransferItem (drag-drop) ──────────────────────
+    // Konstruktor + webview drag state machine sdileji make_data_transfer().
     e.define("DataTransfer", native("DataTransfer", |_| {
-        let items: Rc<RefCell<HashMap<String, String>>> = Rc::new(RefCell::new(HashMap::new()));
-        let obj = Rc::new(RefCell::new(JsObject::new()));
-        obj.borrow_mut().set("dropEffect".into(), JsValue::Str("none".into()));
-        obj.borrow_mut().set("effectAllowed".into(), JsValue::Str("all".into()));
-        obj.borrow_mut().set("types".into(), JsValue::Array(Rc::new(RefCell::new(Vec::new()))));
-        obj.borrow_mut().set("files".into(), JsValue::Array(Rc::new(RefCell::new(Vec::new()))));
-        let i1 = Rc::clone(&items);
-        obj.borrow_mut().set("setData".into(), native("setData", move |args| {
-            let mut it = args.into_iter();
-            let format = it.next().map(|v| v.to_string()).unwrap_or_default();
-            let data = it.next().map(|v| v.to_string()).unwrap_or_default();
-            i1.borrow_mut().insert(format, data);
-            Ok(JsValue::Undefined)
-        }));
-        let i2 = Rc::clone(&items);
-        obj.borrow_mut().set("getData".into(), native("getData", move |args| {
-            let format = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
-            Ok(JsValue::Str(i2.borrow().get(&format).cloned().unwrap_or_default()))
-        }));
-        let i3 = Rc::clone(&items);
-        obj.borrow_mut().set("clearData".into(), native("clearData", move |args| {
-            if let Some(format) = args.into_iter().next() {
-                i3.borrow_mut().remove(&format.to_string());
-            } else {
-                i3.borrow_mut().clear();
-            }
-            Ok(JsValue::Undefined)
-        }));
-        obj.borrow_mut().set("setDragImage".into(),
-            native("setDragImage", |_| Ok(JsValue::Undefined)));
-        Ok(JsValue::Object(obj))
+        Ok(crate::interpreter::helpers::make_data_transfer())
     }));
 
     // ─── Storage events ───────────────────────────────────────────────────
