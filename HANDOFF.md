@@ -115,15 +115,44 @@ Opraveno (6 commitu, vse SendInput-overeno):
    TYKA SE VSECH :hover/:focus/:active na elementech s potomky (tabulky, listy,
    karty, nav s ikonami) = pravdepodobne user-wide "hover nefunguje" pocit.
 
-Test fixtures pridany: blend_test.html, kbd_test.html, forms_test.html,
-overflow_test.html, table_test.html. 4190 testu pass.
+7. **Resize element** (#55 "nejde resizovat") - mechanismus fungoval ale
+   nepouzitelny: kurzor se nad 16px grip nemenil (find_resize_grip -> NwseResize
+   v compute_cursor_icon) + tah selektoval text (engine skip page_sel_begin na
+   grip). Overeno: NwseResize kurzor, drag 250x150->375x218, ResizeObserver fire.
 
-ZBYVA (chyby-rbro v3, neoverene/nedotcene): #1 top bar backdrop-filter translucent,
-#54 IntersectionObserver (logika vypada OK, mozna inner-scroll coords), #55
-ResizeObserver resize grip, #56 MutationObserver styling, #58-60 drag&drop,
-#45 @container query, #20/21 pseudo-elementy + nth-child jagged AA, #32 typografie
-(vertical text, column-count, blink), #34 inline SVG, #27 filter blur top cut,
-#25 gradienty radial/animated, canvas persistent bitmap ("funguje blbe").
+8. **CSS cursor property** (#58 + broad) - compute_cursor_icon IGNOROVAL CSS
+   `cursor` (jen InteractiveKind). css_cursor_to_icon() mapping + walk root->mouse
+   (cursor je inherited -> propaguj do text boxu). Overeno: grab/move/pointer/help
+   spravne i nad textem. Broad - vsechny custom kurzory.
+
+9. **Drag&Drop** (#58-60 "vubec nefunguje") - DnD eventy se NIKDY nedispatchovaly.
+   Webview DragSession state machine: MouseDown na draggable -> session; MouseMove
+   >4px -> dragstart, hit-test target -> dragleave/dragenter + dragover (preventDef
+   check); MouseUp -> drop (na drop_target) + dragend. helpers::make_data_transfer
+   sdileny napric. Engine skip page_sel na draggable. Overeno: drag ALPHA/BETA ->
+   "DROPPED: ALPHA" (setData->getData pres dataTransfer).
+
+10. **@container query** (#45 "nefunguje vubec") - webview volal cascade_with_
+   viewport (ignoruje cq) misto cascade_with_container_sizes. build container_sizes
+   z prev layoutu (1-frame lag + konvergence force-dirty + cache_key hash). subtree
+   fingerprint += viewport pri vw/vh. Overeno: 600px container->GREEN, 300px->RED
+   (vyhodnoceno proti CONTAINER size). Pozn: resize-driven jeste blokuje vw-on-
+   resize (SetWindowPos neupdatuje engine viewport v testu).
+
+Test fixtures: blend_test, kbd_test, forms_test, overflow_test, table_test,
+resize_test, dnd_test, container_test. 4191 testu pass. Gated traces: RWE_*_DBG
+(CURSOR/SCROLL/INPUT/HOVER/RESIZE/CQ/SEL).
+
+ZBYVA (chyby-rbro v3): vw-on-resize (engine viewport update + subtree fp hotovy,
+ale SetWindowPos test nedosahl - overit real drag-resize), box-sizing (width:N
+-> rect N vc. padding/border misto +, default border-box misto content-box -
+RISK), pseudo-element + @container content (::before content se neaplikuje pod
+@container), #1 top bar backdrop-filter translucent, #54 IntersectionObserver
+(inner-scroll coords), #56 MutationObserver styling, #20/21 pseudo + nth-child
+jagged AA, #32 typografie (vertical text/column-count/blink), #34 inline SVG,
+#27 filter blur top cut, #25 gradienty radial/animated, canvas persistent bitmap,
+DnD text-selection prosvita (real .draggable maji user-select:none ale engine ho
+mozna neresprektuje pri selekci), #58 flex row-gap.
 
 ## Session N+34: PERF - canvas <1FPS, calc-on-resize, 3-tier version (113->167 FPS)
 
