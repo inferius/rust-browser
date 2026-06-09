@@ -59,6 +59,44 @@ plynule + scrollbar/overlay NEzmizel). Revert pri regresi.
 urgence; fast path je velka hot-path zmena s klesajicim perceptualnim prinosem.
 Ale ma hodnotu i mimo FPS (spravna architektura, nizsi spotreba).
 
+## Session N+34: PERF - canvas <1FPS, calc-on-resize, 3-tier version (113->167 FPS)
+
+User (chyby-rbro v3): "Zobrazeni devtools nebo canvas api extreme zpomali az na
+1FPS. Resize extreme pomaly. calc(100%-x) se neprepocita po resize = kriticky."
+Verifikace REALNYM mereni (title FPS breakdown, SetWindowPos resize, minimal
+fixtury) + dump + testy.
+
+**Canvas <1 FPS - VYRESENO:** minimal canvas fixtura = 240 FPS (canvas sam je
+rychly). Engine-test particle mod pouziva fillRect(0,0,w,h) (trail fade) MISTO
+clearRect -> muj clearRect buffer-reset se netriggernul -> op buffer rostl
+~120 ops/frame neomezene -> paint replay O(n^2) -> po par s <1 FPS. Fix:
+full-canvas fillRect (x<=0,y<=0,w/h>=64) RESETuje buffer + push_op safety cap
+20000. Overeno: fillRect trail stabilni 240 FPS i po 8s.
+
+**calc-on-resize - VYRESENO (kriticky):** flex pre-pass nastavi explicit_width
+z width_calc, ale subtree LAYOUT_CACHE persistuje pres resize -> gate
+`if explicit_width.is_none()` skip re-resolve -> stara hodnota. Fix: width_calc/
+height_calc VZDY overwrite. Overeno: resize 1280->600, b2 calc(50%+20px) 640->292.
+
+**3-tier version (113->167 FPS idle):** textContent volalo bump_dom_version
+(full) -> dom_style_version -> cascade cache miss -> 12ms re-cascade per
+textContent zmene (FPS counter, log, psani). Pridan dom_layout_version:
+- dom_style_version (cascade): class/id/style/structural.
+- dom_layout_version (layout): + textContent/value.
+- dom_version (paint): + SVG geometry (points).
+textContent -> bump_dom_version_layout (re-layout, NE re-cascade). SVG points ->
+content_only (re-paint, NE re-layout). Idle 113->167 FPS.
+
+**ZBYVA (deep perf, potreba tve verifikace):**
+- DevTools <1 FPS: CDP DOM.documentUpdated je throttled 500ms (OK), ale page+
+  devtools render kazdy frame pri page RAF (animateWavePoly bumpa kazdy frame).
+  Devtools tree render expensive. Potreba: skip devtools render kdyz devtools
+  DOM unchanged + compositor fast-path.
+- Resize page-render 73ms/frame (10 FPS pri drag): full re-cascade(@media)+
+  re-layout+paint+layer-raster na cache invalidaci kazdy resize step. Potreba:
+  resize debounce (re-layout az pri settled, behem dragu scale cached frame)
+  NEBO compositor fast-path. Riziko - present scaling pri size mismatch.
+
 ## Session N+33: KRITICKY hit_test fix + canvas + calc + autonomni grind
 
 Autonomni pokracovani (user pryc od PC). Verifikace REALNYM vstupem (SendInput
