@@ -2976,6 +2976,40 @@ impl WebView {
             .any(|s| crate::browser::cascade::stylesheet_uses_pseudo(s, "focus"));
         let uses_active = self.stylesheets.iter()
             .any(|s| crate::browser::cascade::stylesheet_uses_pseudo(s, "active"));
+        // @container queries: build mapu container_node_ptr -> (w,h) z PREDCHOZIHO
+        // layoutu (+ prev style_map pro detekci container-type). Cascade bezi pred
+        // layoutem -> 1-frame lag (browsers resi multi-pass; lag neviditelny). Bez
+        // tohoto @container "nefunguje vubec" (cascade_with_viewport ignoruje cq).
+        let uses_container = self.stylesheets.iter()
+            .any(|s| !s.container_queries.is_empty());
+        let mut container_sizes: std::collections::HashMap<usize, (f32, f32)> =
+            std::collections::HashMap::new();
+        if uses_container {
+            if let (Some(prev_layout), Some(prev_styles)) =
+                (self.last_layout_root.as_ref(), self.cascade_cache_value.as_ref())
+            {
+                fn collect_containers(bx: &crate::browser::layout::LayoutBox,
+                    styles: &crate::browser::cascade::StyleMap,
+                    out: &mut std::collections::HashMap<usize, (f32, f32)>)
+                {
+                    if let Some(node) = &bx.node {
+                        if let Some(props) = crate::browser::cascade::get_styles(styles, node) {
+                            if let Some(ct) = props.get("container-type") {
+                                if ct != "normal" && !ct.is_empty() {
+                                    out.insert(std::rc::Rc::as_ptr(node) as usize,
+                                        (bx.rect.width, bx.rect.height));
+                                }
+                            }
+                        }
+                    }
+                    for ch in &bx.children { collect_containers(ch, styles, out); }
+                }
+                collect_containers(prev_layout, prev_styles, &mut container_sizes);
+            }
+        }
+        if uses_container && std::env::var("RWE_CQ_DBG").is_ok() {
+            eprintln!("[CQ] cascade container_sizes(z prev layout) = {:?}", container_sizes);
+        }
         let cache_key = {
             use std::hash::{Hash, Hasher};
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -3000,6 +3034,18 @@ impl WebView {
             // viewport rounded
             (viewport_w as u32).hash(&mut hasher);
             (viewport_h as u32).hash(&mut hasher);
+            // @container: hash container velikosti - pri zmene (resize containeru)
+            // re-cascade (jinak cache HIT = stale @container po ustaleni resize).
+            if uses_container {
+                let mut keys: Vec<usize> = container_sizes.keys().copied().collect();
+                keys.sort_unstable();
+                for k in keys {
+                    k.hash(&mut hasher);
+                    let (w, h) = container_sizes[&k];
+                    (w as u32).hash(&mut hasher);
+                    (h as u32).hash(&mut hasher);
+                }
+            }
             // stylesheets - cheap identity (len + first rule count)
             self.stylesheets.len().hash(&mut hasher);
             for s in &self.stylesheets {
@@ -3018,8 +3064,13 @@ impl WebView {
             let host_id = std::rc::Rc::as_ptr(&doc.root) as usize as u64;
             let dom_ver = self.interpreter.as_ref().map(|i| i.dom_style_version()).unwrap_or(0);
             crate::browser::cascade::set_cascade_ctx(host_id, dom_ver);
-            let m = std::rc::Rc::new(crate::browser::cascade::cascade_with_viewport(
-                &doc.root, &self.stylesheets, viewport_w, viewport_h));
+            let m = std::rc::Rc::new(if uses_container {
+                crate::browser::cascade::cascade_with_container_sizes(
+                    &doc.root, &self.stylesheets, viewport_w, viewport_h, &container_sizes)
+            } else {
+                crate::browser::cascade::cascade_with_viewport(
+                    &doc.root, &self.stylesheets, viewport_w, viewport_h)
+            });
             self.cascade_cache_key = Some(cache_key);
             self.cascade_cache_value = Some(m.clone());
             // PROFILE: log breakdown pokud cascade > 10ms.
@@ -3402,6 +3453,44 @@ impl WebView {
         // Save clean (offsets set, children un-shifted) - hit_test pres
         // pak respektuje scroll_offset pro coord adjustment.
         self.last_layout_root = Some(layout_root.clone());
+        // @container konvergence: cascade tohoto framu pouzila container_sizes z
+        // PREDCHOZIHO layoutu. Ted (po novem layoutu) prepocti aktualni container
+        // velikosti; pokud se lisi od pouzitych -> force dirty (dalsi frame
+        // re-cascade s aktualnimi = @container reaguje na resize). Bez tohoto by
+        // frame-skip (po ustaleni resize nic dirty) zustal na stale @container.
+        if uses_container {
+            let mut now_sizes: std::collections::HashMap<usize, (f32, f32)> =
+                std::collections::HashMap::new();
+            fn collect2(bx: &crate::browser::layout::LayoutBox,
+                styles: &crate::browser::cascade::StyleMap,
+                out: &mut std::collections::HashMap<usize, (f32, f32)>)
+            {
+                if let Some(node) = &bx.node {
+                    if let Some(props) = crate::browser::cascade::get_styles(styles, node) {
+                        if let Some(ct) = props.get("container-type") {
+                            if ct != "normal" && !ct.is_empty() {
+                                out.insert(std::rc::Rc::as_ptr(node) as usize,
+                                    (bx.rect.width, bx.rect.height));
+                            }
+                        }
+                    }
+                }
+                for ch in &bx.children { collect2(ch, styles, out); }
+            }
+            collect2(&layout_root, &style_map, &mut now_sizes);
+            // Porovnej s tim co cascade tento frame pouzila (rounded na px).
+            let differs = now_sizes.len() != container_sizes.len()
+                || now_sizes.iter().any(|(k, (w, h))| {
+                    match container_sizes.get(k) {
+                        Some((pw, ph)) => (*w as u32) != (*pw as u32) || (*h as u32) != (*ph as u32),
+                        None => true,
+                    }
+                });
+            if differs {
+                // Force dalsi frame (re-cascade s aktualnimi container_sizes).
+                self.dirty = true;
+            }
+        }
         // R-tree spatial hit index: LAZY build. Drive se buildil tady KAZDY
         // frame (i bez pohybu mysi) = zbytecna O(N log N) prace na animovanych
         // strankach. Ted jen invalidace - build az pri prvnim mouse-move dotazu

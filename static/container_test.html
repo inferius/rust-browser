@@ -1,0 +1,10 @@
+<!DOCTYPE html><html><head><style>
+body{margin:0;font-family:sans-serif;padding:20px;}
+.wrap{container-type:inline-size;border:3px solid #888;padding:10px;margin-bottom:16px;}
+.big{width:600px;} .small{width:300px;}
+.child{height:60px;background:#e00;color:#fff;font-size:20px;padding:10px;}
+@container (min-width: 500px){ .child{background:#0a0;} }
+</style></head><body>
+<div class="wrap big"><div class="child">A: container 600px (>=500 -> GREEN)</div></div>
+<div class="wrap small"><div class="child">B: container 300px (<500 -> RED)</div></div>
+</body></html>

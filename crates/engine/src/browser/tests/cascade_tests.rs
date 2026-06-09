@@ -3544,3 +3544,30 @@ fn hover_affected_set_includes_descendants() {
     assert!(set.contains(&tr_id), "tr (element s :hover rulem) musi byt v setu");
     assert!(set.contains(&td_id), "td (potomek) musi byt v setu - hover na nej trigguje tr:hover");
 }
+
+#[test]
+fn container_query_evaluates_against_container_size() {
+    // @container (min-width:500) - child v 600px containeru match (zeleny),
+    // v 300px ne (cerveny). Klic: vyhodnoceni proti CONTAINER size, ne viewport.
+    let doc = parse_html(
+        "<html><body>\
+         <div class=\"wrap big\"><div class=\"child\" id=\"a\">A</div></div>\
+         <div class=\"wrap small\"><div class=\"child\" id=\"b\">B</div></div>\
+         </body></html>", "");
+    let css = parse_stylesheet(
+        ".wrap{container-type:inline-size;} .child{background:red;} \
+         @container (min-width: 500px){ .child{background:green;} }");
+    // container_sizes: big wrap 600, small wrap 300.
+    let big = doc.root.find(|n| n.attr("class").as_deref() == Some("wrap big")).unwrap();
+    let small = doc.root.find(|n| n.attr("class").as_deref() == Some("wrap small")).unwrap();
+    let mut sizes = std::collections::HashMap::new();
+    sizes.insert(std::rc::Rc::as_ptr(&big) as usize, (600.0_f32, 80.0_f32));
+    sizes.insert(std::rc::Rc::as_ptr(&small) as usize, (300.0_f32, 80.0_f32));
+    let map = cascade::cascade_with_container_sizes(&doc.root, &[css], 1024.0, 768.0, &sizes);
+    let a = doc.root.find(|n| n.attr("id").as_deref() == Some("a")).unwrap();
+    let b = doc.root.find(|n| n.attr("id").as_deref() == Some("b")).unwrap();
+    let a_bg = cascade::get_styles(&map, &a).and_then(|s| s.get("background").cloned());
+    let b_bg = cascade::get_styles(&map, &b).and_then(|s| s.get("background").cloned());
+    assert_eq!(a_bg.as_deref(), Some("green"), "600px container >= 500 -> @container match");
+    assert_eq!(b_bg.as_deref(), Some("red"), "300px container < 500 -> bez @container");
+}

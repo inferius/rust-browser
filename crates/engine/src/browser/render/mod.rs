@@ -1884,6 +1884,14 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         .and_then(|bx| bx.node.clone())
                         .and_then(|n| crate::embed::webview::find_draggable_ancestor(&n))
                         .is_some();
+                    if std::env::var("RWE_INPUT_DBG").is_ok() {
+                        let tag = self.webview.as_ref().and_then(|w| w.last_layout_root())
+                            .and_then(|r| r.hit_test(self.mouse_x, self.mouse_y))
+                            .and_then(|b| b.node.clone())
+                            .and_then(|n| n.tag_name()).unwrap_or_else(|| "?".into());
+                        eprintln!("[SEL] MouseDown mouse=({:.0},{:.0}) hit={} on_grip={} on_drag={}",
+                            self.mouse_x, self.mouse_y, tag, on_resize_grip, on_draggable);
+                    }
                     if !on_resize_grip && !on_draggable {
                         self.page_sel_begin((self.mouse_x, self.mouse_y));
                     }

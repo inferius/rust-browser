@@ -1886,13 +1886,28 @@ fn compute_subtree_hash_uncached(node: &Rc<Node>, style_map: &StyleMap) -> u64 {
     // bez sortovani).
     if let Some(styles) = super::cascade::get_styles(style_map, node) {
         let mut style_xor = 0u64;
+        let mut uses_vp_units = false;
         for (k, v) in styles.iter() {
             let mut hh = ahash::AHasher::default();
             k.hash(&mut hh);
             v.hash(&mut hh);
             style_xor ^= hh.finish();
+            // Viewport-relativni jednotky (vw/vh/vmin/vmax/vi/vb/svh/lvh/dvh/...):
+            // hodnota je STRING ("90vw") nezavisla na viewportu -> bez tohoto by
+            // subtree LAYOUT_CACHE reuse-nul box vypocteny pro stary viewport po
+            // resize (= width:90vw / @container container-size se neprepocital).
+            if v.contains("vw") || v.contains("vh") || v.contains("vmin")
+                || v.contains("vmax") || v.contains("vi") || v.contains("vb") {
+                uses_vp_units = true;
+            }
         }
         style_xor.hash(&mut h);
+        // Pri viewport jednotkach zahrn aktualni viewport -> resize invaliduje fp.
+        if uses_vp_units {
+            let (vw, vh) = current_layout_viewport();
+            (vw as u32).hash(&mut h);
+            (vh as u32).hash(&mut h);
+        }
     }
     // Children subtree hashes (recursive - kazdy compute_subtree_hash je memoized)
     for child in node.children.borrow().iter() {
