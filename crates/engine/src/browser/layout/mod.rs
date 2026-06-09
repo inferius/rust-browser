@@ -1860,6 +1860,16 @@ fn compute_subtree_hash_uncached(node: &Rc<Node>, style_map: &StyleMap) -> u64 {
     id.hash(&mut h);
     if let Some(tag) = node.tag_name() {
         tag.hash(&mut h);
+        // Form-state attrs (value/checked) - meni se za behu (typing do inputu,
+        // toggle checkboxu) a ovlivnuji layout/paint (input value text, skryti
+        // ::placeholder, checkbox glyph). Bez nich subtree LAYOUT_CACHE fingerprint
+        // zustal stejny po editaci -> cache hit -> stale layout (psani neodstranilo
+        // placeholder, value text se nezobrazil). Hashujeme jen pro form elementy.
+        if matches!(tag.as_str(), "input" | "textarea" | "select" | "option") {
+            if let Some(v) = node.attr("value") { v.hash(&mut h); }
+            if let Some(c) = node.attr("checked") { c.hash(&mut h); }
+            if let Some(s) = node.attr("selected") { s.hash(&mut h); }
+        }
     }
     // Text node check - hash text obsahu (text uzly nemaji tag).
     // PERF: pres text_content_ref pro direct &str borrow (drive text_content()
@@ -1889,6 +1899,46 @@ fn compute_subtree_hash_uncached(node: &Rc<Node>, style_map: &StyleMap) -> u64 {
         compute_subtree_hash(child, style_map).hash(&mut h);
     }
     h.finish()
+}
+
+#[cfg(test)]
+mod subtree_hash_tests {
+    use super::*;
+    fn find_tag(n: &Rc<Node>, tag: &str) -> Option<Rc<Node>> {
+        if n.tag_name().as_deref() == Some(tag) { return Some(Rc::clone(n)); }
+        for c in n.children.borrow().iter() {
+            if let Some(f) = find_tag(c, tag) { return Some(f); }
+        }
+        None
+    }
+
+    #[test]
+    fn input_value_change_changes_subtree_hash() {
+        // Root cause forms bugu: bez value v hashi subtree LAYOUT_CACHE vracel
+        // stale layout po psani (placeholder nezmizel, value text se nezobrazil).
+        let doc = crate::browser::html_parser::parse_html(
+            "<html><body><input id=\"x\" value=\"A\"></body></html>", "");
+        let sheets: Vec<crate::browser::css_parser::Stylesheet> = Vec::new();
+        let map = crate::browser::cascade::cascade(&doc.root, &sheets);
+        let input = find_tag(&doc.root, "input").expect("input node");
+        let h1 = compute_subtree_hash_uncached(&input, &map);
+        input.attributes.borrow_mut().insert("value".to_string(), "AB".to_string());
+        let h2 = compute_subtree_hash_uncached(&input, &map);
+        assert_ne!(h1, h2, "zmena value attr musi zmenit subtree hash");
+    }
+
+    #[test]
+    fn input_checked_change_changes_subtree_hash() {
+        let doc = crate::browser::html_parser::parse_html(
+            "<html><body><input type=\"checkbox\" id=\"c\"></body></html>", "");
+        let sheets: Vec<crate::browser::css_parser::Stylesheet> = Vec::new();
+        let map = crate::browser::cascade::cascade(&doc.root, &sheets);
+        let input = find_tag(&doc.root, "input").expect("checkbox node");
+        let h1 = compute_subtree_hash_uncached(&input, &map);
+        input.attributes.borrow_mut().insert("checked".to_string(), "".to_string());
+        let h2 = compute_subtree_hash_uncached(&input, &map);
+        assert_ne!(h1, h2, "toggle checked musi zmenit subtree hash");
+    }
 }
 
 /// Pri border-collapse:collapse na <table> child td/th get 1px border default.

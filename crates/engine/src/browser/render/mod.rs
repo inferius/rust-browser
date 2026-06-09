@@ -2875,6 +2875,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     // zije v NodeData.input_cursor / input_anchor.
                     {
                         let focused_id = super::cascade::get_focused_node();
+                        if std::env::var("RWE_INPUT_DBG").is_ok() {
+                            eprintln!("[KEYIN] focused_id={:?} dt_focus_text={} ctrl={}",
+                                focused_id, self.devtools.focus.is_text_input(), self.modifiers.control_key());
+                        }
                         if let Some(fid) = focused_id {
                             if !false && !false
                                 && !self.devtools.focus.is_text_input()
@@ -2887,18 +2891,44 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 }).unwrap_or((None, std::rc::Rc::new(std::cell::RefCell::new(crate::browser::dom::Document::empty(String::new())))));
                                 if let Some(node) = node_opt {
                                     let tag = node.tag_name().unwrap_or_default();
+                                    if std::env::var("RWE_INPUT_DBG").is_ok() {
+                                        eprintln!("[KEYIN] node tag={}", tag);
+                                    }
                                     if matches!(tag.as_str(), "input" | "textarea") {
                                         use crate::browser::dom_input_buffer::DomInputBuffer;
                                         use crate::browser::render::text_input::{dispatch_text_key, TextKeyOutcome};
                                         let ctrl = self.modifiers.control_key();
                                         let shift = self.modifiers.shift_key();
-                                        let mut buf = DomInputBuffer::new(node, doc_rc);
+                                        // Hodnota PRED editaci - detekce realne mutace (vs arrow/home).
+                                        let value_before = node.attr("value").unwrap_or_default();
+                                        let mut buf = DomInputBuffer::new(std::rc::Rc::clone(&node), doc_rc);
                                         let outcome = dispatch_text_key(&mut buf, &key_event.logical_key, ctrl, shift);
                                         let consumed = !matches!(outcome, TextKeyOutcome::Unhandled);
+                                        if std::env::var("RWE_INPUT_DBG").is_ok() {
+                                            eprintln!("[KEYIN] dispatch outcome consumed={} key={:?}", consumed, key_event.logical_key);
+                                        }
                                         if matches!(outcome, TextKeyOutcome::Submit) {
                                             // TODO form submit (najit ancestor form).
                                         }
                                         drop(buf); // Drop -> commit_back value attr.
+                                        // Pri realne zmene value: bump dom_version (jinak
+                                        // display stale = "psani se zpozdenim", placeholder
+                                        // nezmizi) + fire 'input' event (jinak oninput /
+                                        // JS-driven UI se nikdy neaktualizuje). Driv
+                                        // commit_back jen tise zapsal attr.
+                                        let value_after = node.attr("value").unwrap_or_default();
+                                        if value_after != value_before {
+                                            if let Some(interp) = self.interp_mut() {
+                                                interp.bump_dom_version_layout();
+                                                let mut ev = crate::interpreter::JsObject::new();
+                                                ev.set("type".into(), crate::interpreter::JsValue::Str("input".into()));
+                                                ev.set("target".into(), crate::interpreter::JsValue::DomNode(
+                                                    std::rc::Rc::clone(&node)));
+                                                let ev_val = crate::interpreter::JsValue::Object(
+                                                    std::rc::Rc::new(std::cell::RefCell::new(ev)));
+                                                let _ = interp.dispatch_event(&node, "input", ev_val);
+                                            }
+                                        }
                                         if consumed {
                                             self.render();
                                             return;

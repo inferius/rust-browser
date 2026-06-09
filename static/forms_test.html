@@ -1,0 +1,14 @@
+<!DOCTYPE html><html><head><style>
+body{margin:0;font-family:sans-serif;padding:20px;}
+input,select{display:block;margin:10px 0;font-size:18px;}
+#txt{width:300px;height:30px;border:2px solid #888;padding:4px;}
+#rng{width:300px;accent-color:#e8ff6a;}
+#chk{width:24px;height:24px;accent-color:#1a73e8;}
+#status{font-size:20px;color:#d00;margin-top:20px;}
+</style></head><body>
+<input type="text" id="txt" placeholder="Pis sem..."
+  oninput="document.getElementById('status').textContent='VALUE: '+this.value;">
+<input type="range" id="rng" min="0" max="100" value="40">
+<input type="checkbox" id="chk" checked>
+<div id="status">status</div>
+</body></html>
