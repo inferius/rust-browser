@@ -1256,6 +1256,47 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         })
     }
 
+    // Mapuje CSS `cursor` property hodnotu na winit CursorIcon. None pro
+    // `auto`/neznamé (= fallback na InteractiveKind/text/default).
+    fn css_cursor_to_icon(v: &str) -> Option<winit::window::CursorIcon> {
+        use winit::window::CursorIcon as C;
+        // url(...) fallback hodnoty: vezmi posledni keyword za carkou.
+        let kw = v.split(',').next_back().unwrap_or(v).trim().to_ascii_lowercase();
+        Some(match kw.as_str() {
+            "auto" => return None,
+            "default" => C::Default,
+            "pointer" => C::Pointer,
+            "text" | "vertical-text" => C::Text,
+            "move" => C::Move,
+            "grab" => C::Grab,
+            "grabbing" => C::Grabbing,
+            "not-allowed" | "no-drop" => C::NotAllowed,
+            "crosshair" | "cell" => C::Crosshair,
+            "help" => C::Help,
+            "wait" => C::Wait,
+            "progress" => C::Progress,
+            "none" => return None, // skryti kurzoru neresime - nech default
+            "ew-resize" => C::EwResize,
+            "ns-resize" => C::NsResize,
+            "nesw-resize" => C::NeswResize,
+            "nwse-resize" => C::NwseResize,
+            "col-resize" => C::ColResize,
+            "row-resize" => C::RowResize,
+            "n-resize" | "s-resize" => C::NsResize,
+            "e-resize" | "w-resize" => C::EwResize,
+            "ne-resize" | "sw-resize" => C::NeswResize,
+            "nw-resize" | "se-resize" => C::NwseResize,
+            "zoom-in" => C::ZoomIn,
+            "zoom-out" => C::ZoomOut,
+            "copy" => C::Copy,
+            "alias" => C::Alias,
+            "context-menu" => C::ContextMenu,
+            "all-scroll" => C::AllScroll,
+            "wait-progress" => C::Progress,
+            _ => return None,
+        })
+    }
+
     struct App {
         // html/css/base_url/current_path fields smazany (polarity invert
         // kompletni). Initial data drzeny v `initial: Option<InitialData>`
@@ -3489,7 +3530,36 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             }
             // 2. Page main scrollbar -> Default. layout_root dead na App vrstve;
             // scrollbar cursor hit-test patri do WebView pipeline.
-            // 3. Page element classify pres InteractiveKind.
+            // 3. Page element classify - CSS `cursor` property MA PRIORITU pred
+            // InteractiveKind defaultem. Drive se CSS cursor uplne ignoroval ->
+            // `cursor:grab/move/not-allowed/...` nefungovaly, draggable divy nemely
+            // grab kurzor. (cursor je inherited -> hit box ma efektivni hodnotu.)
+            // CSS cursor: walk root->mouse point, deepest set cursor wins (cursor
+            // je inherited -> propaguj do anonymnich text boxu co nemaji vlastni).
+            // Bez walku by hit na text uzlu (bez cursor) vratil Text misto grab.
+            if let Some(root) = self.webview.as_ref().and_then(|w| w.last_layout_root()) {
+                fn css_cursor_at(b: &super::layout::LayoutBox, mx: f32, my: f32,
+                                 inherited: Option<String>) -> Option<String> {
+                    if mx < b.rect.x || mx >= b.rect.x + b.rect.width
+                        || my < b.rect.y || my >= b.rect.y + b.rect.height {
+                        return None;
+                    }
+                    let cur = b.cursor.clone().or(inherited);
+                    let cx = mx + b.scroll_offset_x;
+                    let cy = my + b.scroll_offset_y;
+                    for ch in &b.children {
+                        if let Some(c) = css_cursor_at(ch, cx, cy, cur.clone()) {
+                            return Some(c);
+                        }
+                    }
+                    cur
+                }
+                if let Some(css) = css_cursor_at(root, self.mouse_x, self.mouse_y, None) {
+                    if let Some(icon) = css_cursor_to_icon(&css) {
+                        return icon;
+                    }
+                }
+            }
             if let Some(t) = target {
                 if let Some(node) = &t.node {
                     let kind = crate::browser::interactive::classify(node);
