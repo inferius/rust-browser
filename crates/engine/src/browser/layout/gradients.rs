@@ -171,7 +171,21 @@ fn parse_stop_part(trimmed: &str, i: usize, n: usize) -> Vec<(f32, [u8; 4])> {
         (trimmed[..space_idx].trim().to_string(), pct / 100.0)
     } else {
         let default_offset = if n <= 1 { 0.0 } else { i as f32 / (n - 1) as f32 };
-        (trimmed.to_string(), default_offset)
+        // Pixelove pozice ("color px" / "color px1 px2"): nelze resolvnout na
+        // fraction bez velikosti boxu (gradient line length) -> extrahuj jen
+        // color (leading tokeny pred prvnim cislem/px) + default offset. Bez
+        // tohoto parse_color celeho "#000 0 10px" selhal -> stop dropnut ->
+        // repeating-linear/radial s px = blank box.
+        let toks: Vec<&str> = trimmed.split_whitespace().collect();
+        let color_end = toks.iter().position(|t| {
+            t.ends_with("px")
+                || t.chars().next().map(|c| c.is_ascii_digit() || c == '-' || c == '.').unwrap_or(false)
+        }).unwrap_or(toks.len());
+        if color_end == 0 {
+            (trimmed.to_string(), default_offset)
+        } else {
+            (toks[..color_end].join(" "), default_offset)
+        }
     };
     match parse_color(&color_str) {
         Some(c) => vec![(offset, c)],
@@ -227,4 +241,28 @@ pub fn parse_linear_gradient(s: &str) -> Option<(f32, Vec<(f32, [u8; 4])>)> {
     }
     if stops.is_empty() { return None; }
     Some((angle, stops))
+}
+
+#[cfg(test)]
+mod px_stop_tests {
+    use super::*;
+
+    #[test]
+    fn repeating_linear_with_px_stops_parses_colors_not_blank() {
+        // px pozice nelze resolvnout bez box size, ale color musi byt extrahovan
+        // (jinak parse_color("#000 0 10px") selze -> 0 stops -> blank box).
+        let g = parse_any_gradient("repeating-linear-gradient(45deg, #000000 0 10px, #ffffff 10px 20px)")
+            .expect("px-stop gradient se musi naparsovat");
+        assert!(g.stops.len() >= 2, "musi mit aspon 2 stops (color extrahovan z px), ma {}", g.stops.len());
+        // Prvni stop cerny, posledni bily.
+        assert_eq!(g.stops.first().unwrap().1, [0, 0, 0, 255]);
+        assert_eq!(g.stops.last().unwrap().1, [255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn linear_px_single_stop_extracts_color() {
+        let g = parse_linear_gradient("linear-gradient(to right, red 0px, blue 100px)")
+            .expect("px linear parse");
+        assert_eq!(g.1.len(), 2, "2 barevne stopy");
+    }
 }

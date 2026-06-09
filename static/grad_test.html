@@ -1,0 +1,21 @@
+<!DOCTYPE html><html><head><style>
+body{margin:0;font-family:sans-serif;padding:16px;}
+.g{width:200px;height:90px;margin:8px;display:inline-block;color:#fff;font-size:13px;padding:6px;}
+.lin{background:linear-gradient(45deg,#f00,#00f);}
+.lin3{background:linear-gradient(to right,#f00,#0f0,#00f);}
+.rad{background:radial-gradient(circle,#ff0,#f0f);}
+.radpos{background:radial-gradient(circle at top left,#fff,#1a73e8);}
+.conic{background:conic-gradient(#f00,#0f0,#00f,#f00);}
+.conicpos{background:conic-gradient(from 90deg at 30% 30%,#f00,#ff0,#0f0,#00f,#f00);}
+.repeat{background:repeating-linear-gradient(45deg,#000 0 10px,#fff 10px 20px);}
+.radstops{background:radial-gradient(circle,#f00 0%,#f00 40%,#00f 60%);}
+</style></head><body>
+<div class="g lin">linear 45deg</div>
+<div class="g lin3">linear 3-stop</div>
+<div class="g rad">radial circle</div>
+<div class="g radpos">radial at top-left</div>
+<div class="g conic">conic</div>
+<div class="g conicpos">conic from 90deg</div>
+<div class="g repeat">repeating-linear</div>
+<div class="g radstops">radial stops 40/60</div>
+</body></html>
