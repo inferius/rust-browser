@@ -748,6 +748,9 @@ pub struct Interpreter {
     pub console_log_args: Rc<RefCell<Vec<Vec<console_args::ConsoleArg>>>>,
     /// Canvas 2D operations: canvas DOM node ptr -> ops sequence.
     pub canvas_ops: Rc<RefCell<std::collections::HashMap<usize, Vec<crate::browser::paint::CanvasOp>>>>,
+    /// Canvas mutation generation - inkrementuje pri kazde canvas op (kresleni).
+    /// WebView render_via to porovnava -> dirty (canvas nebumpa dom_version).
+    pub canvas_gen: Rc<std::cell::Cell<u64>>,
     /// WebGL contexty per canvas DOM node ptr -> sdileny WebGLState.
     pub webgl_states: Rc<RefCell<std::collections::HashMap<usize, Rc<RefCell<WebGLState>>>>>,
     /// Network log capture: (url, status).
@@ -1008,6 +1011,7 @@ impl Interpreter {
             network_log,
             response_bodies,
             canvas_ops: Rc::new(RefCell::new(std::collections::HashMap::new())),
+            canvas_gen: Rc::new(std::cell::Cell::new(0)),
             webgl_states: Rc::new(RefCell::new(std::collections::HashMap::new())),
             custom_elements,
             custom_element_instances: Rc::new(RefCell::new(std::collections::HashMap::new())),
@@ -1078,6 +1082,12 @@ impl Interpreter {
     #[inline]
     pub fn dom_layout_version(&self) -> u64 {
         self.dom_layout_version.get()
+    }
+
+    /// Canvas mutation generation - WebView porovnava -> repaint pri kresleni.
+    #[inline]
+    pub fn canvas_generation(&self) -> u64 {
+        self.canvas_gen.get()
     }
 
     /// Aktualni DOM mutation counter. DevTools host porovnava proti

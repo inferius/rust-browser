@@ -24,6 +24,7 @@ fn style_color_with_alpha(obj: &Rc<RefCell<JsObject>>, prop: &str) -> [u8; 4] {
 pub(crate) fn create_canvas_2d_context(
     canvas_ptr: usize,
     ops_storage: Rc<RefCell<std::collections::HashMap<usize, Vec<crate::browser::paint::CanvasOp>>>>,
+    canvas_gen: Rc<std::cell::Cell<u64>>,
 ) -> JsValue {
     use crate::browser::paint::CanvasOp;
 
@@ -39,7 +40,12 @@ pub(crate) fn create_canvas_2d_context(
 
     let push_op = {
         let storage = Rc::clone(&ops_storage);
+        let cgen = Rc::clone(&canvas_gen);
         move |op: CanvasOp| {
+            // Generation bump = kazda canvas op zmena -> WebView render_via to
+            // detekuje (canvas ops nebumpaji dom_version) -> dirty -> repaint.
+            // Bez toho by RAF-driven canvas kresleni neprekreslilo pri frame-skip.
+            cgen.set(cgen.get().wrapping_add(1));
             let mut s = storage.borrow_mut();
             let v = s.entry(canvas_ptr).or_default();
             // Safety cap - kdyby kreslici loop nikdy nevolal clear/full-fillRect,
@@ -99,12 +105,14 @@ pub(crate) fn create_canvas_2d_context(
     {
         let push = push_op.clone();
         let storage = Rc::clone(&ops_storage);
+        let cgen = Rc::clone(&canvas_gen);
         obj_rc.borrow_mut().set("clearRect".into(), native("clearRect", move |args| {
             let mut it = args.into_iter();
             let x = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
             let y = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
             let w = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
             let h = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
+            cgen.set(cgen.get().wrapping_add(1));
             // Full-canvas clear (origin) = RESET op historie. Bez tohoto buffer
             // rostl do nekonecna (kazdy RAF frame pushne desitky ops) -> paint
             // replayuje celou historii = leak + progresivni zpomaleni. Po clearu

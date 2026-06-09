@@ -219,6 +219,9 @@ pub struct WebView {
     /// (JS DOM mutation pres setAttribute/appendChild/innerHTML potrebuje
     /// repaint i bez explicitniho input event).
     pub(crate) last_render_dom_version: u64,
+    /// Canvas generation pri poslednim renderu - detekce canvas kresleni
+    /// (canvas ops nebumpaji dom_version) -> dirty -> repaint.
+    pub(crate) last_render_canvas_gen: u64,
     /// Cascade cache: hash key (dom_version, hovered_id, focused_id, viewport)
     /// -> resolved StyleMap. Pri shode reuse Rc clone. Bez cache by hover
     /// pohyb mysi vyvolal cascade walk celeho DOMu kazdy frame (2400 LOC HTML
@@ -700,6 +703,7 @@ impl WebView {
             nav_id: 0,
             collected_sources: Vec::new(),
             last_render_dom_version: 0,
+            last_render_canvas_gen: 0,
             cascade_cache_key: None,
             cascade_cache_value: None,
             pseudo_map_cache: None,
@@ -2565,6 +2569,14 @@ impl WebView {
                 self.dirty = true;
                 self.last_render_dom_version = cur;
             }
+            // Canvas kresleni (RAF) - generation diff -> dirty (canvas ops
+            // nebumpaji dom_version). Robustni proti stabilnimu poctu ops
+            // (clearRect reset -> stejny pocet ale jina kresba).
+            let cgen = interp.canvas_generation();
+            if cgen != self.last_render_canvas_gen {
+                self.dirty = true;
+                self.last_render_canvas_gen = cgen;
+            }
         }
         // PERF: dirty skip - pokud nic se nezmenilo, vrat cached target_view
         // bez full cascade/layout/paint pipeline. Bez tohoto by render_via
@@ -2579,7 +2591,10 @@ impl WebView {
         //
         // Animations + smooth scroll + focused input -> NEN0 dirty, ale potreba
         // tick. Check zvlastne aktivni animace nez full skip.
-        let needs_tick = self.needs_continuous_render();
+        // Frame-skip gate: needs_animation_render (NE needs_continuous_render).
+        // Interval/RAF uz drained vyse; pokud zmenily DOM/canvas -> dirty.
+        // Pokud NE (idle setInterval/measureFps) -> skip layout+paint = levne.
+        let needs_tick = self.needs_animation_render();
         if !self.dirty && !needs_tick {
             // Reset profilers - jinak title bar drzi historickou hodnotu z
             // prvni render (uvadi v omyl user diagnostiku).
@@ -3981,6 +3996,18 @@ impl WebView {
     /// Nepatri sem: element scroll, hover state, DOM mutace - ty set dirty=true
     /// pri vzniku a render single frame. Continuous loop neni potreba.
     pub fn needs_continuous_render(&self) -> bool {
+        self.needs_animation_render()
+            || self.has_pending_intervals()
+            || self.has_pending_raf()
+    }
+
+    /// Potreba FULL render (layout+paint) tento frame i bez dirty: CSS anim/
+    /// transition/smooth-scroll/caret = meni visual KAZDY frame. NEzahrnuje
+    /// intervaly/RAF - ty se drainuji v render_via PRED frame-skip a pokud
+    /// callback neco zmenil, dirty se nastavi (dom_version/canvas_gen diff).
+    /// Bez tohoto rozdeleni full render kazdy frame jen kvuli setInterval/RAF
+    /// co nic nemeni = devtools/stranka <30 FPS i kdyz se NIC nedeje.
+    pub fn needs_animation_render(&self) -> bool {
         !self.active_animations.is_empty()
             || !self.active_transitions.is_empty()
             || self.scroll_anim_y.is_some()
@@ -3988,8 +4015,6 @@ impl WebView {
             || (self.scroll_target_y - self.scroll_y).abs() > 0.5
             || (self.scroll_target_x - self.scroll_x).abs() > 0.5
             || self.focused_is_input()
-            || self.has_pending_intervals()
-            || self.has_pending_raf()
     }
 
     /// Nastav zoom level. Stejne jako resize trigger relayout.

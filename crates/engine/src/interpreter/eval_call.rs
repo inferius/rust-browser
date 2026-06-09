@@ -1563,7 +1563,7 @@ impl Interpreter {
                                 return Ok(webgl::create_webgl_context(state));
                             }
                             // Default 2D
-                            let ctx = canvas::create_canvas_2d_context(canvas_ptr, Rc::clone(&self.canvas_ops));
+                            let ctx = canvas::create_canvas_2d_context(canvas_ptr, Rc::clone(&self.canvas_ops), Rc::clone(&self.canvas_gen));
                             return Ok(ctx);
                         }
                         "scrollIntoView" => {
