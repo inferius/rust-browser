@@ -274,9 +274,13 @@ fn apply_post_children_pseudos(
         }
     }
 
-    // ::placeholder - pro input/textarea: virtualni text child s placeholder textem
+    // ::placeholder - pro input/textarea: virtualni text child s placeholder textem.
+    // Jen kdyz je value PRAZDNE (:placeholder-shown) - jinak placeholder zustaval
+    // viditelny i kdyz user psal (psani neodstranilo placeholder).
     let is_input_like = matches!(bx.tag.as_deref(), Some("input") | Some("textarea"));
-    if is_input_like {
+    let value_empty = node.attr("value").map(|v| v.is_empty()).unwrap_or(true)
+        && node.text_content().trim().is_empty(); // textarea text content
+    if is_input_like && value_empty {
         if let Some(placeholder_text) = node.attr("placeholder") {
             let ph_styles = super::cascade::get_pseudo_styles(pseudo_map, node, "placeholder");
             let color = ph_styles

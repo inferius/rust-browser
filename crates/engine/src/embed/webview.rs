@@ -3462,10 +3462,14 @@ impl WebView {
                 &layout_root, &canvas_ops, &mut display_list);
         }
 
-        // 3-caret. Blinking caret na focused <input>/<textarea>.
+        // 3-caret. Blinking caret jen na focused TEXT-EDITABLE input/textarea.
+        // NE checkbox/radio/button/range (tam se objevoval text kursor po kliku).
         if let Some(focused) = self.focused_dom_node() {
-            let is_input = matches!(focused.tag_name().as_deref(),
-                Some("input") | Some("textarea"));
+            let typ = focused.attr("type").unwrap_or_else(|| "text".into()).to_lowercase();
+            let is_input = focused.tag_name().as_deref() == Some("textarea")
+                || (focused.tag_name().as_deref() == Some("input")
+                    && matches!(typ.as_str(), "text" | "email" | "password" | "url"
+                        | "tel" | "search" | "number" | ""));
             if is_input {
                 let nid = std::rc::Rc::as_ptr(&focused) as usize;
                 let value = focused.attr("value").unwrap_or_default();
