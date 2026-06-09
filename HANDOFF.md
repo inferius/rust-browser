@@ -154,6 +154,33 @@ jagged AA, #32 typografie (vertical text/column-count/blink), #34 inline SVG,
 DnD text-selection prosvita (real .draggable maji user-select:none ale engine ho
 mozna neresprektuje pri selekci), #58 flex row-gap.
 
+### Batch 2 (pokracovani N+35) - 2 dalsi fixy + extensivni verifikace
+
+11. **Vertical text** (#32 "v hajzlu") - vertical-rl block bral full parent width
+    (1218px) -> text positioned vpravo MIMO obrazovku = prazdny box. Fix
+    (layout_block_vertical 2-pass): upright char-stacking (\n mezi znaky) +
+    shrink-to-fit box width. Renderuje misto prazdne.
+12. **Gradienty px stops** (#25) - parse_stop_part nezvladal px pozice (#000 0
+    10px) -> parse_color cele selhalo -> 0 stops -> repeating-linear BLANK. Fix:
+    extrahuj color z leading tokenu (px nelze na fraction bez box size). Renderuje
+    misto blank.
+
+OVERENO ZE FUNGUJE (ne bug, stiznost stale/specificka): flex row-gap (wrap +
+flex-direction:column), CSS animace (transform translateX ball se hybe x100->x280,
+opacity), text-decoration (underline/overline/line-through/wavy/dotted/thick/
+text-shadow/multi vse renderuje), filtry (blur/drop-shadow/brightness/combo),
+gradienty (linear/radial/conic/positioned). column-count FUNGUJE pro multi-child
+(layout_block_multicol distribuuje child boxy) ale NE single text block (line-level
+fragmentace - inline wrapuje za render time = architektura).
+
+DEFERRED (velke/rizikove): box-sizing content-box (POTVRZEN bug: width:200 pad:50
+-> rect 200 misto 300; ALE engine-test pouziva *{box-sizing:border-box} = engine
+chovani sedi -> fix bezpecny ale velky/risk pro content-box stranky), #1 backdrop-
+filter blur (header je translucent ale blur+sampling scrolled content za hlavickou
+chybi = layer backdrop sampling jako mix-blend ale s blur, ~100 LOC + risk),
+column-count single-text (line fragmentace), IO inner-scroll coords, MutationObs
+styling (specificke demo), canvas persistent bitmap.
+
 ## Session N+34: PERF - canvas <1FPS, calc-on-resize, 3-tier version (113->167 FPS)
 
 User (chyby-rbro v3): "Zobrazeni devtools nebo canvas api extreme zpomali az na
