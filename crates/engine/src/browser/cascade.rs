@@ -595,7 +595,17 @@ pub fn collect_hover_affected_set(
             let m = matches_selector(node, sel);
             HOVERED_CHAIN.with(|c| *c.borrow_mut() = prev_chain);
             if m {
-                affected.insert(own);
+                // Pridej node + VSECHNY potomky. Hovered_id z hit-testu je
+                // nejhlubsi box pod kurzorem (potomek), ne element s :hover rulem.
+                // Napr. tr:hover: rule je na <tr>, ale hovered_id je <td>/text uvnitr.
+                // Bez potomku v setu dirty-on-hover check (hover_affected_set.
+                // contains(hovered_id)) selze -> hover nikdy nemarkne dirty ->
+                // zadny re-render -> hover efekt se nezobrazi (table row hover dead).
+                fn add_subtree(n: &Rc<Node>, set: &mut std::collections::HashSet<usize>) {
+                    set.insert(Rc::as_ptr(n) as usize);
+                    for ch in n.children.borrow().iter() { add_subtree(ch, set); }
+                }
+                add_subtree(node, &mut affected);
                 break;
             }
         }

@@ -3103,8 +3103,21 @@ impl WebView {
             (viewport_w as u32),
             (viewport_h as u32),
         );
-        let mut layout_root = if Some(layout_key) == self.layout_cache_key
+        // cascade_was_miss => style_map se zmenil (hover/focus/active/class).
+        // layout_fingerprint zamerne VYNECHAVA paint props (background/color) kvuli
+        // perf - ale ty se BAKUJI do LayoutBox pri layoutu. Pri cache HIT na layout
+        // by se reuse-nul strom se STALE baked bg -> hover bg se neaplikoval / nezmizel
+        // (sticky :hover na table row). Pri cascade zmene proto force re-layout;
+        // subtree LAYOUT_CACHE (fingerprint vc. vsech props) rebuildne JEN zmenene
+        // podstromy (hovered/unhovered radek), zbytek reuse = levne.
+        let layout_hit = Some(layout_key) == self.layout_cache_key
             && self.last_layout_root.is_some()
+            && !cascade_was_miss;
+        if std::env::var("RWE_HOVER_DBG").is_ok() {
+            eprintln!("[HOV] hovered={:?} cascade_miss={} layout_hit={} layout_fp={}",
+                self.hovered_node_local, cascade_was_miss, layout_hit, layout_fp);
+        }
+        let mut layout_root = if layout_hit
         {
             // Cache hit - MOVE (take) tree z predchoziho framu misto clone.
             // PERF: last_layout_root se stejne za chvili prepise novym clonem

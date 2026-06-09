@@ -3527,3 +3527,20 @@ fn cascade_typed_scroll_snap_type_raw() {
     let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
     assert_eq!(cs.scroll_snap_type, "x mandatory");
 }
+
+#[test]
+fn hover_affected_set_includes_descendants() {
+    // tr:hover rule je na <tr>, ale hover hit-test vraci <td>/text potomek.
+    // collect_hover_affected_set musi zahrnout i potomky, jinak dirty-on-hover
+    // check (hover_affected_set.contains(hovered_id)) selze -> hover dead.
+    let doc = parse_html(
+        "<html><body><table><tbody><tr><td>cell</td></tr></tbody></table></body></html>", "");
+    let css = parse_stylesheet("tr:hover { background: red; }");
+    let set = cascade::collect_hover_affected_set(&doc.root, &[css]);
+    let tr = doc.root.find(|n| n.tag_name().as_deref() == Some("tr")).unwrap();
+    let td = doc.root.find(|n| n.tag_name().as_deref() == Some("td")).unwrap();
+    let tr_id = std::rc::Rc::as_ptr(&tr) as usize;
+    let td_id = std::rc::Rc::as_ptr(&td) as usize;
+    assert!(set.contains(&tr_id), "tr (element s :hover rulem) musi byt v setu");
+    assert!(set.contains(&td_id), "td (potomek) musi byt v setu - hover na nej trigguje tr:hover");
+}
