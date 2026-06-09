@@ -93,19 +93,23 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         let (vw, vh) = crate::browser::layout::current_layout_viewport();
         for &i in &in_flow {
             let ch = &mut bx.children[i];
-            if ch.explicit_width.is_none() {
-                if let Some(calc) = ch.width_calc.clone() {
-                    ch.explicit_width = Some(crate::browser::layout::parse_length_ctx(&calc, vw, vh, inner_w));
-                }
+            // VZDY overwrite (ne jen pri is_none) - subtree cache persistuje
+            // explicit_width z minuleho layoutu -> po RESIZE by zustala stara
+            // calc hodnota (kriticky bug: calc(100%-x) se neprepocita po resize).
+            if let Some(calc) = ch.width_calc.clone() {
+                ch.explicit_width = Some(crate::browser::layout::parse_length_ctx(&calc, vw, vh, inner_w));
             }
-            if ch.explicit_height.is_none() && bx.rect.height > 0.0 {
+            if bx.rect.height > 0.0 {
                 if let Some(calc) = ch.height_calc.clone() {
                     ch.explicit_height = Some(crate::browser::layout::parse_length_ctx(&calc, vw, vh, inner_h));
                 }
             }
             // aspect-ratio + definite width -> definite height (jinak flex cross-
-            // stretch prepise aspect-ratio: ar-16x9 width:120 -> 67.5, ne stretch 80).
-            if ch.explicit_height.is_none() && ch.height_calc.is_none() {
+            // stretch prepise aspect-ratio). is_none gate: fixed-width aspect ma
+            // stabilni height pres resize (cache OK); pri width_calc (dynamicka
+            // width) re-derive vzdy (width se prepocitala vyse).
+            let dyn_width = ch.width_calc.is_some() || ch.width_pct.is_some();
+            if (ch.explicit_height.is_none() || dyn_width) && ch.height_calc.is_none() {
                 if let (Some(w), Some(ar)) = (ch.explicit_width, ch.aspect_ratio) {
                     if ar > 0.0 {
                         ch.explicit_height = Some((w / ar).max(0.0));
