@@ -59,6 +59,72 @@ plynule + scrollbar/overlay NEzmizel). Revert pri regresi.
 urgence; fast path je velka hot-path zmena s klesajicim perceptualnim prinosem.
 Ale ma hodnotu i mimo FPS (spravna architektura, nizsi spotreba).
 
+## Session N+35: chyby-rbro v3 systematicky - mix-blend, keyboard, cursor, overflow, forms, hover
+
+User mandat: "Stahni si chromium/ff zdrojaky a systematicky projdi cely dokument
+a opravuj to konecne vsechno." + verifikacni lekce: overovat REALNOU interakci
+(SendInput hw injection + traces + deterministicke testy), ne jen rendering.
+
+Verifikacni harness (PowerShell, v %TEMP%): cap2.ps1 (PrintWindow capture, match
+titulku - POZOR pouzij "Rust" ne "Engine"! Chrome ma engine-test otevreny =
+"Engine Test Suite" koliduje. rwe FPS titulek = "...- N FPS"), inject.ps1 (klik+
+key), typeseq.ps1 (klik+type string pres VkKeyScan), wheel.ps1 (klik+wheel -
+POZOR [uint32](-120) HAZI vyjimku, pouzij two's-complement 4294967176),
+move.ps1 (hover move + SetForegroundWindow). Traces gated: RWE_CURSOR_DBG,
+RWE_SCROLL_DBG, RWE_INPUT_DBG, RWE_HOVER_DBG.
+
+Opraveno (6 commitu, vse SendInput-overeno):
+
+1. **mix-blend-mode** (#28 "cela jina") - byl jen identity alpha fallback. Real
+   blend pres LAYER compose (jak Chrome/FF: mix-blend = stacking context = vlastni
+   layer, blend pri kompozici pres backdrop). is_layer_boundary += mix-blend;
+   LayerNode.blend_mode; BLEND_COMPOSE_SHADER (compose geom + dst sample + plna
+   CSS Compositing-1 formule, un-premultiply); compose_blend_layer_into_encoder
+   (snapshot target_texture -> offscreen_tex_b -> blend pass). paint: suppress
+   BlendBegin kdyz box JE layer root (jinak identity fallback cleruje layer tex
+   na grey = border-radius rohy neprusvitne).
+
+2. **Keyboard events** (#26 "vubec nefunguji") - engine browser-mode KeyboardInput
+   handler NIKDY neforwardoval page keydown/keyup do webview (jen chrome/devtools).
+   Fix: logical_key_to_js() + forward KeyDown (po chrome checks) + KeyUp. Plus
+   nearest_focusable() walk-up: klik na <span> uvnitr <div tabindex=0> focusuje
+   div (ne span) - jinak keydown nedispatchnut.
+
+3. **Cursor** (#5/#13 I-beam nad textem, pointer nad button) - compute_cursor_icon
+   se volal s target=None ("layout_root dead na App"). Fix: hit-test webview.
+   last_layout_root -> target box -> pointer/text/default.
+
+4. **Overflow clip** (#11 "pretika mimo") - clip jen culloval KOMPLETNE-venku;
+   partial-overlap (radek pres hranu) pretekal. Fix: clamp Rect/Border na hranice
+   + drop Text/Image jejichz STRED je mimo clip.
+
+5. **Forms** (#37) - (a) DomInputBuffer.commit_back tise zapsal value bez bump_
+   dom_version + bez 'input' eventu = stale display + oninput nefire. Fix: po
+   dispatch porovnat value, pri zmene bump + dispatch 'input'. (b) compute_subtree_
+   hash NEhashoval value/checked/selected = typing nezmenil fingerprint = stale
+   subtree cache (placeholder nezmizel, value se nezobrazil). Fix: hashovat je.
+   accent-color OVERENO ze funguje (slider zluty, checkbox modry).
+
+6. **Hover** (#40 table jump + siroke :hover dead) - (a) collect_hover_affected_set
+   davalo do setu jen element s :hover rulem, ne potomky -> hovered_id (td/text
+   potomek) nebyl v setu -> dirty-on-hover check selhal -> hover dead. Fix:
+   add_subtree (element + potomci). (b) layout_fingerprint vynechava paint props
+   (bg/color) co se BAKUJI do LayoutBox -> layout cache HIT reuse stale baked bg
+   = sticky :hover. Fix: force re-layout pri cascade_was_miss (subtree cache =
+   levne, rebuildne jen zmeneny radek -> taky resi "jump", geometrie identicka).
+   TYKA SE VSECH :hover/:focus/:active na elementech s potomky (tabulky, listy,
+   karty, nav s ikonami) = pravdepodobne user-wide "hover nefunguje" pocit.
+
+Test fixtures pridany: blend_test.html, kbd_test.html, forms_test.html,
+overflow_test.html, table_test.html. 4190 testu pass.
+
+ZBYVA (chyby-rbro v3, neoverene/nedotcene): #1 top bar backdrop-filter translucent,
+#54 IntersectionObserver (logika vypada OK, mozna inner-scroll coords), #55
+ResizeObserver resize grip, #56 MutationObserver styling, #58-60 drag&drop,
+#45 @container query, #20/21 pseudo-elementy + nth-child jagged AA, #32 typografie
+(vertical text, column-count, blink), #34 inline SVG, #27 filter blur top cut,
+#25 gradienty radial/animated, canvas persistent bitmap ("funguje blbe").
+
 ## Session N+34: PERF - canvas <1FPS, calc-on-resize, 3-tier version (113->167 FPS)
 
 User (chyby-rbro v3): "Zobrazeni devtools nebo canvas api extreme zpomali az na
