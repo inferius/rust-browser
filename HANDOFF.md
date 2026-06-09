@@ -87,11 +87,17 @@ textContent zmene (FPS counter, log, psani). Pridan dom_layout_version:
 textContent -> bump_dom_version_layout (re-layout, NE re-cascade). SVG points ->
 content_only (re-paint, NE re-layout). Idle 113->167 FPS.
 
-**DevTools <1 FPS - VYRESENO:** title D:1038ms (devtools render = 1s; cascade
-88 + layout 392). CDP pump pouzival page.dom_version() pro DOM.documentUpdated
--> SVG geometry (animateWavePoly points kazdy frame) trigger re-fetch tree
-kazdych 500ms -> 1s render. Fix: CDP -> page.dom_style_version() (strukturalni).
-Overeno: D: 1038->38ms (27x), FPS 16->21 s devtools.
+**DevTools <1 FPS - VYRESENO (2 fixy):**
+1. CDP pump pouzival page.dom_version() pro DOM.documentUpdated -> SVG geometry
+   (animateWavePoly points kazdy frame) trigger re-fetch tree kazdych 500ms ->
+   1s render. Fix: CDP -> page.dom_style_version() (strukturalni). D 1038->38ms.
+2. ARCHITEKTURA: frame-skip gate `if !dirty && !needs_tick` mel needs_tick =
+   needs_continuous_render (vc. interval/RAF) -> setInterval (pollEvents) /
+   RAF obesly frame-skip -> full layout+paint KAZDY frame i bez zmeny. Fix:
+   needs_animation_render() (CSS anim/scroll/caret, NE interval/RAF) pro
+   frame-skip; interval/RAF se drainuji PRED skip + dirty jen pokud zmenily
+   DOM (dom_version) / canvas (canvas_gen counter). D 38->0ms (SKIP), FPS->135.
+   = Chrome princip: render JEN pri zmene, ne kazdy frame.
 
 **ZBYVA (deep perf, potreba tve verifikace):**
 - Resize page-render 73ms/frame (10 FPS pri drag): full re-cascade(@media)+
