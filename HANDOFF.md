@@ -87,15 +87,18 @@ textContent zmene (FPS counter, log, psani). Pridan dom_layout_version:
 textContent -> bump_dom_version_layout (re-layout, NE re-cascade). SVG points ->
 content_only (re-paint, NE re-layout). Idle 113->167 FPS.
 
+**DevTools <1 FPS - VYRESENO:** title D:1038ms (devtools render = 1s; cascade
+88 + layout 392). CDP pump pouzival page.dom_version() pro DOM.documentUpdated
+-> SVG geometry (animateWavePoly points kazdy frame) trigger re-fetch tree
+kazdych 500ms -> 1s render. Fix: CDP -> page.dom_style_version() (strukturalni).
+Overeno: D: 1038->38ms (27x), FPS 16->21 s devtools.
+
 **ZBYVA (deep perf, potreba tve verifikace):**
-- DevTools <1 FPS: CDP DOM.documentUpdated je throttled 500ms (OK), ale page+
-  devtools render kazdy frame pri page RAF (animateWavePoly bumpa kazdy frame).
-  Devtools tree render expensive. Potreba: skip devtools render kdyz devtools
-  DOM unchanged + compositor fast-path.
 - Resize page-render 73ms/frame (10 FPS pri drag): full re-cascade(@media)+
   re-layout+paint+layer-raster na cache invalidaci kazdy resize step. Potreba:
   resize debounce (re-layout az pri settled, behem dragu scale cached frame)
   NEBO compositor fast-path. Riziko - present scaling pri size mismatch.
+  (Single resize je rychly 119 FPS; problem jen pri rapid drag.)
 
 ## Session N+33: KRITICKY hit_test fix + canvas + calc + autonomni grind
 
