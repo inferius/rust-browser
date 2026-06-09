@@ -1827,7 +1827,17 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
 
                     // Selection start: kazdy MouseDown nastavi anchor. Drag move
                     // updatuje current. Release < 3px diff = clear (simple click).
-                    self.page_sel_begin((self.mouse_x, self.mouse_y));
+                    // ALE: klik na CSS resize grip -> NEspoustet selekci (jinak
+                    // tah za grip selektuje text misto/vedle resize = "nejde
+                    // resizovat" pocit + ruseni textu pod kurzorem).
+                    let on_resize_grip = self.webview.as_ref()
+                        .and_then(|w| w.last_layout_root())
+                        .and_then(|root| crate::embed::webview::find_resize_grip(
+                            root, self.mouse_x, self.mouse_y))
+                        .is_some();
+                    if !on_resize_grip {
+                        self.page_sel_begin((self.mouse_x, self.mouse_y));
+                    }
                     // Devtools panel hit-test ma prioritu nad page hit-testem.
                     // mouse_x/y v doc-logical, raw_y v screen-logical. viewport_w/h v logical.
                     let raw_y = self.mouse_y - self.scroll_y();
@@ -3463,6 +3473,19 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     return CursorIcon::RowResize;
                 }
                 return CursorIcon::Default;
+            }
+            // 2a. Resize grip (CSS resize: both/horizontal/vertical) -> resize
+            // cursor. Bez tohoto user nevidi kde je 16px grip = "nejde resizovat".
+            if let Some(root) = self.webview.as_ref().and_then(|w| w.last_layout_root()) {
+                if let Some((_, _, _, axis)) =
+                    crate::embed::webview::find_resize_grip(root, self.mouse_x, self.mouse_y)
+                {
+                    return match axis.as_str() {
+                        "horizontal" => CursorIcon::EwResize,
+                        "vertical" => CursorIcon::NsResize,
+                        _ => CursorIcon::NwseResize,
+                    };
+                }
             }
             // 2. Page main scrollbar -> Default. layout_root dead na App vrstve;
             // scrollbar cursor hit-test patri do WebView pipeline.

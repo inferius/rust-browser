@@ -677,7 +677,7 @@ fn set_inline_style_prop(node: &std::rc::Rc<crate::browser::dom::Node>, prop: &s
 
 /// Najde nejhlubsi box s resize != none jehoz grip zona (pravy dolni roh ~16px)
 /// obsahuje (cx, cy) content coords. Vrati (node, rect_w, rect_h, axis).
-fn find_resize_grip(bx: &crate::browser::layout::LayoutBox, cx: f32, cy: f32)
+pub(crate) fn find_resize_grip(bx: &crate::browser::layout::LayoutBox, cx: f32, cy: f32)
     -> Option<(std::rc::Rc<crate::browser::dom::Node>, f32, f32, String)>
 {
     // Deti maji prioritu (nejhlubsi).
@@ -2105,8 +2105,23 @@ impl WebView {
                     let content_y = y + self.scroll_y;
                     // Resize grip (CSS resize): klik do praveho dolniho rohu
                     // resizable elementu -> start resize drag (PRED hit-testem).
-                    if let Some((node, w, h, axis)) = self.last_layout_root.as_ref()
-                        .and_then(|root| find_resize_grip(root, content_x, content_y)) {
+                    let grip_hit = self.last_layout_root.as_ref()
+                        .and_then(|root| find_resize_grip(root, content_x, content_y));
+                    if std::env::var("RWE_RESIZE_DBG").is_ok() {
+                        // Vypis vsechny resizable boxy + jejich grip rect.
+                        fn dump(bx: &crate::browser::layout::LayoutBox) {
+                            if !bx.resize.is_empty() {
+                                eprintln!("[RESIZE] resizable box rect=({:.0},{:.0},{:.0},{:.0}) grip=({:.0},{:.0})-({:.0},{:.0}) axis={}",
+                                    bx.rect.x, bx.rect.y, bx.rect.width, bx.rect.height,
+                                    bx.rect.x+bx.rect.width-16.0, bx.rect.y+bx.rect.height-16.0,
+                                    bx.rect.x+bx.rect.width, bx.rect.y+bx.rect.height, bx.resize);
+                            }
+                            for ch in &bx.children { dump(ch); }
+                        }
+                        if let Some(root) = self.last_layout_root.as_ref() { dump(root); }
+                        eprintln!("[RESIZE] MouseDown content=({:.0},{:.0}) grip_hit={}", content_x, content_y, grip_hit.is_some());
+                    }
+                    if let Some((node, w, h, axis)) = grip_hit {
                         self.resize_drag = Some((node, content_x, content_y, w, h, axis));
                         response.dirty = true;
                         self.dirty = true;
