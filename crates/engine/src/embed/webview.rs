@@ -3009,11 +3009,17 @@ impl WebView {
         // fingerprint -> bez nej layout cache HIT = stary text/struktura
         // (napr. onclick co meni textContent se nezobrazil). dom_style_version
         // bumpne pri techto mutacich ale NE pri SVG geometry (points) animaci.
+        // Layout keyuje na dom_version (CONTENT - bumped pri VSECH mutacich vc.
+        // textContent/value), NE dom_style_version. Tim textContent zmena
+        // (FPS counter, log) re-layoutuje text ALE cascade (klic dom_style_ver)
+        // PREZIJE = zadny 12ms re-cascade per frame pri animaci/RAF.
+        let dom_content_ver = self.interpreter.as_ref()
+            .map(|i| i.dom_version()).unwrap_or(0);
         let dom_style_ver = self.interpreter.as_ref()
             .map(|i| i.dom_style_version()).unwrap_or(0);
         let layout_key = (
             layout_fp,
-            dom_style_ver,
+            dom_content_ver,
             (viewport_w as u32),
             (viewport_h as u32),
         );
