@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  body { margin: 0; background: #ffffff; font-family: sans-serif; }
+  .row { display: flex; flex-wrap: wrap; }
+  .cell {
+    position: relative;
+    width: 160px; height: 120px;
+    margin: 8px;
+  }
+  /* podkladovy barevny gradient */
+  .bg {
+    position: absolute; left: 0; top: 0;
+    width: 160px; height: 120px;
+    background: linear-gradient(90deg, #ff0000, #00ff00, #0000ff);
+  }
+  /* blended kruh nahore */
+  .fg {
+    position: absolute; left: 30px; top: 20px;
+    width: 100px; height: 80px;
+    border-radius: 50%;
+    background: #ffcc00;
+  }
+  .label { position: absolute; bottom: 2px; left: 4px; font-size: 11px; color: #000; background: rgba(255,255,255,0.6); }
+  .multiply  .fg { mix-blend-mode: multiply; }
+  .screen    .fg { mix-blend-mode: screen; }
+  .overlay   .fg { mix-blend-mode: overlay; }
+  .difference .fg { mix-blend-mode: difference; }
+  .exclusion .fg { mix-blend-mode: exclusion; }
+  .colordodge .fg { mix-blend-mode: color-dodge; }
+  .hardlight .fg { mix-blend-mode: hard-light; }
+  .softlight .fg { mix-blend-mode: soft-light; }
+  .hue       .fg { mix-blend-mode: hue; }
+  .luminosity .fg { mix-blend-mode: luminosity; }
+</style>
+</head>
+<body>
+  <div class="row">
+    <div class="cell multiply"><div class="bg"></div><div class="fg"></div><div class="label">multiply</div></div>
+    <div class="cell screen"><div class="bg"></div><div class="fg"></div><div class="label">screen</div></div>
+    <div class="cell overlay"><div class="bg"></div><div class="fg"></div><div class="label">overlay</div></div>
+    <div class="cell difference"><div class="bg"></div><div class="fg"></div><div class="label">difference</div></div>
+    <div class="cell exclusion"><div class="bg"></div><div class="fg"></div><div class="label">exclusion</div></div>
+    <div class="cell colordodge"><div class="bg"></div><div class="fg"></div><div class="label">color-dodge</div></div>
+    <div class="cell hardlight"><div class="bg"></div><div class="fg"></div><div class="label">hard-light</div></div>
+    <div class="cell softlight"><div class="bg"></div><div class="fg"></div><div class="label">soft-light</div></div>
+    <div class="cell hue"><div class="bg"></div><div class="fg"></div><div class="label">hue</div></div>
+    <div class="cell luminosity"><div class="bg"></div><div class="fg"></div><div class="label">luminosity</div></div>
+  </div>
+</body>
+</html>

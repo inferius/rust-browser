@@ -276,6 +276,122 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 }
 "#;
 
+/// CSS mix-blend-mode COMPOSE shader: blend layer texture (src) pres backdrop
+/// snapshot (dst) pri kompozici layeru. Na rozdil od ADVANCED_BLEND_SHADER
+/// (fullscreen 1:1) tady src = layer tex positioned do dst_box (compose
+/// geometrie), dst = full-screen target snapshot samplovany na screen pozici
+/// fragmentu. Resi premultiplied alpha (layer + target storuji premul).
+/// Implementuje plnou CSS Compositing-1 formuli s backdrop alpha.
+pub(super) const BLEND_COMPOSE_SHADER: &str = r#"
+struct BCParams {
+    dst_box: vec4<f32>,   // NDC quad (x0,y0,x1,y1) - pozice layeru na obrazovce
+    src_uv: vec4<f32>,    // layer texture uv region (u0,v0,u1,v1)
+    blend_mode: u32,
+    opacity: f32,
+    _pad0: f32,
+    _pad1: f32,
+};
+@group(0) @binding(0) var src_tex: texture_2d<f32>;
+@group(0) @binding(1) var src_smp: sampler;
+@group(0) @binding(2) var dst_tex: texture_2d<f32>;
+@group(0) @binding(3) var dst_smp: sampler;
+@group(0) @binding(4) var<uniform> p: BCParams;
+
+struct VOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) suv: vec2<f32>,   // layer texture uv
+    @location(1) duv: vec2<f32>,   // backdrop screen uv
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) idx: u32) -> VOut {
+    var base = array<vec2<f32>, 6>(
+        vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(0.0, 1.0),
+        vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0), vec2<f32>(0.0, 1.0),
+    );
+    let b = base[idx];
+    let px = mix(p.dst_box.x, p.dst_box.z, b.x);
+    let py = mix(p.dst_box.w, p.dst_box.y, b.y);
+    var o: VOut;
+    o.clip = vec4<f32>(px, py, 0.0, 1.0);
+    o.suv = vec2<f32>(mix(p.src_uv.x, p.src_uv.z, b.x), mix(p.src_uv.y, p.src_uv.w, b.y));
+    // Backdrop uv = pozice fragmentu na obrazovce (NDC -> 0..1, Y flip).
+    o.duv = vec2<f32>((px + 1.0) * 0.5, (1.0 - py) * 0.5);
+    return o;
+}
+
+fn bc_each(mode: u32, s: f32, d: f32) -> f32 {
+    if (mode == 1u) { return s * d; }
+    if (mode == 2u) { return 1.0 - (1.0 - s) * (1.0 - d); }
+    if (mode == 3u) { if (d < 0.5) { return 2.0 * s * d; } return 1.0 - 2.0 * (1.0 - s) * (1.0 - d); }
+    if (mode == 4u) { return min(s, d); }
+    if (mode == 5u) { return max(s, d); }
+    if (mode == 6u) { if (s >= 1.0) { return 1.0; } return min(d / max(1.0 - s, 0.0001), 1.0); }
+    if (mode == 7u) { if (s <= 0.0) { return 0.0; } return 1.0 - min((1.0 - d) / max(s, 0.0001), 1.0); }
+    if (mode == 8u) { if (s < 0.5) { return 2.0 * s * d; } return 1.0 - 2.0 * (1.0 - s) * (1.0 - d); }
+    if (mode == 9u) {
+        if (s < 0.5) { return d - (1.0 - 2.0 * s) * d * (1.0 - d); }
+        var g: f32 = sqrt(d);
+        if (d <= 0.25) { g = ((16.0 * d - 12.0) * d + 4.0) * d; }
+        return d + (2.0 * s - 1.0) * (g - d);
+    }
+    if (mode == 10u) { return abs(s - d); }
+    if (mode == 11u) { return s + d - 2.0 * s * d; }
+    return s;
+}
+fn bc_lum(c: vec3<f32>) -> f32 { return 0.3 * c.r + 0.59 * c.g + 0.11 * c.b; }
+fn bc_sat(c: vec3<f32>) -> f32 { return max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b)); }
+fn bc_clipcolor(c: vec3<f32>) -> vec3<f32> {
+    let l = bc_lum(c);
+    let n = min(c.r, min(c.g, c.b));
+    let x = max(c.r, max(c.g, c.b));
+    var r = c;
+    if (n < 0.0) { r = l + (r - l) * l / max(l - n, 0.0001); }
+    if (x > 1.0) { r = l + (r - l) * (1.0 - l) / max(x - l, 0.0001); }
+    return r;
+}
+fn bc_setlum(c: vec3<f32>, l: f32) -> vec3<f32> { return bc_clipcolor(c + vec3<f32>(l - bc_lum(c))); }
+fn bc_setsat(c: vec3<f32>, s: f32) -> vec3<f32> {
+    let cur = bc_sat(c);
+    if (cur < 0.0001) { return vec3<f32>(0.0); }
+    let mn = min(c.r, min(c.g, c.b));
+    return (c - vec3<f32>(mn)) * (s / cur);
+}
+fn bc_hsl(mode: u32, cs: vec3<f32>, cb: vec3<f32>) -> vec3<f32> {
+    if (mode == 12u) { return bc_setlum(bc_setsat(cs, bc_sat(cb)), bc_lum(cb)); } // Hue
+    if (mode == 13u) { return bc_setlum(bc_setsat(cb, bc_sat(cs)), bc_lum(cb)); } // Saturation
+    if (mode == 14u) { return bc_setlum(cs, bc_lum(cb)); } // Color
+    if (mode == 15u) { return bc_setlum(cb, bc_lum(cs)); } // Luminosity
+    return cs;
+}
+
+@fragment
+fn fs_main(in: VOut) -> @location(0) vec4<f32> {
+    let src = textureSample(src_tex, src_smp, in.suv);
+    let dst = textureSample(dst_tex, dst_smp, in.duv);
+    let op = p.opacity;
+    // Layer + target storuji PREMULTIPLIED alpha -> un-premultiply na straight.
+    let sa = src.a * op;
+    let s_premul = src.rgb * op;
+    let cs = select(vec3<f32>(0.0), s_premul / max(sa, 0.0001), sa > 0.0001);
+    let ba = dst.a;
+    let cb = select(vec3<f32>(0.0), dst.rgb / max(ba, 0.0001), ba > 0.0001);
+    let mode = p.blend_mode;
+    var bc: vec3<f32>;
+    if (mode >= 12u && mode <= 15u) {
+        bc = bc_hsl(mode, cs, cb);
+    } else {
+        bc = vec3<f32>(bc_each(mode, cs.r, cb.r), bc_each(mode, cs.g, cb.g), bc_each(mode, cs.b, cb.b));
+    }
+    // CSS Compositing-1: mixed = (1-ab)*Cs + ab*B(Cb,Cs).
+    let mixed = (1.0 - ba) * cs + ba * bc;
+    // Premultiplied vystup (dst.rgb je uz premul = ab*Cb):
+    let out_rgb = sa * mixed + (1.0 - sa) * dst.rgb;
+    let out_a = sa + ba * (1.0 - sa);
+    return vec4<f32>(out_rgb, out_a);
+}
+"#;
+
 pub(super) const COMPOSE_SHADER: &str = r#"
 struct ComposeParams {
     row0: vec4<f32>,

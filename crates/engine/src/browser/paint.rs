@@ -1548,8 +1548,18 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
     }
     // mix-blend-mode subtree wrap. Pres non-Normal mode renderer composite
     // pres shader s blend formula.
+    // ALE: pri layer-mode kdy TENTO box JE layer root (cur_scope == bx_id) blend
+    // resi OUTER compose (compose_blend_layer_into_encoder pres backdrop) - inner
+    // BlendBegin/End by v layer-rasteru spustil identity fallback co cleruje
+    // layer texturu na opaque grey (= rohy border-radius neprusvitne = blenduje
+    // se cely bbox misto kruhu). Proto v layer-mode emit SKIP, paintujeme box
+    // normalne (transparent mimo shape), compose pak blendne celou layer texturu.
     use super::computed_style::BlendMode;
-    let blend_active = !matches!(bx.mix_blend_mode, BlendMode::Normal);
+    let is_layer_root_self = if let Some(scope_id) = cur_scope {
+        let bx_id = bx.node.as_ref().map(|n| std::rc::Rc::as_ptr(n) as usize).unwrap_or(0);
+        bx_id == scope_id
+    } else { false };
+    let blend_active = !matches!(bx.mix_blend_mode, BlendMode::Normal) && !is_layer_root_self;
     if blend_active {
         let mode_tag: u8 = match bx.mix_blend_mode {
             BlendMode::Normal => 0,

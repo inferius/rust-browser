@@ -370,6 +370,30 @@ thread_local! {
         const { std::cell::Cell::new(LayerCacheStats { cached: 0, repainted: 0, total: 0 }) };
 }
 
+/// Mapuje computed_style::BlendMode na shader mode discriminant (shodne s
+/// paint.rs mode_tag + BLEND_COMPOSE_SHADER: 1=Multiply..15=Luminosity).
+fn blend_mode_discriminant(m: crate::browser::computed_style::BlendMode) -> u8 {
+    use crate::browser::computed_style::BlendMode as B;
+    match m {
+        B::Normal => 0,
+        B::Multiply => 1,
+        B::Screen => 2,
+        B::Overlay => 3,
+        B::Darken => 4,
+        B::Lighten => 5,
+        B::ColorDodge => 6,
+        B::ColorBurn => 7,
+        B::HardLight => 8,
+        B::SoftLight => 9,
+        B::Difference => 10,
+        B::Exclusion => 11,
+        B::Hue => 12,
+        B::Saturation => 13,
+        B::Color => 14,
+        B::Luminosity => 15,
+    }
+}
+
 /// Postavi display list per-layer s cache reuse pri no damage. Walk LayerTree
 /// in tree order (parent layer first, then children layers - matches paint order).
 /// Per layer: damage=None -> reuse cache; damage=Some -> repaint do cache.
@@ -3692,6 +3716,8 @@ impl WebView {
         //   - Apply viewport scroll (subtract scroll_x/y, except fixed layers)
         //   - Pak overlay-only cmds (po d4_overlay_start) draw nad composite
         let target_view = self.target_view.as_ref()?;
+        // Pro mix-blend-mode layer compose potreba Texture handle (snapshot backdrop).
+        let target_texture = self.target_texture.as_ref()?;
         let _tile_gpu_mode = std::env::var("RWE_TILE_GPU").is_ok();
         if layer_gpu_mode {
             // Composite all layers into target_view.
@@ -3764,6 +3790,19 @@ impl WebView {
                         pos_x, pos_y,
                         layer.root_rect.width, layer.root_rect.height,
                         &m, first,
+                    );
+                } else if !first && !matches!(layer.blend_mode,
+                        crate::browser::computed_style::BlendMode::Normal) {
+                    // mix-blend-mode: blend layer tex pres dosud vykompozitlovany
+                    // backdrop. !first = existuje backdrop (jinak normal compose).
+                    let mode_id = blend_mode_discriminant(layer.blend_mode);
+                    renderer.compose_blend_layer_into_encoder(
+                        &mut compose_encoder,
+                        target_view, target_texture, &view,
+                        pos_x, pos_y,
+                        layer.root_rect.width, layer.root_rect.height,
+                        mode_id,
+                        layer.opacity.clamp(0.0, 1.0),
                     );
                 } else {
                     renderer.compose_view_to_view_into_encoder(

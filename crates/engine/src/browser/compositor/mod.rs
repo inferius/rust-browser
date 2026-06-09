@@ -68,6 +68,9 @@ pub struct LayerNode {
     pub z_index: Option<i32>,
     /// Compositing properties - applied at compositor pass:
     pub opacity: f32,
+    /// CSS mix-blend-mode - aplikovan pri kompozici layeru pres backdrop
+    /// (= akumulovany target). Normal = bezny alpha-over compose.
+    pub blend_mode: super::computed_style::BlendMode,
     pub transform: Option<super::layout::TransformOp>,
     /// Plny transform chain (transform: A() B() C()). `transform` (singular) je
     /// jen prvni op pres parse_transform - rozbity pro multi-op chainy (napr.
@@ -117,6 +120,8 @@ pub enum LayerReason {
     Transform,
     /// `will-change` hint - lazy layer.
     WillChange,
+    /// `mix-blend-mode != normal` - blend pres backdrop.
+    MixBlend,
 }
 
 /// Build LayerTree z layout_root. Walk LayoutBox tree, identify layer
@@ -129,6 +134,7 @@ pub fn extract_layer_tree(layout_root: &LayoutBox) -> LayerNode {
         root_rect: layout_root.rect,
         z_index: None,
         opacity: 1.0,
+        blend_mode: super::computed_style::BlendMode::Normal,
         transform: None,
         transforms: Vec::new(),
         reason: LayerReason::Root,
@@ -362,6 +368,11 @@ pub fn is_layer_boundary(b: &LayoutBox) -> bool {
     if b.transform.is_some() {
         return true;
     }
+    // mix-blend-mode != normal -> blend pres backdrop = vlastni layer
+    // (per CSS Compositing-1: mix-blend-mode vytvori stacking context).
+    if !matches!(b.mix_blend_mode, super::computed_style::BlendMode::Normal) {
+        return true;
+    }
     false
 }
 
@@ -381,6 +392,9 @@ pub fn classify_layer_reason(b: &LayoutBox) -> LayerReason {
     }
     if b.transform.is_some() {
         return LayerReason::Transform;
+    }
+    if !matches!(b.mix_blend_mode, super::computed_style::BlendMode::Normal) {
+        return LayerReason::MixBlend;
     }
     LayerReason::Root
 }
@@ -411,6 +425,7 @@ fn walk_box(b: &LayoutBox, current: &mut LayerNode) {
                 root_rect: child.rect,
                 z_index: child.z_index,
                 opacity: child.opacity,
+                blend_mode: child.mix_blend_mode,
                 transform: child.transform.clone(),
                 transforms: child.transforms.clone(),
                 reason: classify_layer_reason(child),
@@ -588,6 +603,56 @@ mod tests {
         assert!(is_layer_boundary(&b));
     }
 
+    // Pomocna factory s mix-blend-mode hodnotou.
+    fn box_with_blend(mode: &str) -> crate::browser::layout::LayoutBox {
+        let html = format!(
+            "<html><body><div style=\"mix-blend-mode:{};\">x</div></body></html>", mode);
+        let doc = crate::browser::html_parser::parse_html(&html, "about:blank");
+        let sheets: Vec<crate::browser::css_parser::Stylesheet> = Vec::new();
+        let style_map = std::rc::Rc::new(crate::browser::cascade::cascade(&doc.root, &sheets));
+        let layout = crate::browser::layout::layout_tree(&doc.root, &style_map, 800.0, 600.0);
+        fn find_div(b: &crate::browser::layout::LayoutBox) -> Option<&crate::browser::layout::LayoutBox> {
+            if b.tag.as_deref() == Some("div") { return Some(b); }
+            for c in &b.children { if let Some(f) = find_div(c) { return Some(f); } }
+            None
+        }
+        find_div(&layout).cloned().expect("test fixture has div")
+    }
+
+    #[test]
+    fn mix_blend_creates_layer_with_reason_and_propagates_mode() {
+        use crate::browser::computed_style::BlendMode;
+        // multiply -> layer boundary + reason MixBlend.
+        let b = box_with_blend("multiply");
+        assert!(matches!(b.mix_blend_mode, BlendMode::Multiply), "parsing mix-blend-mode");
+        assert!(is_layer_boundary(&b), "mix-blend element musi byt vlastni layer");
+        assert_eq!(classify_layer_reason(&b), LayerReason::MixBlend);
+        // normal -> NENI layer boundary (kvuli blendu).
+        let n = box_with_blend("normal");
+        assert!(matches!(n.mix_blend_mode, BlendMode::Normal));
+        assert!(!is_layer_boundary(&n), "mix-blend:normal nesmi sam o sobe delat layer");
+    }
+
+    #[test]
+    fn extract_layer_tree_carries_blend_mode() {
+        use crate::browser::computed_style::BlendMode;
+        // Stranka: rodic s difference dite -> child layer s blend_mode=Difference.
+        let html = "<html><body><div style=\"position:relative\"><span style=\"mix-blend-mode:difference\">y</span></div></body></html>";
+        let doc = crate::browser::html_parser::parse_html(html, "about:blank");
+        let sheets: Vec<crate::browser::css_parser::Stylesheet> = Vec::new();
+        let style_map = std::rc::Rc::new(crate::browser::cascade::cascade(&doc.root, &sheets));
+        let layout = crate::browser::layout::layout_tree(&doc.root, &style_map, 800.0, 600.0);
+        let tree = extract_layer_tree(&layout);
+        // Najdi nekde v tree layer s blend_mode != Normal.
+        fn find_blend(l: &LayerNode) -> Option<BlendMode> {
+            if !matches!(l.blend_mode, BlendMode::Normal) { return Some(l.blend_mode); }
+            for c in &l.children { if let Some(b) = find_blend(c) { return Some(b); } }
+            None
+        }
+        assert_eq!(find_blend(&tree), Some(BlendMode::Difference),
+            "blend_mode se musi propagovat do LayerNode");
+    }
+
     // ---------- Tile-based rasterization tests (priority 5) ----------
 
     fn build_layer(width: f32, height: f32) -> LayerNode {
@@ -596,6 +661,7 @@ mod tests {
             root_rect: Rect { x: 0.0, y: 0.0, width, height },
             z_index: None,
             opacity: 1.0,
+            blend_mode: crate::browser::computed_style::BlendMode::Normal,
             transform: None,
             transforms: Vec::new(),
             reason: LayerReason::Root,

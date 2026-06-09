@@ -86,7 +86,7 @@ pub mod font_face;
 pub use font_face::SwashFontFace;
 
 mod shaders;
-use shaders::{BLUR_SHADER, TRANSFORM_SHADER, COMPOSE_SHADER, RECT_SHADER, LCD_SHADER};
+use shaders::{BLUR_SHADER, TRANSFORM_SHADER, COMPOSE_SHADER, RECT_SHADER, LCD_SHADER, ADVANCED_BLEND_SHADER, BLEND_COMPOSE_SHADER};
 
 mod primitives;
 use primitives::{push_rect, push_rect_rounded, push_rect_uv, push_skewed_quad,
@@ -4779,6 +4779,18 @@ pub struct Renderer {
     compose_bind_group_layout: wgpu::BindGroupLayout,
     /// Uniform pro compose color matrix (5x vec4 = 80 bytes)
     compose_uniform_buf: wgpu::Buffer,
+    /// CSS mix-blend-mode advanced shader: per-pixel dst sample (src+dst snapshot).
+    /// Resi Overlay/ColorDodge/SoftLight/Difference/Hue/Sat/Color/Lum - vse co
+    /// fixed-function BlendState neumi. Implementuje vsech 16 modes per spec.
+    advanced_blend_pipeline: wgpu::RenderPipeline,
+    advanced_blend_bgl: wgpu::BindGroupLayout,
+    /// Uniform: blend_mode u32 + opacity f32 + 2x pad (16 bytes).
+    advanced_blend_uniform: wgpu::Buffer,
+    /// CSS mix-blend-mode LAYER compose: blend layer tex pres backdrop snapshot
+    /// pri kompozici (D4 compositor). src = layer tex (dst_box positioned),
+    /// dst = target snapshot. Resi vsechny modes vc. non-separable HSL.
+    blend_compose_pipeline: wgpu::RenderPipeline,
+    blend_compose_bgl: wgpu::BindGroupLayout,
     /// WebGL phase 3c1: cache zkompilovanych shader modules per program ID.
     /// Klic = WebGLProgram id (z linkProgram).
     webgl_shader_modules: std::collections::HashMap<u32, (wgpu::ShaderModule, wgpu::ShaderModule)>,
@@ -5299,6 +5311,129 @@ impl Renderer {
                 alpha: wgpu::BlendComponent::OVER,
             });
 
+        // Advanced blend pipeline - per-pixel dst sample (src_tex + dst_tex snapshot).
+        // Resi vsechny separable + non-separable modes ktere fixed-function neumi.
+        let advanced_blend_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("advanced_blend_shader"),
+            source: wgpu::ShaderSource::Wgsl(ADVANCED_BLEND_SHADER.into()),
+        });
+        let advanced_blend_uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("advanced_blend_uniform"),
+            size: 16, // blend_mode u32 + opacity f32 + 2x pad
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let advanced_blend_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("advanced_blend_bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2, multisampled: false,
+                    }, count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2, multisampled: false,
+                    }, count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false, min_binding_size: None,
+                    }, count: None,
+                },
+            ],
+        });
+        let advanced_blend_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { immediate_size: 0,
+            label: Some("advanced_blend_pl"),
+            bind_group_layouts: &[Some(&advanced_blend_bgl)],
+        });
+        let advanced_blend_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { multiview_mask: None,
+            label: Some("advanced_blend_pipeline"),
+            layout: Some(&advanced_blend_pl),
+            vertex: wgpu::VertexState {
+                module: &advanced_blend_shader, entry_point: Some("vs_main"),
+                compilation_options: Default::default(), buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &advanced_blend_shader, entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    // Shader sam dela Porter-Duff over (out = sa*blended + (1-sa)*dst)
+                    // -> REPLACE, zadny dalsi HW blend.
+                    format: offscreen_format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            cache: None,
+        });
+
+        // Blend-compose pipeline (mix-blend-mode na urovni layer compose).
+        let blend_compose_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("blend_compose_shader"),
+            source: wgpu::ShaderSource::Wgsl(BLEND_COMPOSE_SHADER.into()),
+        });
+        let blend_compose_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("blend_compose_bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
+                wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
+                wgpu::BindGroupLayoutEntry { binding: 4, visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false, min_binding_size: None }, count: None },
+            ],
+        });
+        let blend_compose_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { immediate_size: 0,
+            label: Some("blend_compose_pl"),
+            bind_group_layouts: &[Some(&blend_compose_bgl)],
+        });
+        let blend_compose_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { multiview_mask: None,
+            label: Some("blend_compose_pipeline"),
+            layout: Some(&blend_compose_pl),
+            vertex: wgpu::VertexState { module: &blend_compose_shader, entry_point: Some("vs_main"),
+                compilation_options: Default::default(), buffers: &[] },
+            fragment: Some(wgpu::FragmentState { module: &blend_compose_shader, entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    // Shader rekonstruuje premul vystup (blend + porter-duff over) -> REPLACE.
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            cache: None,
+        });
+
         // Transform pipeline - samples offscreen, drawat 3D transformed quad
         let transform_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("transform_shader"),
@@ -5402,6 +5537,8 @@ impl Renderer {
             compose_pipeline_darken,
             compose_pipeline_lighten,
             compose_bind_group_layout, compose_uniform_buf,
+            advanced_blend_pipeline, advanced_blend_bgl, advanced_blend_uniform,
+            blend_compose_pipeline, blend_compose_bgl,
             transform_pipeline, transform_bind_group_layout, transform_uniform_buf,
             webgl_shader_modules: std::collections::HashMap::new(),
             webgl_pipelines: std::collections::HashMap::new(),
@@ -7137,27 +7274,48 @@ impl Renderer {
                     }
                 }
                 Seg::Blend { inner, x, y, w, h, mode } => {
-                    // CSS mix-blend-mode pres shader-side dst sample.
-                    // 1. Render inner do offscreen_tex (src).
+                    // CSS mix-blend-mode pres shader-side dst sample (vsech 16 modes).
+                    let in_layer_raster = VIEWPORT_OVERRIDE.with(|c| c.get()) != (0.0, 0.0);
+                    // 1. Render inner subtree do offscreen_tex (src).
                     let inner_verts = build_vertices(inner, &self.atlas, &self.image_atlas, self.zoom);
                     self.draw_to_offscreen(&inner_verts);
-                    // 2. Snapshot main_rt -> snapshot pres existing offscreen sampling.
-                    //    Pre tier 1 (Normal/Multiply/Screen/Darken/Lighten) = wgpu
-                    //    BlendState pipeline staci, identity matrix compose pres
-                    //    dedicated pipeline. Pre tier 2 (Overlay+) = shader dst
-                    //    sample (TODO real impl).
-                    // PROZATIM: fallback - compose offscreen pres compose_view_to_view_blend
-                    // (alpha blend identity), to nevyresi Overlay/Hue/... ale
-                    // alespon transport infrastruktura existuje.
-                    let _ = (x, y, w, h, mode);
-                    let identity = [
-                        1.0, 0.0, 0.0, 0.0, 0.0,
-                        0.0, 1.0, 0.0, 0.0, 0.0,
-                        0.0, 0.0, 1.0, 0.0, 0.0,
-                        0.0, 0.0, 0.0, 1.0, 0.0,
-                    ];
-                    self.compose_offscreen(view, x, y, w, h, &identity, first_pass);
-                    first_pass = false;
+                    if in_layer_raster {
+                        // V layer-raster main_rt neobsahuje backdrop (layer se sklada
+                        // separatne) -> dst snapshot by byl spatny. Fallback na
+                        // alpha-over compose (vizualne aspon element nakreslen).
+                        let identity = [
+                            1.0, 0.0, 0.0, 0.0, 0.0,
+                            0.0, 1.0, 0.0, 0.0, 0.0,
+                            0.0, 0.0, 1.0, 0.0, 0.0,
+                            0.0, 0.0, 0.0, 1.0, 0.0,
+                        ];
+                        self.compose_offscreen(view, x, y, w, h, &identity, first_pass);
+                        first_pass = false;
+                    } else {
+                        // 2. Snapshot main_rt (dst = scena za blended elementem) ->
+                        //    offscreen_tex_b.
+                        let mut enc = self.device.create_command_encoder(&Default::default());
+                        enc.copy_texture_to_texture(
+                            wgpu::TexelCopyTextureInfo {
+                                texture: &self.main_rt, mip_level: 0,
+                                origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
+                            },
+                            wgpu::TexelCopyTextureInfo {
+                                texture: &self.offscreen_tex_b, mip_level: 0,
+                                origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
+                            },
+                            wgpu::Extent3d {
+                                width: self.config.width.max(1),
+                                height: self.config.height.max(1),
+                                depth_or_array_layers: 1,
+                            },
+                        );
+                        self.queue.submit(std::iter::once(enc.finish()));
+                        // 3. Blend(src, dst) per-pixel -> write do view (= main_rt).
+                        let _ = (x, y, w, h);
+                        self.compose_blend_advanced(view, mode, 1.0);
+                        first_pass = false;
+                    }
                 }
             }
         }
@@ -7768,6 +7926,123 @@ impl Renderer {
             pass.set_bind_group(0, &bg, &[]);
             pass.draw(0..6, 0..1);
         }
+    }
+
+    /// CSS mix-blend-mode LAYER compose. Blend `src` (layer texture) pres
+    /// backdrop = aktualni obsah `dst_texture` (= co se uz vykompozitlo). Snapshot
+    /// dst_texture -> offscreen_tex_b, pak blend shader sampluje oboje a zapise
+    /// vysledek do `dst_view` v regionu (x,y,w,h). Vse do sdileneho encoderu
+    /// (snapshot vidi predchozi compose passy - GPU serializuje commandy).
+    /// `mode` = computed_style::BlendMode discriminant (1=Multiply..15=Luminosity).
+    #[allow(clippy::too_many_arguments)]
+    pub fn compose_blend_layer_into_encoder(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        dst_view: &wgpu::TextureView,
+        dst_texture: &wgpu::Texture,
+        src: &wgpu::TextureView,
+        x: f32, y: f32, w: f32, h: f32,
+        mode: u8,
+        opacity: f32,
+    ) {
+        // 1. Snapshot backdrop (dst_texture) -> offscreen_tex_b. Copy extent =
+        //    min rozmeru (target vs offscreen) - robustni pri ruznych velikostech.
+        let cw = self.config.width.max(1).min(dst_texture.width());
+        let ch = self.config.height.max(1).min(dst_texture.height());
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo { texture: dst_texture, mip_level: 0,
+                origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::TexelCopyTextureInfo { texture: &self.offscreen_tex_b, mip_level: 0,
+                origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::Extent3d { width: cw, height: ch, depth_or_array_layers: 1 },
+        );
+        // 2. dst_box NDC + src_uv pres build_compose_uniform_box (identity matrix).
+        let identity = [
+            1.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 1.0, 0.0,
+        ];
+        let (vp_w, vp_h) = self.vp_dims();
+        let (cdata, vis) = build_compose_uniform_box(&identity, x, y, w, h, 0.0, 0.0, 1.0, 1.0, vp_w, vp_h);
+        if !vis { return; }
+        // BCParams: dst_box[4] + src_uv[4] + mode u32 + opacity f32 + 2 pad = 48 B.
+        let mut buf = [0u8; 48];
+        // dst_box = cdata[20..24], src_uv = cdata[24..28]
+        for i in 0..4 { buf[i*4..i*4+4].copy_from_slice(&cdata[20+i].to_le_bytes()); }
+        for i in 0..4 { buf[16+i*4..16+i*4+4].copy_from_slice(&cdata[24+i].to_le_bytes()); }
+        buf[32..36].copy_from_slice(&(mode as u32).to_le_bytes());
+        buf[36..40].copy_from_slice(&opacity.clamp(0.0, 1.0).to_le_bytes());
+        let ubuf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("blend_compose_uniform_batch"),
+            size: 48,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&ubuf, 0, &buf);
+        let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("blend_compose_bg"),
+            layout: &self.blend_compose_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(src) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.compose_smp) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&self.offscreen_view_b) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&self.compose_smp) },
+                wgpu::BindGroupEntry { binding: 4, resource: ubuf.as_entire_binding() },
+            ],
+        });
+        // 3. Blend pass (REPLACE) do dst_view - jen dst_box quad, zbytek Load.
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor { multiview_mask: None,
+            label: Some("blend_compose_pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment { depth_slice: None,
+                view: dst_view, resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store } })],
+            depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None,
+        });
+        pass.set_pipeline(&self.blend_compose_pipeline);
+        pass.set_bind_group(0, &bg, &[]);
+        pass.draw(0..6, 0..1);
+    }
+
+    /// CSS mix-blend-mode advanced compose: per-pixel dst sample.
+    /// src = offscreen_tex (uz vyrenderovany blended element subtree),
+    /// dst = offscreen_tex_b (snapshot main_rt = scena za elementem).
+    /// Shader aplikuje blend formuli + Porter-Duff over -> primy write do `view`.
+    /// `view` musi byt main_rt (= ten co se snapshotoval do offscreen_tex_b).
+    fn compose_blend_advanced(&self, view: &wgpu::TextureView, mode: u8, opacity: f32) {
+        // Uniform: blend_mode u32 + opacity f32 + 2x pad.
+        let mut buf = [0u8; 16];
+        buf[0..4].copy_from_slice(&(mode as u32).to_le_bytes());
+        buf[4..8].copy_from_slice(&opacity.to_le_bytes());
+        self.queue.write_buffer(&self.advanced_blend_uniform, 0, &buf);
+        let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("advanced_blend_bg"),
+            layout: &self.advanced_blend_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.offscreen_view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.atlas_smp) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&self.offscreen_view_b) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&self.atlas_smp) },
+                wgpu::BindGroupEntry { binding: 4, resource: self.advanced_blend_uniform.as_entire_binding() },
+            ],
+        });
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor { multiview_mask: None,
+                label: Some("advanced_blend_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment { depth_slice: None,
+                    view, resolve_target: None,
+                    // Shader rekonstruuje cely vystup (vc. dst kde src.a=0) -> Load
+                    // staci, full-screen triangle prepise vsechny pixely (REPLACE).
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None,
+            });
+            pass.set_pipeline(&self.advanced_blend_pipeline);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.draw(0..3, 0..1); // fullscreen triangle
+        }
+        self.queue.submit(std::iter::once(encoder.finish()));
     }
 
     fn compose_offscreen(&self, view: &wgpu::TextureView, x: f32, y: f32, w: f32, h: f32, color_matrix: &[f32; 20], first: bool) {

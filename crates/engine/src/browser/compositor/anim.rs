@@ -351,6 +351,7 @@ mod tests {
             root_rect: crate::browser::layout::Rect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 },
             z_index: None,
             opacity: 1.0,
+            blend_mode: crate::browser::computed_style::BlendMode::Normal,
             transform: None,
             transforms: Vec::new(),
             reason: super::super::LayerReason::Root,
