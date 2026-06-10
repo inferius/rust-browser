@@ -2,6 +2,116 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`, `debug_utils.md`.
 
+## Session N+36: chyby-rbro v4 "od podlahy" - systemove fixy jadra
+
+User mandat: docx v4 (10.6. po N+35 fixech) + HANDOFF deferred, "vezmi to
+konecne od podlahy". Triage realnou interakci odhalila, ze cast docx
+stiznosti uz neplatila, ale nasla SYSTEMOVE root causes za "klikani nikde
+nefunguje". 7 commitu, 4201 testu pass.
+
+### KRITICKA lekce - testovaci harness
+Stare scripty (inject/typeseq/drag/wheel.ps1, SendInput ABSOLUTE) maji na
+multi-monitor + DPI setupu NEKONZISTENTNI offset (kliky dopadaly o desitky
+px vedle -> falesne zavery). NOVY `%TEMP%\pmclick.ps1` (PostMessage
+WM_MOUSE* primo do okna, client px presne; mode: click/move/drag/wheel) +
+`%TEMP%\cap3.ps1` (PrintWindow window-size bitmap + presny client crop;
+cap2 mel bitmapu client-size = orezany pravy/dolni okraj + (8,31) border
+offset NEzapocteny -> VSECHNY pixel pozice z cap2 byly posunute!).
+Capture pozice -> client coords: ODECIST (8,31) presne via cap3.
+
+### Opraveno (commity v poradi)
+
+1. **Sticky/fixed hit-test** (05b84a7, JADRO "klikani nikde nefunguje"):
+   hit_test nezna NoScrollShift -> sticky sidebar/fixed top bar pri
+   scroll > 0 KOMPLETNE neklikatelne (klik/hover/kurzor sly content
+   coords = proletely na obsah pod). `hit_test_scrolled(x,y,sx,sy)`:
+   fixed/sticky subtree testovat s viewport coords; CSS painting order
+   (positioned deti PRED normal-flow pri hit-testu); r-tree Sticky do
+   has_special + special_at_point viewport query; vsechny call sites
+   predavaji scroll. + Anchor `<a href="#id">` navigace (drive fragment
+   ignorovan = sidebar nav mrtva). + webview sel_begin guard pri
+   DragSession/user-select:none ("zasekne se select" pri DnD - webview ma
+   VLASTNI selection pipeline, N+35 guardoval jen App vrstvu). DnD po
+   fixech funguje (dragstartALPHA + dropALPHA v event logu).
+
+2. **Scrollbar gutter + overflow text** (37e0716): canvas-bg Rect na
+   index 0 padal do D4 layer casti (zahozen + posouval d4_overlay_start
+   o 1) -> bily pruh. Fix: paint::canvas_background() -> D4 clear color
+   (renderer.page_clear_color, UNORM 1:1 bez gamma); monolithic insert(0)
+   po scroll shiftu. + Text bbox v overflow-clip dropu pocital sirku pres
+   CELY content vc. \n -> zalomeny text "stred mimo clip" -> DROPNUT =
+   prazdne overflow boxy (sekce 11 ov-scroll, @container, RO box). Fix:
+   bbox = nejdelsi radek x pocet radku. Main scrollbar thumb se hybal
+   spravne uz pred fixem (docx stiznost ze stareho buildu).
+
+3. **Gradienty** (9276d4c): shift_command_x/y neposouval Radial/Conic
+   STRED (jen rect) -> v D4 layer-local rasteru stred ve world coords ->
+   shader sampluje transparent cast = radial/conic/repeating-radial
+   CERNE na strankach s vice layery (v izolaci fungovaly!). + parse
+   config-vs-stop: "#e8ff6a 90deg" zahozen jako config (parse_color
+   selhal) -> is_gradient_config_part = jen keywordy. + interp edge
+   clamp (pred prvnim stopem barva PRVNIHO stopu, ne fallthrough na
+   posledni) + radial outer fill annulus za poslednim stopem. + dedup
+   double-emit (bg_gradient + backgrounds layer kreslily totez 2x).
+
+4. **Border-radius per-corner + elliptical** (f8f39ac): LayoutBox.
+   border_radius_corners [(val,is_pct);4] (tl,tr,br,bl; slash elliptical
+   prumerem; longhandy; CSS overlap constraint scale-down).
+   DisplayCommand::RectRounded -> mode 11 SDF (radii v color2 slotu,
+   sdf_rounded_box_4 vybira radius dle kvadrantu). Bg + bg-layer +
+   rounded border ring (outer+inner inset). half=D-tvar, blob, asym=leaf.
+
+5. **Layer text LCD** (501e6c6): LCD subpixel = DRUHY draw pass mode-9
+   vertexu dual-source pipeline. Do TRANSPARENT layer textury zapsal
+   barevna per-channel data -> premul-OVER compose je neslozil =
+   "rozsypany barevny text" v text layerech (mix-blend .blend-text,
+   z-index spany). Fix: LCD pass skip pri VIEWPORT_OVERRIDE (layer/tile
+   raster) - composited layery grayscale AA (jak Chrome). + layer
+   root_rect px snap (floor origin + ceil size) v extract_layer_tree.
+   Diagnostika: debug_dump_texture (RWE_DUMP_LAYERS=<dir>) GPU->PNG;
+   RWE_LAYERCACHE_DBG (per-layer cmds+texty); RWE_INPUT_DBG=chain
+   (hit-chain dump).
+
+6. **Typografie** (9dcf92a): MULTI-ANIMATION (from_styles_multi - vsechny
+   subspecy `animation: a 3s, b 1s`; drive jen prvni -> typewriter
+   neblikal). text_overline INHERIT v inline smycce (underline/strike se
+   dedily, overline NE -> double overline mrtvy). Vertical text: PASS 0
+   lame na SLOUPCE dle inner_h + flex da vertical itemu available cross
+   height (drive 1 nekonecny sloupec pretekal pres sekce). white-space:
+   nowrap ZAPOJEN (parsoval se, nikde nepouzival) do vsech 3 wrap branchi
+   flush_inline + inherit -> marquee na 1 radku.
+
+### Triage zavery (co FUNGUJE na aktualnim buildu, docx je stale)
+Keyboard events (focus border + klavesy + log), mousemove (offsetX OK;
+offsetY SPATNE ~5.5 misto ~40 - viz TODO), DnD (po sel guard fixu),
+checkbox/radio/range/typing, table render, calc/clamp, :has() styling,
+color-mix, mix-blend barvy, filtry, clip-path tvary, IO fire (loguje pri
+scrollu), anchor nav (po fixu), formulare render.
+
+### TODO dalsi session (zbytek docx v4)
+- **mousemove offsetY** spatne (5.5 misto ~40 - offset proti spatnemu
+  targetu/baseline?). [webview event_offset]
+- **Marquee animace nejede** (translateX 100%->-100% na inline-block;
+  zalamovani uz OK). Typewriter width-anim OK + blika.
+- **column-count single text block** fragmentace (1 radek pres sirku,
+  pretejka doprava; multi-child funguje).
+- **MutationObserver UI**: buttony prekryvaji box pod nimi, "Pocet
+  mutaci: 0" na spatnem radku. **IO boxy** se nehighlightuji pri
+  intersection (fire ok, class change styling se neprojevi?).
+  **ResizeObserver box** prazdny obsah (dynamicky JS textContent?).
+- **Canvas sekce**: Kreslit/Particles/Sine wave buttony + kresleni
+  (netestovano po fixech harness).
+- **Tabulka hover jump** overit pmclick harness (N+35 tvrdi fixed).
+- **@container resize drag** (sekce 19; box po text-fixu uz neni prazdny
+  - overit obsah + drag).
+- **backdrop-filter top bar** (deferred N+35 #1), **resize okna perf**
+  (73ms/frame drag), **filter blur top-cut**, **AA zubate rotovane**
+  (supersampling), **text-shadow glow** vyraznejsi, **repeating gradient
+  tiling** (px stops = 1 cyklus), **inline SVG** boxy 2/5/6 prazdne
+  (stroke-dashoffset/foreignObject), **shape-outside** circle tvar +
+  text overlap, **CSS counter()** v ::before content literal.
+- Stare harness scripty NEpouzivat (DPI offset) - pmclick/cap3 only.
+
 ## TODO (dedikovany tah): PERF 120 -> 240 FPS = compositor-only fast path
 
 **Stav:** 35 -> 120 FPS hotovo (commit "PERF: paint-animovane elementy na vlastni
