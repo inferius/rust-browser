@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  body { margin: 20px; background: #111; color: #ccc; font-size: 13px; }
+  .flexcol { display: flex; flex-direction: column; gap: 12px; width: 900px; }
+  .ovbox { height: 100px; overflow: scroll; border: 1px solid red; padding: 8px; }
+  .plain { border: 1px solid lime; padding: 8px; }
+  .blockwrap { border: 1px solid cyan; padding: 8px; }
+</style>
+</head>
+<body>
+  <div class="flexcol">
+    <div class="ovbox">FLEX-OV Lorem ipsum dolor sit amet consectetur adipisicing elit. Quisquam voluptatem nulla facilis dolore blanditiis voluptates veniam enim sit reiciendis. Voluptate consequuntur aperiam nam temporibus repellat vitae exercitationem sunt. Nesciunt fuga cumque repudiandae quasi dolore quis natus.</div>
+    <div class="plain">FLEX-PLAIN Lorem ipsum dolor sit amet consectetur adipisicing elit. Quisquam voluptatem nulla facilis dolore blanditiis voluptates veniam enim sit reiciendis. Voluptate consequuntur aperiam nam temporibus repellat vitae exercitationem sunt. Nesciunt fuga cumque repudiandae quasi dolore quis natus.</div>
+    <div class="blockwrap"><div class="ovbox">FLEX-NESTED-OV Lorem ipsum dolor sit amet consectetur adipisicing elit. Quisquam voluptatem nulla facilis dolore blanditiis voluptates veniam enim sit reiciendis. Voluptate consequuntur aperiam nam temporibus repellat vitae exercitationem sunt. Nesciunt fuga cumque repudiandae quasi dolore quis natus.</div></div>
+  </div>
+  <div class="ovbox" style="width:884px;margin-top:12px">BLOCK-OV Lorem ipsum dolor sit amet consectetur adipisicing elit. Quisquam voluptatem nulla facilis dolore blanditiis voluptates veniam enim sit reiciendis. Voluptate consequuntur aperiam nam temporibus repellat vitae exercitationem sunt. Nesciunt fuga cumque repudiandae quasi dolore quis natus.</div>
+</body>
+</html>

@@ -4945,6 +4945,11 @@ pub struct Renderer {
     /// Bez override by NDC pocital pres full surface, ale RT je smaller,
     /// vede ke kompresi obsahu.
     pub target_size: Option<(u32, u32)>,
+    /// Page canvas background (body/html bg) - clear barva pro first compose
+    /// pass v D4 layer mode. None = default svetle seda 0.95 (UA default).
+    /// Bez tohoto prosvita bily clear za layout rootem (scrollbar gutter,
+    /// plocha pod kratkym contentem) na strankach s tmavym bg.
+    pub page_clear_color: Option<[f32; 4]>,
     pipeline: wgpu::RenderPipeline,
     /// Optional LCD pipeline pro real subpixel text - vyzaduje DUAL_SOURCE_BLENDING.
     /// None pri unsupported HW (fallback grayscale v hlavnim shaderu mode 9).
@@ -5762,6 +5767,7 @@ impl Renderer {
             surface, device, queue, config, zoom: 1.0,
             scale_factor: scale_factor as f32,
             target_size: None,
+            page_clear_color: None,
             pipeline, lcd_pipeline, uniform_buf,
             atlas_tex, atlas_view, atlas_smp, compose_smp, bind_group_layout, bind_group, atlas,
             image_atlas, image_tex, image_view,
@@ -7140,7 +7146,7 @@ impl Renderer {
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment { depth_slice: None,
                         view: &swap_view, resolve_target: None,
                         ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.95, g: 0.95, b: 0.97, a: 1.0 }),
+                            load: wgpu::LoadOp::Clear(self.page_clear()),
                             store: wgpu::StoreOp::Store,
                         },
                     })],
@@ -7596,7 +7602,7 @@ impl Renderer {
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment { depth_slice: None,
                         view: &view, resolve_target: None,
                         ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.95, g: 0.95, b: 0.97, a: 1.0 }),
+                            load: wgpu::LoadOp::Clear(self.page_clear()),
                             store: wgpu::StoreOp::Store,
                         },
                     })],
@@ -7634,7 +7640,7 @@ impl Renderer {
             if is_layer_or_tile {
                 wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
             } else {
-                wgpu::LoadOp::Clear(wgpu::Color { r: 0.95, g: 0.95, b: 0.97, a: 1.0 })
+                wgpu::LoadOp::Clear(self.page_clear())
             }
         } else {
             wgpu::LoadOp::Load
@@ -7831,7 +7837,7 @@ impl Renderer {
                     view: &swap_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.95, g: 0.95, b: 0.97, a: 1.0 }),
+                        load: wgpu::LoadOp::Clear(self.page_clear()),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -8106,6 +8112,19 @@ impl Renderer {
     /// Allokuje SVUJ uniform buffer per call (NESDILI self.compose_uniform_buf
     /// jako single compose path - write_buffer by mezi N calls prepsal vsechny
     /// na poslední uniform).
+    /// Clear barva prvniho render passu - page canvas bg (body/html z
+    /// paint::canvas_background) nebo UA default svetla 0.95. Na tmavych
+    /// strankach bez tohoto prosvitala bila za layout rootem (scrollbar
+    /// gutter + plocha pod kratkym contentem).
+    pub(crate) fn page_clear(&self) -> wgpu::Color {
+        match self.page_clear_color {
+            Some(c) => wgpu::Color {
+                r: c[0] as f64, g: c[1] as f64, b: c[2] as f64, a: c[3] as f64,
+            },
+            None => wgpu::Color { r: 0.95, g: 0.95, b: 0.97, a: 1.0 },
+        }
+    }
+
     pub fn compose_view_to_view_into_encoder(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -8148,7 +8167,7 @@ impl Renderer {
             ],
         });
         let load = if first {
-            wgpu::LoadOp::Clear(wgpu::Color { r: 0.95, g: 0.95, b: 0.97, a: 1.0 })
+            wgpu::LoadOp::Clear(self.page_clear())
         } else {
             wgpu::LoadOp::Load
         };
@@ -8323,7 +8342,7 @@ impl Renderer {
             ],
         });
         let load = if first {
-            wgpu::LoadOp::Clear(wgpu::Color { r: 0.95, g: 0.95, b: 0.97, a: 1.0 })
+            wgpu::LoadOp::Clear(self.page_clear())
         } else {
             wgpu::LoadOp::Load
         };
@@ -8415,7 +8434,7 @@ impl Renderer {
             ],
         });
         let load = if first {
-            wgpu::LoadOp::Clear(wgpu::Color { r: 0.95, g: 0.95, b: 0.97, a: 1.0 })
+            wgpu::LoadOp::Clear(self.page_clear())
         } else {
             wgpu::LoadOp::Load
         };
@@ -8495,7 +8514,7 @@ impl Renderer {
             ],
         });
         let load = if first {
-            wgpu::LoadOp::Clear(wgpu::Color { r: 0.95, g: 0.95, b: 0.97, a: 1.0 })
+            wgpu::LoadOp::Clear(self.page_clear())
         } else {
             wgpu::LoadOp::Load
         };
@@ -8548,7 +8567,7 @@ impl Renderer {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.95, g: 0.95, b: 0.97, a: 1.0 }),
+                        load: wgpu::LoadOp::Clear(self.page_clear()),
                         store: wgpu::StoreOp::Store,
                     },
                 })],

@@ -4034,6 +4034,27 @@ impl WebView {
             viewport_w, viewport_h,
             self.scroll_x, self.scroll_y,
         );
+        // Canvas bg (body/html) pokryva CELY viewport (scrollbar gutter +
+        // plocha pod kratkym contentem) a NEscrolluje. D4: clear color
+        // target_view (Rect na index 0 by spadl do layer casti a zahodil se
+        // = bily pruh u scrollbaru). Monolithic: insert(0) viewport-fixed
+        // Rect - PO scroll shiftu (3a), takze zustava na viewportu.
+        let canvas_bg = crate::browser::paint::canvas_background(&layout_root);
+        // Target texture je UNORM (ne sRGB) - clear barva jde 1:1 do bytu,
+        // zadna gamma konverze (overeno: default 0.95 = byte 242).
+        renderer.page_clear_color = canvas_bg.map(|c| [
+            c[0] as f32 / 255.0,
+            c[1] as f32 / 255.0,
+            c[2] as f32 / 255.0,
+            c[3] as f32 / 255.0,
+        ]);
+        if !layer_gpu_mode {
+            if let Some(bg) = canvas_bg {
+                display_list.insert(0, crate::browser::paint::DisplayCommand::Rect {
+                    x: 0.0, y: 0.0, w: viewport_w, h: viewport_h, color: bg, radius: 0.0,
+                });
+            }
+        }
 
         // 4. Warm-up glyph atlas + image atlas pred draw.
         // Pri D4 layer_gpu_mode warm uz probehl vyse pres local_cache (= full

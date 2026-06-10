@@ -1744,15 +1744,14 @@ fn main_scrollbar_emits_when_layout_overflows_viewport() {
     let pre_len = cmds.len();
     paint::emit_main_scrollbar_overlay(&layout_root, &mut cmds, 800.0, 600.0, 0.0, 0.0);
     let post_len = cmds.len();
-    // Emit pridava 3 Rects: canvas bg (body #fff) na index 0 + track + thumb na
-    // konci (canvas bg = fix bileho pruhu ve scrollbar gutter / pod contentem).
-    assert_eq!(post_len - pre_len, 3,
-        "expected 3 Rects (canvas bg + track + thumb), got {} ({} -> {})", post_len - pre_len, pre_len, post_len);
-    // Canvas bg na index 0 = full viewport.
-    if let DisplayCommand::Rect { x, y, w, h, .. } = &cmds[0] {
-        assert!(*x == 0.0 && *y == 0.0 && (*w - 800.0).abs() < 1.0 && (*h - 600.0).abs() < 1.0,
-            "canvas bg by mel byt full viewport, got ({},{},{},{})", x, y, w, h);
-    } else { panic!("cmds[0] mel byt canvas bg Rect"); }
+    // Emit pridava 2 Rects: track + thumb na konci. Canvas bg uz NEemittuje
+    // (D4 clear color / monolithic insert resi caller pres canvas_background()
+    // - insert(0) tady rozbijel d4_overlay_start indexing).
+    assert_eq!(post_len - pre_len, 2,
+        "expected 2 Rects (track + thumb), got {} ({} -> {})", post_len - pre_len, pre_len, post_len);
+    // canvas_background() vraci body bg pro caller.
+    let bg = paint::canvas_background(&layout_root);
+    assert_eq!(bg, Some([255, 255, 255, 255]), "canvas bg ma byt body #fff, got {:?}", bg);
     // Track = predposledni, thumb = posledni. Track right edge = viewport_w.
     let track = &cmds[post_len - 2];
     if let DisplayCommand::Rect { x, w, .. } = track {

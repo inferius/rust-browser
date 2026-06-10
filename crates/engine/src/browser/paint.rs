@@ -313,28 +313,25 @@ pub fn build_display_list(root: &LayoutBox) -> Vec<DisplayCommand> {
 /// Vykresli vertikalni a horizontalni scrollbar Rect pres viewport okraje
 /// pokud layout content presahuje viewport. Barvy auto-pick dle body bg
 /// (svetla/tmava schema).
+/// Canvas background barva (body bg, fallback html bg) - per CSS pokryva CELY
+/// viewport vcetne scrollbar gutteru a plochy pod kratkym contentem, NEscrolluje.
+/// D4 layer mode: pouzit jako clear color target_view (insert Rect na index 0
+/// by spadl do layer-composited casti a zahodil se = "bily pruh u scrollbaru").
+/// Monolithic mode: caller insertne Rect(0,0,vw,vh) na index 0 PO scroll shiftu.
+pub fn canvas_background(layout_root: &LayoutBox) -> Option<[u8; 4]> {
+    layout_root.children.first().and_then(|html| {
+        html.children.iter().find(|c| c.tag.as_deref() == Some("body"))
+            .and_then(|b| b.bg_color)
+            .or(html.bg_color)
+    }).filter(|bg| bg[3] > 0)
+}
+
 pub fn emit_main_scrollbar_overlay(
     layout_root: &LayoutBox,
     display_list: &mut Vec<DisplayCommand>,
     viewport_w: f32, viewport_h: f32,
     scroll_x: f32, scroll_y: f32,
 ) {
-    // Canvas bg (body/html) jako FIXED full-viewport Rect na index 0 (za vsim).
-    // Body rect.width je zmensena o scrollbar gutter -> body bg ji nepokryva ->
-    // prosvita bily clear (0.95) = "bily pruh u hrany scrollbaru" + bila plocha
-    // pod kratkym contentem. Canvas bg per CSS NEscrolluje (fixed na viewport).
-    let canvas_bg = layout_root.children.first().and_then(|html| {
-        html.children.iter().find(|c| c.tag.as_deref() == Some("body"))
-            .and_then(|b| b.bg_color)
-            .or(html.bg_color)
-    });
-    if let Some(bg) = canvas_bg {
-        if bg[3] > 0 {
-            display_list.insert(0, DisplayCommand::Rect {
-                x: 0.0, y: 0.0, w: viewport_w, h: viewport_h, color: bg, radius: 0.0,
-            });
-        }
-    }
     // Body bg detect pro track/thumb barvy.
     let body_bg_dark = layout_root.children.first().and_then(|html_box| {
         html_box.children.iter().find(|c| c.tag.as_deref() == Some("body"))
@@ -2653,8 +2650,16 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
             match c {
                 Rect { x, y, w, h, .. } => Some((*x, *y, *w, *h)),
                 Text { x, y, font_size, content, .. } => {
-                    let est_w = content.chars().count() as f32 * font_size * 0.6;
-                    Some((*x, *y, est_w, *font_size * 1.4))
+                    // Wrapped text ma \n - bbox = nejdelsi RADEK x pocet radku.
+                    // Drive chars()*0.6 pres CELY content -> u zalomeneho textu
+                    // (300 znaku na 2 radcich) est_w ~2160px -> "stred mimo clip"
+                    // -> cely text DROPNUT = prazdny overflow box ("text zmizel").
+                    let max_line = content.split('\n')
+                        .map(|l| l.chars().count()).max().unwrap_or(0);
+                    let n_lines = content.split('\n').count().max(1);
+                    let est_w = max_line as f32 * font_size * 0.6;
+                    let est_h = n_lines as f32 * font_size * 1.4;
+                    Some((*x, *y, est_w, est_h))
                 }
                 Image { x, y, w, h, .. } => Some((*x, *y, *w, *h)),
                 Gradient { x, y, w, h, .. } => Some((*x, *y, *w, *h)),
