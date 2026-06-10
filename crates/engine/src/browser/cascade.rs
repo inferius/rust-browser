@@ -3804,71 +3804,85 @@ pub struct AnimationSpec {
 }
 
 impl AnimationSpec {
-    pub fn from_styles(styles: &HashMap<String, String>) -> Option<AnimationSpec> {
-        // PERF fast-path: vetsina elementu animation NEMA. Bail bez vsech parse
-        // kroku. Flamegraph: AnimationSpec::from_styles 888 samples - dominantni.
+    /// Parse VSECHNY animace ze shorthandu `animation: a 3s, b 1s infinite`
+    /// (top-level carky = nezavisle subspecy). Longhand overrides
+    /// (animation-name/duration/...) se aplikuji jen na PRVNI spec
+    /// (plne per-index longhand listy = TODO).
+    pub fn from_styles_multi(styles: &HashMap<String, String>) -> Vec<AnimationSpec> {
+        // PERF fast-path: vetsina elementu animation NEMA.
         if !styles.contains_key("animation")
             && !styles.contains_key("animation-name") {
-            return None;
+            return Vec::new();
         }
-        // Bud `animation` shorthand, nebo `animation-name` + dalsi longhand.
+        let mut out: Vec<AnimationSpec> = Vec::new();
+        if let Some(short_full) = styles.get("animation") {
+            for sub in split_top_level_commas(short_full) {
+                if let Some(spec) = Self::parse_single_shorthand(&sub) {
+                    out.push(spec);
+                }
+            }
+        }
+        // Longhand override na prvni spec (nebo vytvori novy pri samostatnych
+        // longhandech bez shorthandu).
+        let mut first = out.first().cloned().unwrap_or(AnimationSpec {
+            name: String::new(), duration_secs: 0.0, timing_function: "linear".into(),
+            iteration_count: 1.0, direction: "normal".into(), delay_secs: 0.0,
+            fill_mode: "none".into(), play_state: "running".into(),
+        });
+        let mut had_longhand = false;
+        if let Some(v) = styles.get("animation-name") { first.name = v.trim().to_string(); had_longhand = true; }
+        if let Some(v) = styles.get("animation-duration").and_then(|s| parse_time(s.trim())) { first.duration_secs = v; had_longhand = true; }
+        if let Some(v) = styles.get("animation-timing-function") { first.timing_function = v.trim().to_string(); had_longhand = true; }
+        if let Some(v) = styles.get("animation-iteration-count") {
+            first.iteration_count = if v.trim() == "infinite" { f32::INFINITY } else { v.trim().parse().unwrap_or(1.0) };
+            had_longhand = true;
+        }
+        if let Some(v) = styles.get("animation-direction") { first.direction = v.trim().to_string(); had_longhand = true; }
+        if let Some(v) = styles.get("animation-delay").and_then(|s| parse_time(s.trim())) { first.delay_secs = v; had_longhand = true; }
+        if let Some(v) = styles.get("animation-fill-mode") { first.fill_mode = v.trim().to_string(); had_longhand = true; }
+        if let Some(v) = styles.get("animation-play-state") { first.play_state = v.trim().to_string(); had_longhand = true; }
+        if had_longhand {
+            if first.name != "none" && !first.name.is_empty() && first.duration_secs > 0.0 {
+                if out.is_empty() { out.push(first); } else { out[0] = first; }
+            }
+        }
+        out.retain(|s| s.name != "none" && !s.name.is_empty() && s.duration_secs > 0.0);
+        out
+    }
+
+    /// Parse jednoho subspecu shorthandu (bez carky).
+    fn parse_single_shorthand(short: &str) -> Option<AnimationSpec> {
         let mut name: Option<String> = None;
         let mut duration: f32 = 0.0;
         let mut timing: String = "linear".into();
         let mut iter: f32 = 1.0;
         let mut direction: String = "normal".into();
         let mut delay: f32 = 0.0;
-
         let mut fill_mode: String = "none".into();
         let mut play_state: String = "running".into();
-
-        // Shorthand parsing - tokenizace respektuje zavorky (cubic-bezier(...), steps(...))
-        // Multi-animation shorthand `a 3s, b 1s infinite` musi byt parsovany
-        // separately - jinak jeden spec sluci tokeny vsech a vznikne
-        // permanent infinite. Bereme jen PRVNI subspec (TODO multi-animation
-        // tracking pres Vec<AnimationSpec> v active_animations).
-        if let Some(short_full) = styles.get("animation") {
-            let short_first = match split_top_level_commas(short_full).first() {
-                Some(s) => s.to_string(),
-                None => short_full.clone(),
-            };
-            for tok in tokenize_balanced(&short_first) {
-                let tok = tok.as_str();
-                if let Some(s) = parse_time(tok) {
-                    if duration == 0.0 { duration = s; } else { delay = s; }
-                } else if tok == "infinite" {
-                    iter = f32::INFINITY;
-                } else if let Ok(n) = tok.parse::<f32>() {
-                    iter = n;
-                } else if matches!(tok, "linear" | "ease" | "ease-in" | "ease-out" | "ease-in-out" | "step-start" | "step-end")
-                    || tok.starts_with("cubic-bezier(") || tok.starts_with("steps(")
-                {
-                    timing = tok.to_string();
-                } else if matches!(tok, "normal" | "reverse" | "alternate" | "alternate-reverse") {
-                    direction = tok.to_string();
-                } else if matches!(tok, "none" | "forwards" | "backwards" | "both") {
-                    fill_mode = tok.to_string();
-                } else if matches!(tok, "running" | "paused") {
-                    play_state = tok.to_string();
-                } else {
-                    // Predpokladej name
-                    if name.is_none() { name = Some(tok.to_string()); }
-                }
+        for tok in tokenize_balanced(short) {
+            let tok = tok.as_str();
+            if let Some(s) = parse_time(tok) {
+                if duration == 0.0 { duration = s; } else { delay = s; }
+            } else if tok == "infinite" {
+                iter = f32::INFINITY;
+            } else if let Ok(n) = tok.parse::<f32>() {
+                iter = n;
+            } else if matches!(tok, "linear" | "ease" | "ease-in" | "ease-out" | "ease-in-out" | "step-start" | "step-end")
+                || tok.starts_with("cubic-bezier(") || tok.starts_with("steps(")
+            {
+                timing = tok.to_string();
+            } else if matches!(tok, "normal" | "reverse" | "alternate" | "alternate-reverse") {
+                direction = tok.to_string();
+            } else if matches!(tok, "none" | "forwards" | "backwards" | "both") {
+                fill_mode = tok.to_string();
+            } else if matches!(tok, "running" | "paused") {
+                play_state = tok.to_string();
+            } else {
+                // Predpokladej name
+                if name.is_none() { name = Some(tok.to_string()); }
             }
         }
-
-        // Longhand override
-        if let Some(v) = styles.get("animation-name") { name = Some(v.trim().to_string()); }
-        if let Some(v) = styles.get("animation-duration").and_then(|s| parse_time(s.trim())) { duration = v; }
-        if let Some(v) = styles.get("animation-timing-function") { timing = v.trim().to_string(); }
-        if let Some(v) = styles.get("animation-iteration-count") {
-            iter = if v.trim() == "infinite" { f32::INFINITY } else { v.trim().parse().unwrap_or(1.0) };
-        }
-        if let Some(v) = styles.get("animation-direction") { direction = v.trim().to_string(); }
-        if let Some(v) = styles.get("animation-delay").and_then(|s| parse_time(s.trim())) { delay = v; }
-        if let Some(v) = styles.get("animation-fill-mode") { fill_mode = v.trim().to_string(); }
-        if let Some(v) = styles.get("animation-play-state") { play_state = v.trim().to_string(); }
-
         let name = name?;
         if name == "none" || duration <= 0.0 { return None; }
         Some(AnimationSpec {
@@ -3877,6 +3891,11 @@ impl AnimationSpec {
             fill_mode, play_state,
         })
     }
+
+    pub fn from_styles(styles: &HashMap<String, String>) -> Option<AnimationSpec> {
+        Self::from_styles_multi(styles).into_iter().next()
+    }
+
 }
 
 /// CSS Transitions L1 parsovany shorthand.
@@ -4266,85 +4285,89 @@ pub fn apply_animations(
     let mut any_active = false;
 
     for styles_rc in style_map.values_mut() {
-        let spec = match AnimationSpec::from_styles(styles_rc.as_ref()) {
-            Some(s) => s, None => continue,
-        };
+        let specs = AnimationSpec::from_styles_multi(styles_rc.as_ref());
+        if specs.is_empty() { continue; }
+        // MULTI-ANIMATION: vsechny specy (`animation: typewriter 3s ..., blink
+        // 0.75s ...`) se vyhodnoti a aplikuji v poradi (pozdejsi prepise
+        // sdilene props - per CSS Animations L1 last-wins). Drive se bral jen
+        // PRVNI spec -> typewriter kurzor neblikal, multi-anim kombinace mrtve.
+        for spec in &specs {
+            // Najdi keyframes
+            let frames = stylesheets.iter()
+                .flat_map(|s| s.keyframes.iter())
+                .find(|k| k.name == spec.name);
+            let frames = match frames { Some(k) => &k.frames, None => continue };
 
-        // Najdi keyframes
-        let frames = stylesheets.iter()
-            .flat_map(|s| s.keyframes.iter())
-            .find(|k| k.name == spec.name);
-        let frames = match frames { Some(k) => &k.frames, None => continue };
+            // Cas po zaciatku animace (bez delay)
+            let t = elapsed_secs - spec.delay_secs;
 
-        // Cas po zaciatku animace (bez delay)
-        let t = elapsed_secs - spec.delay_secs;
+            // Pred zacatkem (delay zatim probiha)
+            if t < 0.0 {
+                // animation-fill-mode: backwards / both -> aplikuj prvni snimek pred zacatkem
+                if spec.fill_mode == "backwards" || spec.fill_mode == "both" {
+                    let initial = match spec.direction.as_str() {
+                        "reverse" | "alternate-reverse" => 1.0,
+                        _ => 0.0,
+                    };
+                    let interp_vals = interpolate_keyframes(frames, initial);
+                    let styles = Rc::make_mut(styles_rc);
+                    for (k, v) in interp_vals { styles.insert(k, v); }
+                    any_active = true;
+                }
+                continue;
+            }
 
-        // Pred zacatkem (delay zatim probiha)
-        if t < 0.0 {
-            // animation-fill-mode: backwards / both -> aplikuj prvni snimek pred zacatkem
-            if spec.fill_mode == "backwards" || spec.fill_mode == "both" {
-                let initial = match spec.direction.as_str() {
-                    "reverse" | "alternate-reverse" => 1.0,
-                    _ => 0.0,
-                };
-                let interp_vals = interpolate_keyframes(frames, initial);
+            // Paused: pouzij fixed progress 0 (nebo posledni - zatim 0 pro jednoduchost)
+            if spec.play_state == "paused" {
+                // Pouzij prvni snimek
+                let interp_vals = interpolate_keyframes(frames, 0.0);
                 let styles = Rc::make_mut(styles_rc);
                 for (k, v) in interp_vals { styles.insert(k, v); }
-                any_active = true;
+                continue;
             }
-            continue;
-        }
 
-        // Paused: pouzij fixed progress 0 (nebo posledni - zatim 0 pro jednoduchost)
-        if spec.play_state == "paused" {
-            // Pouzij prvni snimek
-            let interp_vals = interpolate_keyframes(frames, 0.0);
+            // Iter count check - dokonceni
+            let total_progress = t / spec.duration_secs;
+            if total_progress >= spec.iteration_count {
+                // Animace dokoncena
+                // animation-fill-mode: forwards / both -> drz posledni snimek
+                // jinak (none / backwards) -> nepouzivat keyframes (vrati se na puvodni styl)
+                if spec.fill_mode == "forwards" || spec.fill_mode == "both" {
+                    let final_progress = match spec.direction.as_str() {
+                        "reverse" => 0.0,
+                        "alternate" if (spec.iteration_count as i32) % 2 == 0 => 0.0,
+                        "alternate-reverse" if (spec.iteration_count as i32) % 2 == 0 => 1.0,
+                        _ => 1.0,
+                    };
+                    let interp_vals = interpolate_keyframes(frames, final_progress);
+                    let styles = Rc::make_mut(styles_rc);
+                    for (k, v) in interp_vals { styles.insert(k, v); }
+                }
+                continue;
+            }
+
+            // Aktivni iteration
+            let iter_idx = total_progress.floor() as i32;
+            let mut local = total_progress.fract(); // 0..1 v ramci aktualni iterace
+
+            // Direction handling
+            let reverse = match spec.direction.as_str() {
+                "reverse" => true,
+                "alternate" => iter_idx % 2 == 1,
+                "alternate-reverse" => iter_idx % 2 == 0,
+                _ => false,
+            };
+            if reverse { local = 1.0 - local; }
+
+            // Easing: PER-SEGMENT (uvnitr interpolate_keyframes_eased), NE na celkovy
+            // progress. Driv apply_easing(local) na celek = step-end/steps preskocil
+            // prostredni keyframy (blink stuck). Predame RAW local + timing.
+            let interp_vals = super::layout::interpolate_keyframes_eased(
+                frames, local, &spec.timing_function);
             let styles = Rc::make_mut(styles_rc);
             for (k, v) in interp_vals { styles.insert(k, v); }
-            continue;
+            any_active = true;
         }
-
-        // Iter count check - dokonceni
-        let total_progress = t / spec.duration_secs;
-        if total_progress >= spec.iteration_count {
-            // Animace dokoncena
-            // animation-fill-mode: forwards / both -> drz posledni snimek
-            // jinak (none / backwards) -> nepouzivat keyframes (vrati se na puvodni styl)
-            if spec.fill_mode == "forwards" || spec.fill_mode == "both" {
-                let final_progress = match spec.direction.as_str() {
-                    "reverse" => 0.0,
-                    "alternate" if (spec.iteration_count as i32) % 2 == 0 => 0.0,
-                    "alternate-reverse" if (spec.iteration_count as i32) % 2 == 0 => 1.0,
-                    _ => 1.0,
-                };
-                let interp_vals = interpolate_keyframes(frames, final_progress);
-                let styles = Rc::make_mut(styles_rc);
-                for (k, v) in interp_vals { styles.insert(k, v); }
-            }
-            continue;
-        }
-
-        // Aktivni iteration
-        let iter_idx = total_progress.floor() as i32;
-        let mut local = total_progress.fract(); // 0..1 v ramci aktualni iterace
-
-        // Direction handling
-        let reverse = match spec.direction.as_str() {
-            "reverse" => true,
-            "alternate" => iter_idx % 2 == 1,
-            "alternate-reverse" => iter_idx % 2 == 0,
-            _ => false,
-        };
-        if reverse { local = 1.0 - local; }
-
-        // Easing: PER-SEGMENT (uvnitr interpolate_keyframes_eased), NE na celkovy
-        // progress. Driv apply_easing(local) na celek = step-end/steps preskocil
-        // prostredni keyframy (blink stuck). Predame RAW local + timing.
-        let interp_vals = super::layout::interpolate_keyframes_eased(
-            frames, local, &spec.timing_function);
-        let styles = Rc::make_mut(styles_rc);
-        for (k, v) in interp_vals { styles.insert(k, v); }
-        any_active = true;
     }
 
     any_active

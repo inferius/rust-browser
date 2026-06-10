@@ -4377,6 +4377,36 @@ fn layout_block_vertical(bx: &mut LayoutBox) {
     let right_to_left = matches!(bx.writing_mode, WritingMode::VerticalRl | WritingMode::SidewaysRl);
     let has_explicit_w = bx.explicit_width.is_some();
 
+    // PASS 0: text deti delsi nez inner_h rozlamat na VICE SLOUPCU (kazdy
+    // sloupec = vlastni text box). Drive cely text = 1 sloupec co pretekal
+    // POD box pres dalsi sekce ("vertical text pretejka"). Chrome wrapuje
+    // vertical line boxy do dalsiho sloupce - tohle je ekvivalent pro nasi
+    // upright-stacking aproximaci.
+    if inner_h > 0.0 {
+        let mut rebuilt: Vec<LayoutBox> = Vec::with_capacity(bx.children.len());
+        for child in bx.children.drain(..) {
+            let is_plain_text = child.text.as_ref().map(|t| !t.contains('\n')).unwrap_or(false);
+            if !is_plain_text {
+                rebuilt.push(child);
+                continue;
+            }
+            let t = child.text.clone().unwrap_or_default();
+            let line_advance = child.font_size * 1.2;
+            let chars_per_col = ((inner_h / line_advance).floor() as usize).max(1);
+            let chars: Vec<char> = t.chars().collect();
+            if chars.len() <= chars_per_col {
+                rebuilt.push(child);
+                continue;
+            }
+            for chunk in chars.chunks(chars_per_col) {
+                let mut col = child.clone();
+                col.text = Some(chunk.iter().collect());
+                rebuilt.push(col);
+            }
+        }
+        bx.children = rebuilt;
+    }
+
     // PASS 1: stack text + urci child sirky (block-axis size kazdeho sloupce).
     let mut total_w = 0.0_f32;
     for child in bx.children.iter_mut() {
@@ -4975,9 +5005,11 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
     let parent_italic = bx.italic;
     let parent_color = bx.text_color;
     let parent_underline = bx.text_underline;
+    let parent_overline = bx.text_overline;
     let parent_strikethrough = bx.text_strikethrough;
     let parent_decor_style = bx.text_decoration_style.clone();
     let parent_decor_color = bx.text_decoration_color;
+    let parent_decor_thickness = bx.text_decoration_thickness;
     let parent_font_family = bx.font_family.clone();
     let parent_line_height = bx.line_height;
     let line_height_default = parent_font_size * 1.2;
@@ -5015,6 +5047,15 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
         if !bx.children[idx].text_underline && parent_underline {
             bx.children[idx].text_underline = true;
         }
+        // text_overline INHERIT - drive chybel -> text node dite spanu s
+        // "text-decoration: overline" overline NEkreslil ("double overline
+        // nefunguje" - underline/strike se dedily, overline ne).
+        if !bx.children[idx].text_overline && parent_overline {
+            bx.children[idx].text_overline = true;
+        }
+        if bx.children[idx].text_decoration_thickness <= 1.0 && parent_decor_thickness > 1.0 {
+            bx.children[idx].text_decoration_thickness = parent_decor_thickness;
+        }
         if !bx.children[idx].text_strikethrough && parent_strikethrough {
             bx.children[idx].text_strikethrough = true;
         }
@@ -5026,6 +5067,11 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
         }
         if bx.children[idx].font_family.is_empty() && !parent_font_family.is_empty() {
             bx.children[idx].font_family = parent_font_family.clone();
+        }
+        // white-space je inherited (CSS Text L3) - marquee-inner v nowrap
+        // wrapu musi dedit, jinak jeho vlastni inline layout text lame.
+        if !bx.children[idx].white_space_nowrap && bx.white_space_nowrap {
+            bx.children[idx].white_space_nowrap = true;
         }
         // line-height inherited (CSS spec). Text node ma default 1.4 nebo 1.2,
         // pri parentu s explicit line-height (60px na .anim-box / .filter-box)
@@ -5126,7 +5172,12 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
                 // FP ulpu (~1e-6). Pri exactni rovnosti by ANY epsilon > 0 trigger
                 // wrap; tim padem napriklad letter-spacing/text-transform spans
                 // dostavaly h=2x kvuli spurious wrapu na presne hranici.
-                let needs_wrap = inner_w > 0.0
+                // white-space: nowrap (na textu NEBO rodici - inherited) =
+                // zadne zalamovani. Drive se flag parsoval ale NIKDE nepouzil
+                // -> marquee text (nowrap) se lamal na 2 radky.
+                let nowrap = bx_clone.white_space_nowrap || bx.white_space_nowrap;
+                let needs_wrap = !nowrap
+                    && inner_w > 0.0
                     && cursor_x + inter_word_space + w > inner_x + inner_w + 0.5
                     && cursor_x > inner_x;
                 if needs_wrap {
@@ -5262,7 +5313,8 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
             // musi pokryt cele element_h aby cursor_y advance pod nej a section
             // content_h zahrnula pad bottom.
             line_height = line_height.max(element_h);
-            if cursor_x + estimated_w > inner_x + inner_w && cursor_x > inner_x {
+            let nowrap_ib = bx.white_space_nowrap || bx.children[idx].white_space_nowrap;
+            if !nowrap_ib && cursor_x + estimated_w > inner_x + inner_w && cursor_x > inner_x {
                 cursor_y += line_height;
                 cursor_x = inner_x;
             }
@@ -5418,7 +5470,10 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
             if sib_idx > 0 && prev_had_trailing_space && cursor_x > inner_x {
                 cursor_x += space_w;
             }
-            if cursor_x + w > inner_x + inner_w && cursor_x > inner_x {
+            // white-space: nowrap na rodici = inline elementy se nelamou
+            // (marquee: spany + texty musi zustat na 1 radku).
+            let nowrap_el = bx.white_space_nowrap || bx.children[idx].white_space_nowrap;
+            if !nowrap_el && cursor_x + w > inner_x + inner_w && cursor_x > inner_x {
                 cursor_y += line_height;
                 cursor_x = inner_x;
             }

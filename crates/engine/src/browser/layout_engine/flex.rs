@@ -1319,6 +1319,21 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             ch.rect.x += off_x;
             ch.rect.y += off_y;
         }
+        // Vertical writing-mode item: flex mu pri intrinsic sizingu dal
+        // HORIZONTALNI rozmery (269x14 = text na radek). Vertical stacking
+        // potrebuje VYSKU jako inline-axis constraint - dej available cross
+        // height containeru (Chrome: vertical text wrapuje na container
+        // height). Bez tohoto stacking lamal po 1 znaku (inner_h ~1 line).
+        if !matches!(ch.writing_mode, super::super::layout::WritingMode::HorizontalTb)
+            && ch.explicit_height.is_none()
+        {
+            let pad_t = bx.padding_top.unwrap_or(bx.padding);
+            let pad_b = bx.padding_bottom.unwrap_or(bx.padding);
+            let avail_h = bx.rect.height - pad_t - pad_b - 2.0 * bx.border_width;
+            if avail_h > ch.rect.height {
+                ch.rect.height = avail_h;
+            }
+        }
         // Non-default flex props na block elementu = treat jako flex (drive
         // String non-empty detect; ted typed - check non-default values).
         let has_flex_attr = !matches!(ch.flex_direction, FlexDirection::Row)
