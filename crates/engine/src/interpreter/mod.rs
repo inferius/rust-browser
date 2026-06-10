@@ -835,6 +835,10 @@ pub struct Interpreter {
     /// re-layoutuje BEZ re-cascade (dom_style_version) a SVG points re-paint
     /// BEZ re-layout.
     pub dom_layout_version: Rc<std::cell::Cell<u64>>,
+    /// Nody mutovane content-only zmenou (SVG geometry attrs) od posledniho
+    /// take_content_mutated_nodes(). WebView pres ne rozhoduje, jestli
+    /// off-screen JS animace (SVG wave RAF) musi dirty-ovat render.
+    pub content_mutated_nodes: Rc<RefCell<Vec<usize>>>,
 }
 
 /// True pro atributy ktere NEMOHOU ovlivnit CSS kaskadu (selector matching) -
@@ -1035,6 +1039,7 @@ impl Interpreter {
             shadow_roots: Rc::new(RefCell::new(HashMap::new())),
             stylesheets_lookup: None,
             dom_version: Rc::new(std::cell::Cell::new(0)),
+            content_mutated_nodes: Rc::new(RefCell::new(Vec::new())),
             dom_style_version: Rc::new(std::cell::Cell::new(0)),
             dom_layout_version: Rc::new(std::cell::Cell::new(0)),
         }
@@ -1070,6 +1075,19 @@ impl Interpreter {
     #[inline]
     pub fn bump_dom_version_content_only(&self) {
         self.dom_version.set(self.dom_version.get().wrapping_add(1));
+    }
+
+    /// Zaznamenej node mutovany content-only zmenou (SVG geometry attr).
+    /// WebView pri renderu checkuje, jestli nektery z nich zasahuje viewport -
+    /// off-screen JS RAF animace (SVG wave) pak NEdirti render (Chrome damage
+    /// model: neviditelna zmena = zadny frame).
+    pub fn note_content_mutated_node(&self, node_ptr: usize) {
+        self.content_mutated_nodes.borrow_mut().push(node_ptr);
+    }
+
+    /// Odeber + vrat nody mutovane content-only zmenami od posledniho take.
+    pub fn take_content_mutated_nodes(&self) -> Vec<usize> {
+        std::mem::take(&mut *self.content_mutated_nodes.borrow_mut())
     }
 
     /// Style-relevantni DOM mutation counter (viz pole dom_style_version).
@@ -1295,6 +1313,7 @@ impl Interpreter {
             && attribute_name.as_deref().map(is_non_cascading_attr).unwrap_or(false)
         {
             self.bump_dom_version_content_only();
+            self.note_content_mutated_node(Rc::as_ptr(target) as usize);
         } else {
             self.bump_dom_version();
         }
@@ -1371,6 +1390,7 @@ impl Interpreter {
             && attribute_name.as_deref().map(is_non_cascading_attr).unwrap_or(false)
         {
             self.bump_dom_version_content_only();
+            self.note_content_mutated_node(Rc::as_ptr(target) as usize);
         } else {
             self.bump_dom_version();
         }

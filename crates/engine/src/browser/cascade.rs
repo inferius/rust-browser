@@ -4207,6 +4207,18 @@ pub fn apply_transitions(
     active: &[ActiveTransition],
     elapsed_secs: f32,
 ) {
+    let _ = apply_transitions_tracked(style_map, active, elapsed_secs);
+}
+
+/// Jako apply_transitions + vraci true kdyz nektera transition meni LAYOUT
+/// prop (viz apply_animations_tracked - fp fast path).
+pub fn apply_transitions_tracked(
+    style_map: &mut StyleMap,
+    active: &[ActiveTransition],
+    elapsed_secs: f32,
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut layout_hash: u64 = 0;
     for at in active {
         let t = elapsed_secs - at.start_time - at.spec.delay_secs;
         if t < 0.0 { continue; }
@@ -4234,10 +4246,16 @@ pub fn apply_transitions(
             }
         };
 
+        if is_layout_prop(&at.property) {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            at.node_id.hash(&mut h); at.property.hash(&mut h); interpolated.hash(&mut h);
+            layout_hash ^= h.finish();
+        }
         if let Some(styles_rc) = style_map.get_mut(&at.node_id) {
             Rc::make_mut(styles_rc).insert(at.property.clone(), interpolated);
         }
     }
+    layout_hash
 }
 
 /// Aplikuje scroll-driven animations - misto time elapsed pouzij scroll progress.
@@ -4281,10 +4299,37 @@ pub fn apply_animations(
     stylesheets: &[Stylesheet],
     elapsed_secs: f32,
 ) -> bool {
-    use super::layout::interpolate_keyframes;
-    let mut any_active = false;
+    apply_animations_tracked(style_map, stylesheets, elapsed_secs).0
+}
 
-    for styles_rc in style_map.values_mut() {
+/// Je property layout-relevantni (zmena vyzaduje re-layout, ne jen re-paint)?
+#[inline]
+pub fn is_layout_prop(name: &str) -> bool {
+    LAYOUT_RELEVANT_PROPS.contains(&name)
+}
+
+/// Jako apply_animations, ale vraci i flag "zmenil se nejaky LAYOUT prop".
+/// Animace typicky meni transform/opacity/background (paint-only) -> caller
+/// muze pouzit layout fingerprint z PRE-anim cascade mapy (stable Rc ptr =
+/// fp cache hit = bez O(N) rehash kazdy frame). Pri width/height/... animaci
+/// (typewriter) flag donuti fp prepocet z post-anim hodnot.
+pub fn apply_animations_tracked(
+    style_map: &mut StyleMap,
+    stylesheets: &[Stylesheet],
+    elapsed_secs: f32,
+) -> (bool, u64) {
+    use super::layout::interpolate_keyframes;
+    use std::hash::{Hash, Hasher};
+    let mut any_active = false;
+    // Hash (node, prop, hodnota) vsech LAYOUT-prop insertu. Caller: layout_fp
+    // = base_fp ^ tento hash. Bezici width-anim => hodnota se meni => fp meni
+    // => layout MISS (spravne). DOKONCENA fill:forwards anim => konstantni
+    // hodnota => fp stabilni => layout cache HIT (drive bool flag = trvaly
+    // MISS = ~3ms layout blok kazdy frame navzdy po typewriteru).
+    let mut layout_hash: u64 = 0;
+
+    for (map_node_id, styles_rc) in style_map.iter_mut() {
+        let node_ptr_for_hash: usize = *map_node_id;
         let specs = AnimationSpec::from_styles_multi(styles_rc.as_ref());
         if specs.is_empty() { continue; }
         // MULTI-ANIMATION: vsechny specy (`animation: typewriter 3s ..., blink
@@ -4311,7 +4356,14 @@ pub fn apply_animations(
                     };
                     let interp_vals = interpolate_keyframes(frames, initial);
                     let styles = Rc::make_mut(styles_rc);
-                    for (k, v) in interp_vals { styles.insert(k, v); }
+                    for (k, v) in interp_vals {
+                    if is_layout_prop(&k) {
+                        let mut h = std::collections::hash_map::DefaultHasher::new();
+                        node_ptr_for_hash.hash(&mut h); k.hash(&mut h); v.hash(&mut h);
+                        layout_hash ^= h.finish();
+                    }
+                    styles.insert(k, v);
+                }
                     any_active = true;
                 }
                 continue;
@@ -4322,7 +4374,14 @@ pub fn apply_animations(
                 // Pouzij prvni snimek
                 let interp_vals = interpolate_keyframes(frames, 0.0);
                 let styles = Rc::make_mut(styles_rc);
-                for (k, v) in interp_vals { styles.insert(k, v); }
+                for (k, v) in interp_vals {
+                    if is_layout_prop(&k) {
+                        let mut h = std::collections::hash_map::DefaultHasher::new();
+                        node_ptr_for_hash.hash(&mut h); k.hash(&mut h); v.hash(&mut h);
+                        layout_hash ^= h.finish();
+                    }
+                    styles.insert(k, v);
+                }
                 continue;
             }
 
@@ -4341,7 +4400,14 @@ pub fn apply_animations(
                     };
                     let interp_vals = interpolate_keyframes(frames, final_progress);
                     let styles = Rc::make_mut(styles_rc);
-                    for (k, v) in interp_vals { styles.insert(k, v); }
+                    for (k, v) in interp_vals {
+                    if is_layout_prop(&k) {
+                        let mut h = std::collections::hash_map::DefaultHasher::new();
+                        node_ptr_for_hash.hash(&mut h); k.hash(&mut h); v.hash(&mut h);
+                        layout_hash ^= h.finish();
+                    }
+                    styles.insert(k, v);
+                }
                 }
                 continue;
             }
@@ -4365,10 +4431,17 @@ pub fn apply_animations(
             let interp_vals = super::layout::interpolate_keyframes_eased(
                 frames, local, &spec.timing_function);
             let styles = Rc::make_mut(styles_rc);
-            for (k, v) in interp_vals { styles.insert(k, v); }
+            for (k, v) in interp_vals {
+                    if is_layout_prop(&k) {
+                        let mut h = std::collections::hash_map::DefaultHasher::new();
+                        node_ptr_for_hash.hash(&mut h); k.hash(&mut h); v.hash(&mut h);
+                        layout_hash ^= h.finish();
+                    }
+                    styles.insert(k, v);
+                }
             any_active = true;
         }
     }
 
-    any_active
+    (any_active, layout_hash)
 }

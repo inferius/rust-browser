@@ -221,6 +221,9 @@ pub struct WebView {
     /// (JS DOM mutation pres setAttribute/appendChild/innerHTML potrebuje
     /// repaint i bez explicitniho input event).
     pub(crate) last_render_dom_version: u64,
+    /// Layout-relevantni verze pri poslednim renderu - rozliseni content-only
+    /// (SVG geometry) zmen od style/layout zmen pro off-screen damage skip.
+    pub(crate) last_render_dom_layout_version: u64,
     /// Canvas generation pri poslednim renderu - detekce canvas kresleni
     /// (canvas ops nebumpaji dom_version) -> dirty -> repaint.
     pub(crate) last_render_canvas_gen: u64,
@@ -303,6 +306,10 @@ pub struct WebView {
     /// last frame commands. Plne wired v D3/D4 (per-layer texture caching).
     /// Aktualne foundation - render_via zatim paintuje monolitne.
     pub(crate) layer_paint_cache: std::collections::HashMap<usize, Vec<crate::browser::paint::DisplayCommand>>,
+    /// Layer-LOCAL display cmds (shifted na layer origin) pro raster + warm.
+    /// Persistentni napric framy - re-paint jen damaged layery (drive lokalni
+    /// mapa kazdy frame = full re-paint vseho = ~2.5ms paint per anim frame).
+    pub(crate) layer_local_cache: std::collections::HashMap<usize, Vec<crate::browser::paint::DisplayCommand>>,
     /// Paint cache: hash style_map full content. Pri shode (cascade vraci
     /// novy Rc ale identicky content - hover bez :hover effect) skip paint
     /// + gpu submit, reuse cached target_view. Klicova win pres hover bez
@@ -817,6 +824,7 @@ impl WebView {
             nav_id: 0,
             collected_sources: Vec::new(),
             last_render_dom_version: 0,
+            last_render_dom_layout_version: 0,
             last_render_canvas_gen: 0,
             cascade_cache_key: None,
             cascade_cache_value: None,
@@ -840,6 +848,7 @@ impl WebView {
             prev_layer_fingerprints: std::collections::HashMap::new(),
             prev_tile_fingerprints: std::collections::HashMap::new(),
             layer_paint_cache: std::collections::HashMap::new(),
+            layer_local_cache: std::collections::HashMap::new(),
             last_paint_fingerprint: None,
             compositor_anims: crate::browser::compositor::anim::CompositorAnimStore::new(),
             tile_textures: std::collections::HashMap::new(),
@@ -1374,6 +1383,7 @@ impl WebView {
     pub(crate) fn gc_layer_textures(&mut self, alive_layer_ids: &std::collections::HashSet<usize>) {
         self.layer_textures.retain(|k, _| alive_layer_ids.contains(k));
         self.layer_paint_cache.retain(|k, _| alive_layer_ids.contains(k));
+        self.layer_local_cache.retain(|k, _| alive_layer_ids.contains(k));
         self.prev_layer_fingerprints.retain(|k, _| alive_layer_ids.contains(k));
         // Tile textures take vazane na layer_id - drop entries kde layer mrtvy.
         self.tile_textures.retain(|(lid, _), _| alive_layer_ids.contains(lid));
@@ -2840,8 +2850,42 @@ impl WebView {
         if let Some(interp) = &self.interpreter {
             let cur = interp.dom_version();
             if cur != self.last_render_dom_version {
-                self.dirty = true;
+                let cur_layout = interp.dom_layout_version();
+                let layout_or_style_changed = cur_layout != self.last_render_dom_layout_version;
+                if layout_or_style_changed {
+                    // Style/layout/structural mutace - vzdy render.
+                    self.dirty = true;
+                } else {
+                    // CONTENT-ONLY zmeny (SVG geometry attr z JS RAF animace).
+                    // Dirty JEN kdyz nektery mutovany node zasahuje viewport -
+                    // off-screen wave animace drive tocila full pipeline ~70x/s
+                    // "na prazdno" (Chrome damage model: neviditelna zmena =
+                    // zadny frame). Pri scrollu zpet nastavi dirty scroll sam
+                    // a render vezme aktualni DOM stav.
+                    let nodes = interp.take_content_mutated_nodes();
+                    let top = self.scroll_y - 200.0;
+                    let bot = self.scroll_y + self.viewport_h + 200.0;
+                    let left = self.scroll_x - 200.0;
+                    let right = self.scroll_x + self.viewport_w + 200.0;
+                    let any_visible = match self.last_layout_root.as_ref() {
+                        Some(root) => nodes.iter().any(|nid| {
+                            match crate::browser::paint::find_box_by_node_id(root, *nid) {
+                                Some(bx) => {
+                                    bx.rect.y + bx.rect.height >= top && bx.rect.y <= bot
+                                        && bx.rect.x + bx.rect.width >= left
+                                        && bx.rect.x <= right
+                                }
+                                None => true, // bez boxu = konzervativne render
+                            }
+                        }),
+                        None => true,
+                    };
+                    if any_visible {
+                        self.dirty = true;
+                    }
+                }
                 self.last_render_dom_version = cur;
+                self.last_render_dom_layout_version = cur_layout;
             }
             // Canvas kresleni (RAF) - generation diff -> dirty (canvas ops
             // nebumpaji dom_version). Robustni proti stabilnimu poctu ops
@@ -2869,6 +2913,13 @@ impl WebView {
         // Interval/RAF uz drained vyse; pokud zmenily DOM/canvas -> dirty.
         // Pokud NE (idle setInterval/measureFps) -> skip layout+paint = levne.
         let needs_tick = self.needs_animation_render();
+        if std::env::var("RWE_TICK_DBG").is_ok() {
+            eprintln!("[TICK] dirty={} needs_tick={} anims={} anims_visible={} trans={} scroll_anim={} caret={}",
+                self.dirty, needs_tick, self.active_animations.len(),
+                self.any_active_animation_visible(), self.active_transitions.len(),
+                self.scroll_anim_y.is_some() || (self.scroll_target_y - self.scroll_y).abs() > 0.5,
+                self.focused_is_input());
+        }
         if !self.dirty && !needs_tick {
             // Reset profilers - jinak title bar drzi historickou hodnotu z
             // prvni render (uvadi v omyl user diagnostiku).
@@ -3187,8 +3238,12 @@ impl WebView {
         // un-hover -> box se NEVRATIL. Drzenim base se make_mut nize donuti
         // klonovat (refcount 2) -> base zustane nezmenena.
         let cascade_base = style_map.clone();
+        // Track: meni transitions/animace LAYOUT props? Pokud NE (typicky -
+        // transform/opacity/bg), layout_fp se pocita z CASCADE BASE (stabilni
+        // Rc ptr z cascade cache -> fp_cache HIT = bez O(N) rehash ~1ms/frame).
+        let mut anim_layout_hash: u64 = 0;
         if !self.active_transitions.is_empty() {
-            crate::browser::cascade::apply_transitions(
+            anim_layout_hash ^= crate::browser::cascade::apply_transitions_tracked(
                 std::rc::Rc::make_mut(&mut style_map), &self.active_transitions, elapsed);
         }
         if std::env::var("RWE_TRANS_DBG").is_ok() && !self.active_transitions.is_empty() {
@@ -3206,8 +3261,9 @@ impl WebView {
         // overlay s animated property values (transform, opacity, left, ...).
         let has_keyframes = self.stylesheets.iter().any(|s| !s.keyframes.is_empty());
         if has_keyframes {
-            let _animating = crate::browser::cascade::apply_animations(
+            let (_animating, kf_layout_hash) = crate::browser::cascade::apply_animations_tracked(
                 std::rc::Rc::make_mut(&mut style_map), &self.stylesheets, elapsed);
+            anim_layout_hash ^= kf_layout_hash;
             let max_scroll = (style_map.len() as f32).max(1.0);
             let scroll_progress = if max_scroll > 1.0 { self.scroll_y / max_scroll.max(1.0) } else { 0.0 };
             let _ = crate::browser::cascade::apply_scroll_animations(
@@ -3286,7 +3342,7 @@ impl WebView {
 
         // Sync prev_style_map pro pristi frame transitions detection.
         // Pouzij cascade BASE (ne post-transition style_map) - viz komentar vyse.
-        self.prev_style_map = Some(cascade_base);
+        self.prev_style_map = Some(cascade_base.clone());
         let prof_t1 = std::time::Instant::now();
         self.prof_cascade_ms = prof_t1.duration_since(prof_t0).as_secs_f32() * 1000.0;
 
@@ -3336,18 +3392,28 @@ impl WebView {
         // hash zustava stable -> reuse cached layout_root. Skip layout_tree
         // call (363ms drop na <1ms v debug).
         // layout_fp cache - Rc identity klic.
-        let style_map_ptr = std::rc::Rc::as_ptr(&style_map) as usize;
-        let layout_fp = if let Some((cached_ptr, cached_fp)) = self.layout_fp_cache {
+        // PERF: animace/transitions delaji make_mut -> NOVY style_map ptr kazdy
+        // frame -> fp_cache vzdy MISS -> O(N) rehash ~1ms/frame. Pokud anim
+        // NEZMENILA layout props (transform/opacity/bg = paint-only), pocitej
+        // fp z CASCADE_BASE (stabilni Rc z cascade cache -> ptr match -> HIT).
+        // Layout-prop animace (width u typewriter) jdou drahou cestou (spravne
+        // per-frame hodnoty ve fp).
+        // fp z CASCADE BASE (stabilni Rc ptr -> cache HIT) XOR hash animovanych
+        // LAYOUT hodnot (bezici layout-anim = menici se hash = MISS; dokoncena
+        // fill:forwards = konstantni = HIT; zadna = 0).
+        let style_map_ptr = std::rc::Rc::as_ptr(&cascade_base) as usize;
+        let base_fp = if let Some((cached_ptr, cached_fp)) = self.layout_fp_cache {
             if cached_ptr == style_map_ptr { cached_fp } else {
-                let fp = crate::browser::cascade::layout_fingerprint(&style_map);
+                let fp = crate::browser::cascade::layout_fingerprint(&cascade_base);
                 self.layout_fp_cache = Some((style_map_ptr, fp));
                 fp
             }
         } else {
-            let fp = crate::browser::cascade::layout_fingerprint(&style_map);
+            let fp = crate::browser::cascade::layout_fingerprint(&cascade_base);
             self.layout_fp_cache = Some((style_map_ptr, fp));
             fp
         };
+        let layout_fp = base_fp ^ anim_layout_hash;
         // PERF: scroll_y NEN0 v key - smooth scroll inertia by jinak invalidoval
         // cache kazdy frame (lerp 25% per step = scroll_y meni kazdy pixel).
         // Layout je viewport+style closure, scroll je paint-time offset.
@@ -3706,9 +3772,11 @@ impl WebView {
         // Per layer s damage_rect = None: reuse cached commands z prev framu.
         // Assembly: concat per-layer caches v layer tree order.
         // Inspired by WebRender Picture cache (gfx/wr/webrender/src/picture.rs).
+        let _pp0 = std::time::Instant::now();
         let mut display_list = build_layered_display_list(
             &layer_tree, &layout_root, self.scroll_y, viewport_h,
             &mut self.layer_paint_cache);
+        let _pp1 = std::time::Instant::now();
 
         // D4 GPU layer pipeline pres env var prepinac. Default ON (layer mode).
         // POZN: transform vytvori LAYER a layer transform aplikuje JEN compositor.
@@ -3735,9 +3803,30 @@ impl WebView {
             // initially-off-screen chars co MUSI byt v atlasu. Drive warm pres
             // display_list -> scroll exposed chars co nikdy nebyly warmnute = chars
             // missing pri scroll.
-            let mut local_cache: std::collections::HashMap<usize, Vec<crate::browser::paint::DisplayCommand>>
-                = std::collections::HashMap::new();
-            build_layer_local_cache(&layer_tree, &layout_root, &mut local_cache);
+            // PERSISTENTNI cache (self pole) - drive lokalni HashMap::new()
+            // kazdy frame => contains_key vzdy false => paint_layer_into pro
+            // VSECHNY layery kazdy frame (root = cely strom walk ~2.5ms paint).
+            // Persistent: re-paint JEN damaged layery (podminka ve
+            // walk_layer_local), undamaged reuse cmds z minuleho framu.
+            build_layer_local_cache(&layer_tree, &layout_root, &mut self.layer_local_cache);
+            // Drop entries pro layery co uz neexistuji (DOM restrukturalizace) -
+            // jinak mapa roste neomezene.
+            {
+                let mut live: std::collections::HashSet<usize> = std::collections::HashSet::new();
+                fn collect_ids(l: &crate::browser::compositor::LayerNode, out: &mut std::collections::HashSet<usize>) {
+                    out.insert(l.id);
+                    for c in &l.children { collect_ids(c, out); }
+                }
+                collect_ids(&layer_tree, &mut live);
+                self.layer_local_cache.retain(|id, _| live.contains(id));
+            }
+            let local_cache = &self.layer_local_cache;
+            let _pp2 = std::time::Instant::now();
+            if std::env::var("RWE_PROF").is_ok() {
+                eprintln!("[PAINT-SUB] bdl={:.2}ms local_cache={:.2}ms",
+                    _pp1.duration_since(_pp0).as_secs_f32()*1000.0,
+                    _pp2.duration_since(_pp1).as_secs_f32()*1000.0);
+            }
             let mut flat: Vec<&crate::browser::compositor::LayerNode> = Vec::new();
             crate::browser::compositor::flatten_layers(&layer_tree, &mut flat);
             // Warm atlas pres VSECHNY layer-local cmds (= full content per layer).
@@ -3832,6 +3921,9 @@ impl WebView {
                         renderer.debug_dump_texture(&slot.texture, slot.width, slot.height, &path);
                     }
                 }
+            }
+            if std::env::var("RWE_PROF").is_ok() {
+                eprintln!("[PAINT-SUB2] warm+raster={:.2}ms", _pp2.elapsed().as_secs_f32()*1000.0);
             }
             // Track display_list len at point overlay items zacinaji byt appendovany.
             // Vse pred = layer content (replaced by composite). Vse po = overlay
@@ -4434,13 +4526,38 @@ impl WebView {
     /// Bez tohoto rozdeleni full render kazdy frame jen kvuli setInterval/RAF
     /// co nic nemeni = devtools/stranka <30 FPS i kdyz se NIC nedeje.
     pub fn needs_animation_render(&self) -> bool {
-        !self.active_animations.is_empty()
+        (!self.active_animations.is_empty() && self.any_active_animation_visible())
             || !self.active_transitions.is_empty()
             || self.scroll_anim_y.is_some()
             || self.scroll_anim_x.is_some()
             || (self.scroll_target_y - self.scroll_y).abs() > 0.5
             || (self.scroll_target_x - self.scroll_x).abs() > 0.5
             || self.focused_is_input()
+    }
+
+    /// Animace MIMO viewport netickaji render (Chrome compositor throttling).
+    /// Idle stranka s animacemi dole (colorCycle/spin v sekci mimo view) drive
+    /// tocila FULL pipeline ~70x/s (layout-blok 3-5ms + paint + gpu) = zalostny
+    /// vykon "na prazdno". Elapsed time animaci je absolutni -> pri scrollu
+    /// zpet do view pokracuji na spravne pozici (scroll sam triggeruje render).
+    /// 200px margin = animace tesne za hranou jeste tickaji (plynuly nastup).
+    fn any_active_animation_visible(&self) -> bool {
+        let Some(root) = self.last_layout_root.as_ref() else { return true; };
+        let top = self.scroll_y - 200.0;
+        let bot = self.scroll_y + self.viewport_h + 200.0;
+        let left = self.scroll_x - 200.0;
+        let right = self.scroll_x + self.viewport_w + 200.0;
+        self.active_animations.iter().any(|(nid, _)| {
+            match crate::browser::paint::find_box_by_node_id(root, *nid) {
+                Some(bx) => {
+                    bx.rect.y + bx.rect.height >= top && bx.rect.y <= bot
+                        && bx.rect.x + bx.rect.width >= left && bx.rect.x <= right
+                }
+                // Box nenalezen (display:none / pred prvnim layoutem) - radsi
+                // konzervativne tickat nez zamrznout viditelnou animaci.
+                None => true,
+            }
+        })
     }
 
     /// Nastav zoom level. Stejne jako resize trigger relayout.
@@ -4459,6 +4576,7 @@ impl WebView {
             self.prev_layer_fingerprints.clear();
             self.prev_tile_fingerprints.clear();
             self.layer_paint_cache.clear();
+            self.layer_local_cache.clear();
             self.last_paint_fingerprint = None;
             self.layout_cache_key = None;
             self.cascade_cache_key = None;
