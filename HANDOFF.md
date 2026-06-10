@@ -59,127 +59,150 @@ plynule + scrollbar/overlay NEzmizel). Revert pri regresi.
 urgence; fast path je velka hot-path zmena s klesajicim perceptualnim prinosem.
 Ale ma hodnotu i mimo FPS (spravna architektura, nizsi spotreba).
 
-## Session N+35: chyby-rbro v3 systematicky - mix-blend, keyboard, cursor, overflow, forms, hover
+## Session N+35: chyby-rbro v3 systematicky - 13 fixu interakce + rendering
 
-User mandat: "Stahni si chromium/ff zdrojaky a systematicky projdi cely dokument
-a opravuj to konecne vsechno." + verifikacni lekce: overovat REALNOU interakci
-(SendInput hw injection + traces + deterministicke testy), ne jen rendering.
+User mandat: "systematicky projdi cely dokument a opravuj to konecne vsechno"
+(reference Chromium/FF algoritmy). **Verifikacni lekce (kriticka):** overovat
+REALNOU INTERAKCI (SendInput hw injection + gated traces + deterministicke
+Rust testy), NE jen rendering screenshoty. 13 commitu, vse takto overeno.
+4194 testu pass, engine-test 85 FPS bez regrese.
 
-Verifikacni harness (PowerShell, v %TEMP%): cap2.ps1 (PrintWindow capture, match
-titulku - POZOR pouzij "Rust" ne "Engine"! Chrome ma engine-test otevreny =
-"Engine Test Suite" koliduje. rwe FPS titulek = "...- N FPS"), inject.ps1 (klik+
-key), typeseq.ps1 (klik+type string pres VkKeyScan), wheel.ps1 (klik+wheel -
-POZOR [uint32](-120) HAZI vyjimku, pouzij two's-complement 4294967176),
-move.ps1 (hover move + SetForegroundWindow). Traces gated: RWE_CURSOR_DBG,
-RWE_SCROLL_DBG, RWE_INPUT_DBG, RWE_HOVER_DBG.
+### Verifikacni harness (PowerShell scripty v %TEMP%, reusable)
 
-Opraveno (6 commitu, vse SendInput-overeno):
+- **cap2.ps1** `-titleMatch X -outName Y.png -cw -ch [-sx -sy]` = PrintWindow
+  capture + crop. **POZOR titleMatch: pouzij "Rust" NE "Engine"** - user ma Chrome
+  s engine-test otevreny ("Engine Test Suite" koliduje). rwe titulek je "Rust Web
+  Engine - <path>" pri loadu, "RustWebEngine - N FPS" po renderu (FPS overlay) ->
+  pro engine-test (titulek = page <title> "Engine Test Suite") matchni "FPS".
+  Okno byva minimalizovane -> script dela ShowWindow(SW_RESTORE)+SetForeground.
+- **inject.ps1** `-clientX -clientY -vkHex` = klik (mouse_event ABSOLUTE 0x8001/2/4)
+  + 1 klavesa. Klik AKTIVUJE okno (SetForegroundWindow z bg PS nestaci pro WM_*).
+- **typeseq.ps1** `-clickX -clickY -text` = klik + napis string (VkKeyScan).
+- **wheel.ps1** `-clientX -clientY -ticks -dir` = klik + wheel. **POZOR**
+  `[uint32](-120)` HAZI vyjimku -> two's-complement 4294967176 pro dir<0.
+- **move.ps1** `-clientX -clientY` = hover move (+SetForeground, jinak jine okno
+  na pozici dostane WM_MOUSEMOVE).
+- **drag.ps1** `-x0 -y0 -x1 -y1` = down + 10-step move + up (resize/dnd drag).
+- **resizewin.ps1** `-w -h` = SetWindowPos resize (POZN: nedosahne engine viewport
+  update - viz vw-on-resize nize; real drag-resize funguje).
+- Gated stderr traces: `RWE_CURSOR_DBG RWE_SCROLL_DBG RWE_INPUT_DBG RWE_HOVER_DBG
+  RWE_RESIZE_DBG RWE_CQ_DBG` (+ [SEL]/[WHEEL]/[INNER] pod RWE_INPUT/SCROLL).
 
-1. **mix-blend-mode** (#28 "cela jina") - byl jen identity alpha fallback. Real
-   blend pres LAYER compose (jak Chrome/FF: mix-blend = stacking context = vlastni
-   layer, blend pri kompozici pres backdrop). is_layer_boundary += mix-blend;
-   LayerNode.blend_mode; BLEND_COMPOSE_SHADER (compose geom + dst sample + plna
-   CSS Compositing-1 formule, un-premultiply); compose_blend_layer_into_encoder
-   (snapshot target_texture -> offscreen_tex_b -> blend pass). paint: suppress
-   BlendBegin kdyz box JE layer root (jinak identity fallback cleruje layer tex
-   na grey = border-radius rohy neprusvitne).
+### Opraveno - INTERAKCE (jadro user stiznosti "skoro nic nefunguje")
 
-2. **Keyboard events** (#26 "vubec nefunguji") - engine browser-mode KeyboardInput
-   handler NIKDY neforwardoval page keydown/keyup do webview (jen chrome/devtools).
-   Fix: logical_key_to_js() + forward KeyDown (po chrome checks) + KeyUp. Plus
-   nearest_focusable() walk-up: klik na <span> uvnitr <div tabindex=0> focusuje
-   div (ne span) - jinak keydown nedispatchnut.
+1. **Keyboard events** (#26) - engine browser-mode KeyboardInput handler NIKDY
+   neforwardoval page keydown/keyup do webview (jen chrome/devtools/form). Fix:
+   `logical_key_to_js()` + forward KeyDown (render/mod.rs po chrome checks, pred
+   scroll) + KeyUp (na zacatku). Plus `nearest_focusable()` walk-up: klik na <span>
+   uvnitr <div tabindex=0> focusuje div (ne span). [render/mod.rs, webview.rs]
 
-3. **Cursor** (#5/#13 I-beam nad textem, pointer nad button) - compute_cursor_icon
-   se volal s target=None ("layout_root dead na App"). Fix: hit-test webview.
-   last_layout_root -> target box -> pointer/text/default.
+2. **Hover** (#40, **SIROKE**) - (a) `collect_hover_affected_set` davalo do setu
+   jen element s :hover rulem, ne potomky -> hovered_id (td/text potomek) nebyl
+   v setu -> dirty-on-hover check selhal -> hover dead. Fix: `add_subtree` (cascade.
+   rs). (b) `layout_fingerprint` vynechava paint props (bg/color) co se BAKUJI do
+   LayoutBox -> layout cache HIT reuse stale bg = sticky :hover + "table jump".
+   Fix: force re-layout pri `cascade_was_miss` (subtree cache rebuildne jen zmeneny
+   radek). **Tyka se vsech :hover/:focus/:active na elementech s potomky.**
 
-4. **Overflow clip** (#11 "pretika mimo") - clip jen culloval KOMPLETNE-venku;
-   partial-overlap (radek pres hranu) pretekal. Fix: clamp Rect/Border na hranice
-   + drop Text/Image jejichz STRED je mimo clip.
+3. **Cursor pointer/I-beam** (#5/#13) - `compute_cursor_icon` se volal s
+   target=None. Fix: hit-test webview.last_layout_root -> button/a=Pointer,
+   text=Text. [render/mod.rs]
 
-5. **Forms** (#37) - (a) DomInputBuffer.commit_back tise zapsal value bez bump_
-   dom_version + bez 'input' eventu = stale display + oninput nefire. Fix: po
-   dispatch porovnat value, pri zmene bump + dispatch 'input'. (b) compute_subtree_
-   hash NEhashoval value/checked/selected = typing nezmenil fingerprint = stale
-   subtree cache (placeholder nezmizel, value se nezobrazil). Fix: hashovat je.
-   accent-color OVERENO ze funguje (slider zluty, checkbox modry).
+4. **CSS cursor property** (#58, **SIROKE**) - compute_cursor_icon IGNOROVAL CSS
+   `cursor` (jen InteractiveKind). `css_cursor_to_icon()` + walk root->mouse
+   (inherited -> propaguj do text boxu). grab/move/not-allowed/help/zoom/...
 
-6. **Hover** (#40 table jump + siroke :hover dead) - (a) collect_hover_affected_set
-   davalo do setu jen element s :hover rulem, ne potomky -> hovered_id (td/text
-   potomek) nebyl v setu -> dirty-on-hover check selhal -> hover dead. Fix:
-   add_subtree (element + potomci). (b) layout_fingerprint vynechava paint props
-   (bg/color) co se BAKUJI do LayoutBox -> layout cache HIT reuse stale baked bg
-   = sticky :hover. Fix: force re-layout pri cascade_was_miss (subtree cache =
-   levne, rebuildne jen zmeneny radek -> taky resi "jump", geometrie identicka).
-   TYKA SE VSECH :hover/:focus/:active na elementech s potomky (tabulky, listy,
-   karty, nav s ikonami) = pravdepodobne user-wide "hover nefunguje" pocit.
+5. **Forms typing** (#37) - (a) `DomInputBuffer.commit_back` tise zapsal value bez
+   bump_dom_version + bez 'input' eventu = stale display + oninput nefire. Fix:
+   porovnat value pred/po, pri zmene bump + dispatch 'input'. (b) `compute_subtree_
+   hash` NEhashoval value/checked/selected = stale subtree cache (placeholder
+   nezmizel). Fix: hashovat je. accent-color OVERENO ze funguje.
 
-7. **Resize element** (#55 "nejde resizovat") - mechanismus fungoval ale
-   nepouzitelny: kurzor se nad 16px grip nemenil (find_resize_grip -> NwseResize
-   v compute_cursor_icon) + tah selektoval text (engine skip page_sel_begin na
-   grip). Overeno: NwseResize kurzor, drag 250x150->375x218, ResizeObserver fire.
+6. **Resize element** (#55) - kurzor se nad 16px grip nemenil + tah selektoval.
+   Fix: find_resize_grip -> NwseResize v compute_cursor_icon + engine skip
+   page_sel_begin na grip. Drag 250x150->375x218 + ResizeObserver fire.
 
-8. **CSS cursor property** (#58 + broad) - compute_cursor_icon IGNOROVAL CSS
-   `cursor` (jen InteractiveKind). css_cursor_to_icon() mapping + walk root->mouse
-   (cursor je inherited -> propaguj do text boxu). Overeno: grab/move/pointer/help
-   spravne i nad textem. Broad - vsechny custom kurzory.
+7. **Drag&Drop** (#58-60) - DnD eventy se NIKDY nedispatchovaly. Webview
+   `DragSession` state machine: MouseDown na draggable=true -> session; MouseMove
+   >4px -> dragstart + hit-test -> dragleave/enter + dragover (preventDefault
+   check); MouseUp -> drop + dragend. `helpers::make_data_transfer` sdileny.
+   "DROPPED: ALPHA" (setData->getData). [webview.rs]
 
-9. **Drag&Drop** (#58-60 "vubec nefunguje") - DnD eventy se NIKDY nedispatchovaly.
-   Webview DragSession state machine: MouseDown na draggable -> session; MouseMove
-   >4px -> dragstart, hit-test target -> dragleave/dragenter + dragover (preventDef
-   check); MouseUp -> drop (na drop_target) + dragend. helpers::make_data_transfer
-   sdileny napric. Engine skip page_sel na draggable. Overeno: drag ALPHA/BETA ->
-   "DROPPED: ALPHA" (setData->getData pres dataTransfer).
+8. **user-select: none** (**SIROKE**) - engine ignoroval -> selekce na button/UI/
+   draggable. LayoutBox.user_select_none + parse + INHERITED + page_sel_begin
+   guard (walk root->point). Resi i DnD text-select prosvita.
 
-10. **@container query** (#45 "nefunguje vubec") - webview volal cascade_with_
-   viewport (ignoruje cq) misto cascade_with_container_sizes. build container_sizes
-   z prev layoutu (1-frame lag + konvergence force-dirty + cache_key hash). subtree
-   fingerprint += viewport pri vw/vh. Overeno: 600px container->GREEN, 300px->RED
-   (vyhodnoceno proti CONTAINER size). Pozn: resize-driven jeste blokuje vw-on-
-   resize (SetWindowPos neupdatuje engine viewport v testu).
+### Opraveno - RENDERING / CSS features
 
-Test fixtures: blend_test, kbd_test, forms_test, overflow_test, table_test,
-resize_test, dnd_test, container_test. 4191 testu pass. Gated traces: RWE_*_DBG
-(CURSOR/SCROLL/INPUT/HOVER/RESIZE/CQ/SEL).
+9. **mix-blend-mode** (#28) - byl identity alpha fallback. Real blend pres LAYER
+   compose (mix-blend = stacking context = vlastni layer, blend pri kompozici pres
+   backdrop, jak Chrome/FF). is_layer_boundary += mix-blend; LayerNode.blend_mode;
+   `BLEND_COMPOSE_SHADER` (compose geom + dst sample + plna CSS Compositing-1,
+   un-premultiply); `compose_blend_layer_into_encoder` (snapshot target_texture ->
+   offscreen_tex_b -> blend pass). paint: suppress BlendBegin kdyz box JE layer
+   root. Vsech 16 modes. [compositor/mod.rs, render/{mod,shaders}.rs, paint.rs]
 
-ZBYVA (chyby-rbro v3): vw-on-resize (engine viewport update + subtree fp hotovy,
-ale SetWindowPos test nedosahl - overit real drag-resize), box-sizing (width:N
--> rect N vc. padding/border misto +, default border-box misto content-box -
-RISK), pseudo-element + @container content (::before content se neaplikuje pod
-@container), #1 top bar backdrop-filter translucent, #54 IntersectionObserver
-(inner-scroll coords), #56 MutationObserver styling, #20/21 pseudo + nth-child
-jagged AA, #32 typografie (vertical text/column-count/blink), #34 inline SVG,
-#27 filter blur top cut, #25 gradienty radial/animated, canvas persistent bitmap,
-DnD text-selection prosvita (real .draggable maji user-select:none ale engine ho
-mozna neresprektuje pri selekci), #58 flex row-gap.
+10. **@container query** (#45) - webview volal `cascade_with_viewport` (ignoruje
+   cq) misto `cascade_with_container_sizes`. build container_sizes z prev layoutu
+   (1-frame lag + konvergence force-dirty + cache_key hash). subtree fingerprint
+   += viewport pri vw/vh. 600px container->GREEN, 300px->RED (proti CONTAINER
+   size). [webview.rs render_via]
 
-### Batch 2 (pokracovani N+35) - 2 dalsi fixy + extensivni verifikace
+11. **Overflow clip** (#11) - clip jen culloval KOMPLETNE-venku; partial-overlap
+   pretekal. Fix: clamp Rect/Border na hranice + drop Text/Image se stredem mimo
+   clip. [paint.rs]
 
-11. **Vertical text** (#32 "v hajzlu") - vertical-rl block bral full parent width
-    (1218px) -> text positioned vpravo MIMO obrazovku = prazdny box. Fix
-    (layout_block_vertical 2-pass): upright char-stacking (\n mezi znaky) +
-    shrink-to-fit box width. Renderuje misto prazdne.
-12. **Gradienty px stops** (#25) - parse_stop_part nezvladal px pozice (#000 0
-    10px) -> parse_color cele selhalo -> 0 stops -> repeating-linear BLANK. Fix:
-    extrahuj color z leading tokenu (px nelze na fraction bez box size). Renderuje
-    misto blank.
+12. **Vertical text** (#32) - vertical-rl block bral full parent width (1218px) ->
+   text positioned vpravo MIMO obrazovku = prazdny box. Fix (layout_block_vertical
+   2-pass): upright char-stacking (\n mezi znaky) + shrink-to-fit box width.
+   Renderuje (V-e-r-t-i-k upright). Real CSS rotuje glyphy = aproximace.
 
-OVERENO ZE FUNGUJE (ne bug, stiznost stale/specificka): flex row-gap (wrap +
-flex-direction:column), CSS animace (transform translateX ball se hybe x100->x280,
-opacity), text-decoration (underline/overline/line-through/wavy/dotted/thick/
-text-shadow/multi vse renderuje), filtry (blur/drop-shadow/brightness/combo),
-gradienty (linear/radial/conic/positioned). column-count FUNGUJE pro multi-child
-(layout_block_multicol distribuuje child boxy) ale NE single text block (line-level
-fragmentace - inline wrapuje za render time = architektura).
+13. **Gradienty px stops** (#25) - `parse_stop_part` nezvladal px pozice (#000 0
+   10px) -> parse_color cele selhalo -> 0 stops -> repeating-linear BLANK. Fix:
+   extrahuj color z leading tokenu (px nelze na fraction bez box size = jen color +
+   default offset, ne striped pattern). [gradients.rs]
 
-DEFERRED (velke/rizikove): box-sizing content-box (POTVRZEN bug: width:200 pad:50
--> rect 200 misto 300; ALE engine-test pouziva *{box-sizing:border-box} = engine
-chovani sedi -> fix bezpecny ale velky/risk pro content-box stranky), #1 backdrop-
-filter blur (header je translucent ale blur+sampling scrolled content za hlavickou
-chybi = layer backdrop sampling jako mix-blend ale s blur, ~100 LOC + risk),
-column-count single-text (line fragmentace), IO inner-scroll coords, MutationObs
-styling (specificke demo), canvas persistent bitmap.
+### OVERENO ZE FUNGUJE (NE bug - stiznost stale/specificka, NEMENIT)
+
+flex gap (wrap + flex-direction:column), CSS animace (transform translateX ball
+x100->x280 + opacity), text-decoration (underline/overline/line-through/wavy/
+dotted/thick/text-shadow/multi), filtry (blur/drop-shadow/brightness/combo),
+gradienty (linear/radial/conic/positioned), column-count multi-child
+(layout_block_multicol distribuuje child boxy).
+
+### DEFERRED do dalsi session (velke / rizikove / specificke)
+
+- **#1 backdrop-filter blur** (top bar) - header JE translucent (alpha OK) ale
+  blur + sampling scrolled-content za hlavickou chybi. Layer-raster skipuje
+  backdrop snapshot (Seg::BackdropFilter in_layer_raster guard). Reseni jako
+  mix-blend ale s blur: pri compose layeru s backdrop-filter snapshot target
+  region -> run_blur_passes -> composit pod layer. ~100 LOC, risk pro compose path.
+- **column-count single text block** - layout_block_multicol distribuuje CHILD
+  boxy, ne line-level fragmentaci jednoho odstavce. Inline text wrapuje za RENDER
+  time (box.text + width, ne explicit line boxy) -> fragmentace = render-level
+  zmena. Multi-child funguje.
+- **box-sizing content-box** - POTVRZEN bug: `width:200; padding:50` -> rect.width
+  200 (border-box) misto 300 (content-box default). Engine ignoruje box_sizing
+  (field parsovan, neaplikovan). ALE engine-test pouziva `*{box-sizing:border-box}`
+  -> engine chovani sedi. Fix bezpecny pro border-box stranky ALE meni vsechny
+  content-box stranky (vetsi elementy = risk overflow) + % padding resolve at
+  layout time = slozite.
+- **vw-on-resize** - subtree fingerprint += viewport pri vw/vh jednotkach HOTOVY
+  (soucast @container commitu) - vw element by se mel reflownout na resize. ALE
+  SetWindowPos z bg PS NEUPDATUJE engine viewport (container stale 921.6=90vw/1024
+  po resize na 420 = engine nedostal Resized). Overit REAL drag-resize okna
+  (calc-on-resize fungoval N+34 -> mechanismus OK, podezreni jen na test harness).
+- **#54 IntersectionObserver** - logika vypada korektni (isIntersecting=ratio>0),
+  user "mozna obracene". Mozna inner-scroll coords (IO row scrolluje horizontalne
+  v containeru, rect_lookup neni inner-scroll-aware).
+- **#56 MutationObserver styling**, **#20/21 pseudo + nth-child jagged AA**,
+  **#34 inline SVG animate/viewBox**, **#27 filter blur top cut**, **canvas
+  persistent bitmap** ("funguje blbe" = op-replay bez persistent backing store,
+  render-to-texture = velke), **pseudo ::before content pod @container**.
+
+Test fixtures (static/): blend_test, kbd_test, forms_test, overflow_test,
+table_test, resize_test, dnd_test, container_test, anim_test, typo_test,
+grad_test.
 
 ## Session N+34: PERF - canvas <1FPS, calc-on-resize, 3-tier version (113->167 FPS)
 
