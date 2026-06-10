@@ -200,7 +200,6 @@ pub fn shift_command_y(cmd: &mut DisplayCommand, dy: f32) {
         DisplayCommand::Rect { y, .. }
         | DisplayCommand::Border { y, .. }
         | DisplayCommand::Text { y, .. }
-        | DisplayCommand::Gradient { y, .. }
         | DisplayCommand::Shadow { y, .. }
         | DisplayCommand::Image { y, .. }
         | DisplayCommand::ImageFit { y, .. }
@@ -209,6 +208,18 @@ pub fn shift_command_y(cmd: &mut DisplayCommand, dy: f32) {
         | DisplayCommand::BackdropFilterBegin { y, .. }
         | DisplayCommand::TransformBegin { y, .. }
         | DisplayCommand::MaskBegin { y, .. } => *y += dy,
+        // Gradient: krom rect posunout i ABSOLUTNI stred Radial/Conic kindu.
+        // Bez tohoto layer-local raster (i scroll shift) nechal stred ve world
+        // coords -> shader sampluje vzdalenou (transparent) cast gradientu =
+        // "radial/conic boxy cerne" na strankach s vice layery.
+        DisplayCommand::Gradient { y, kind, .. } => {
+            *y += dy;
+            match kind {
+                crate::browser::paint::GradientKind::Radial { cy, .. } => *cy += dy,
+                crate::browser::paint::GradientKind::Conic { cy, .. } => *cy += dy,
+                crate::browser::paint::GradientKind::Linear { .. } => {}
+            }
+        }
         DisplayCommand::ClippedRect { points, .. } => {
             for (_, py) in points.iter_mut() {
                 *py += dy;
@@ -229,7 +240,6 @@ pub fn shift_command_x(cmd: &mut DisplayCommand, dx: f32) {
         DisplayCommand::Rect { x, .. }
         | DisplayCommand::Border { x, .. }
         | DisplayCommand::Text { x, .. }
-        | DisplayCommand::Gradient { x, .. }
         | DisplayCommand::Shadow { x, .. }
         | DisplayCommand::Image { x, .. }
         | DisplayCommand::ImageFit { x, .. }
@@ -238,6 +248,15 @@ pub fn shift_command_x(cmd: &mut DisplayCommand, dx: f32) {
         | DisplayCommand::BackdropFilterBegin { x, .. }
         | DisplayCommand::TransformBegin { x, .. }
         | DisplayCommand::MaskBegin { x, .. } => *x += dx,
+        // Gradient: viz shift_command_y - posun i stred Radial/Conic.
+        DisplayCommand::Gradient { x, kind, .. } => {
+            *x += dx;
+            match kind {
+                crate::browser::paint::GradientKind::Radial { cx, .. } => *cx += dx,
+                crate::browser::paint::GradientKind::Conic { cx, .. } => *cx += dx,
+                crate::browser::paint::GradientKind::Linear { .. } => {}
+            }
+        }
         DisplayCommand::ClippedRect { points, .. } => {
             for (px, _) in points.iter_mut() {
                 *px += dx;

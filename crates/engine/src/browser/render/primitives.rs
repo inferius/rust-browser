@@ -461,6 +461,11 @@ pub(super) fn push_multi_stop_radial_gradient(verts: &mut Vec<Vertex>, x: f32, y
     // v ramci aktualniho clip rectu. Pouzijem mode 0 a vlozime barvu primo do vertex.color.
     let interp_color = |t: f32| -> [f32; 4] {
         let t = t.clamp(0.0, 1.0);
+        // CSS edge clamp: pred prvnim stopem barva prvniho stopu (jinak
+        // center disk dostal barvu POSLEDNIHO stopu pres fallthrough).
+        if t <= stops[0].0 {
+            return stops[0].1;
+        }
         // Najdeme segment
         for i in 0..stops.len() - 1 {
             let a = stops[i].0;
@@ -547,6 +552,44 @@ pub(super) fn push_multi_stop_radial_gradient(verts: &mut Vec<Vertex>, x: f32, y
             push_v(verts, p_inner_1, c_a);
         }
     }
+    // CSS edge clamp: ZA poslednim stopem plati barva posledniho stopu do
+    // nekonecna. Vykresli vnejsi annulus z r_last do r_max (pokryje rohy boxu).
+    // Bez tohoto byla oblast za poslednim stopem nevyplnena (prosvitalo bg).
+    let t_last = stops.last().unwrap().0.clamp(0.0, 1.0);
+    let r_last = t_last * grad_r;
+    let r_max = {
+        let dx_max = (gcx - x).abs().max((x + w - gcx).abs());
+        let dy_max = (gcy - y).abs().max((y + h - gcy).abs());
+        (dx_max * dx_max + dy_max * dy_max).sqrt() * 1.05
+    };
+    if r_max > r_last + 0.5 {
+        let c_last = stops.last().unwrap().1;
+        for k in 0..K {
+            let a0 = (k as f32) / (K as f32) * std::f32::consts::TAU;
+            let a1 = ((k + 1) as f32) / (K as f32) * std::f32::consts::TAU;
+            let pts = [
+                (gcx + a0.cos() * r_last, gcy + a0.sin() * r_last),
+                (gcx + a0.cos() * r_max, gcy + a0.sin() * r_max),
+                (gcx + a1.cos() * r_max, gcy + a1.sin() * r_max),
+                (gcx + a0.cos() * r_last, gcy + a0.sin() * r_last),
+                (gcx + a1.cos() * r_max, gcy + a1.sin() * r_max),
+                (gcx + a1.cos() * r_last, gcy + a1.sin() * r_last),
+            ];
+            for p in pts {
+                verts.push(Vertex {
+                    pos: [p.0, p.1],
+                    color: c_last,
+                    uv: [0.0, 0.0],
+                    mode: 10.0,
+                    local: [p.0 - box_cx, p.1 - box_cy],
+                    half_size: [hw, hh],
+                    radius,
+                    color2: [0.0; 4],
+                    blur: 0.0,
+                });
+            }
+        }
+    }
 }
 
 /// Multi-stop conic gradient: K=128 angularnich slicu, kazdy ma color z interp_color(angle/TAU).
@@ -568,6 +611,12 @@ pub(super) fn push_multi_stop_conic_gradient(verts: &mut Vec<Vertex>, x: f32, y:
     const K: usize = 128;
     let interp_color = |t: f32| -> [f32; 4] {
         let t = t.rem_euclid(1.0);
+        // CSS edge clamp: pred prvnim stopem plati barva PRVNIHO stopu.
+        // Drive fallthrough na stops.last() -> conic-quadrant s prvnim stopem
+        // na 90deg mel cely vysek 0-90deg barvou posledniho (tmaveho) stopu.
+        if t <= stops[0].0 {
+            return stops[0].1;
+        }
         for i in 0..stops.len() - 1 {
             let a = stops[i].0;
             let b = stops[i + 1].0;

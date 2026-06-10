@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  body { margin: 20px; background: #0a0a0c; color: #888; font-size: 11px; }
+  .row { display: flex; gap: 10px; margin-bottom: 10px; }
+  .g { width: 150px; height: 80px; border: 1px solid #333; }
+  .g1 { background: radial-gradient(circle at 30% 30%, #e8ff6a, transparent); }
+  .g2 { background: radial-gradient(ellipse at center, #a06aff 0%, transparent 70%); }
+  .g3 { background: conic-gradient(#e8ff6a 90deg, #1a1a1f 90deg 180deg, #6affdb 180deg 270deg, #1a1a1f 270deg); }
+  .g4 { background: repeating-radial-gradient(circle, rgba(160,106,255,0.15) 0px, rgba(160,106,255,0.15) 4px, transparent 4px, transparent 12px); }
+  .g5 { background: radial-gradient(circle, #e8ff6a, #ff6a9b); }
+  .g6 { background: conic-gradient(from 0deg, #e8ff6a, #6affdb, #ff6a9b, #a06aff, #e8ff6a); }
+</style>
+</head>
+<body>
+  <div class="row">
+    <div class="g g1">radial at+transp</div>
+    <div class="g g2">ellipse transp</div>
+    <div class="g g3">conic deg</div>
+  </div>
+  <div class="row">
+    <div class="g g4">rep-radial px</div>
+    <div class="g g5">radial plain</div>
+    <div class="g g6">conic plain</div>
+  </div>
+</body>
+</html>

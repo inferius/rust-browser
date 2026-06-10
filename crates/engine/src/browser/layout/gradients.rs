@@ -25,6 +25,22 @@ pub fn parse_any_gradient(s: &str) -> Option<BgGradient> {
     None
 }
 
+/// Je prvni cast gradientu CONFIG (tvar/pozice/uhel), ne color stop?
+/// Config zacina keywordem: from/at/circle/ellipse/closest-*/farthest-*.
+/// Drive heuristika "parse_color(first) selhal => config" zahazovala PRVNI
+/// STOP s pozici co parse_color nezvladl ("#e8ff6a 90deg", "rgba(..) 0px")
+/// -> conic quadrant bez prvni barvy, repeating-radial bez prvniho stopu.
+fn is_gradient_config_part(part: &str) -> bool {
+    let p = part.trim();
+    if p.starts_with("from ") || p.starts_with("at ") {
+        return true;
+    }
+    let first_tok = p.split_whitespace().next().unwrap_or("");
+    matches!(first_tok,
+        "circle" | "ellipse" | "closest-side" | "closest-corner"
+        | "farthest-side" | "farthest-corner" | "from" | "at")
+}
+
 /// Parse radial-gradient([circle|ellipse] [at <position>], color1, color2, ...).
 /// Zjednoduseno: bere "circle" jako default, position default center, radius
 /// = farthest-corner. Tezi az `at <pos>` syntax. Vsechny dalsi tokeny pred
@@ -34,15 +50,15 @@ pub fn parse_radial_gradient(s: &str) -> Option<BgGradient> {
     let parts = split_top_level_commas(inner);
     if parts.len() < 2 { return None; }
 
-    // Pocatecni "config" cast (pres pozici, tvar, velikost). Heuristika:
-    // pokud prvni cast neobsahuje barvu, je to config.
+    // Pocatecni "config" cast (pres pozici, tvar, velikost) - jen pri
+    // explicitnim config keywordu (circle/ellipse/at/...), jinak je to stop.
     let mut start_idx = 0;
     let mut cx_pct: f32 = 0.5;
     let mut cy_pct: f32 = 0.5;
     let radius_pct: f32 = 1.0; // farthest-corner default
 
     let first = parts[0].trim();
-    if parse_color(first).is_none() && !first.contains('%') || first.contains("at ") {
+    if is_gradient_config_part(first) {
         // Detekuj "at <pos>"
         if let Some(at_idx) = first.find("at ") {
             let pos = first[at_idx + 3..].trim();
@@ -87,7 +103,7 @@ pub fn parse_conic_gradient(s: &str) -> Option<BgGradient> {
     let mut start_angle_deg: f32 = 0.0;
 
     let first = parts[0].trim();
-    if parse_color(first).is_none() {
+    if is_gradient_config_part(first) {
         // "from 30deg at center" / "from 0deg" / "at 50% 50%"
         if let Some(from_idx) = first.find("from ") {
             let after = &first[from_idx + 5..];
@@ -242,6 +258,10 @@ pub fn parse_linear_gradient(s: &str) -> Option<(f32, Vec<(f32, [u8; 4])>)> {
     if stops.is_empty() { return None; }
     Some((angle, stops))
 }
+
+#[cfg(test)]
+#[path = "tests/gradient_repro.rs"]
+mod gradient_repro;
 
 #[cfg(test)]
 mod px_stop_tests {

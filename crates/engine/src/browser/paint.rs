@@ -2066,9 +2066,13 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
     // bx.bg_gradient + bx.bg_color: shorthand bez backgrounds vec.
     // Skip bg_color pokud backgrounds loop uz barvu vykreslil.
     let bg_color_handled_by_layers = bx.backgrounds.iter().any(|l| l.color.is_some());
+    // Skip bg_gradient pokud backgrounds layer uz STEJNY gradient emitnul
+    // (background shorthand expanduje do background-image -> layer.gradient;
+    // bez checku se gradient kreslil 2x pres sebe = 2x alpha blend).
+    let bg_gradient_handled_by_layers = bx.backgrounds.iter().any(|l| l.gradient.is_some());
 
     // Background gradient ma prioritu pred solid color
-    if let Some(g) = &bx.bg_gradient {
+    if let Some(g) = (&bx.bg_gradient).as_ref().filter(|_| !bg_gradient_handled_by_layers) {
         use crate::browser::layout::{BgGradientKind, ClipPath};
         // clip-path: polygon + LINEAR gradient -> ClippedGradient (gradient
         // clipnuty na tvar polygonu, gradient se pocita per-pixel z world pos).
