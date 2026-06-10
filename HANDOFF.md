@@ -88,9 +88,25 @@ checkbox/radio/range/typing, table render, calc/clamp, :has() styling,
 color-mix, mix-blend barvy, filtry, clip-path tvary, IO fire (loguje pri
 scrollu), anchor nav (po fixu), formulare render.
 
+### Dodatecne overeno/opraveno (po HANDOFF zapisu)
+- **classList.toggle(token, force)** (8919a4c): force arg ignorovan ->
+  IO `toggle('visible', isIntersecting)` prepinal pri kazdem fire =
+  "IO funguje obracene". Po fixu vsech 6 .io-box zlute visible ✓.
+- **MutationObserver**: mutateDemo appendChild + styling FUNGUJE
+  (node #1/#2 v targetu s barvami). Zbyva: vnoreny span
+  (#mutation-count "0" uvnitr span textu) se nelayoutuje v inline
+  flow rodice -> cislo nevidet; buttony lehce prekryvaji box.
+- **DnD plne overeno**: dragstartALPHA + dropALPHA v event logu i na
+  plne strance (drop zone "Dropnuto" mizi po 2s - capture to nestihl,
+  vypadalo flaky, NENI).
+- **offsetY v mousemove NENI bug** - offset je vuci nejhlubsimu
+  targetu (text/p dite), Chrome stejne.
+
 ### TODO dalsi session (zbytek docx v4)
-- **mousemove offsetY** spatne (5.5 misto ~40 - offset proti spatnemu
-  targetu/baseline?). [webview event_offset]
+- **Canvas sekce NEKRESLI** (hlavni zbyvajici JS bug): klik "Sine wave"
+  button zaregistrovan (highlight ✓) ale canvas zustal prazdny. Zadny
+  JS error. Pravdepodobne canvas mode switch / ops pipeline / RAF
+  kresleni - potreba deep-dive (canvas_ops drain -> paint_canvas_ops).
 - **Marquee animace nejede** (translateX 100%->-100% na inline-block;
   zalamovani uz OK). Typewriter width-anim OK + blika.
 - **column-count single text block** fragmentace (1 radek pres sirku,
