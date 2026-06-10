@@ -1349,6 +1349,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         // (webview.interpreter je primary). 38 read sites migrace na self.interp().
         mouse_x: f32,
         mouse_y: f32,
+        /// Koalescovany resize - Resized event jen uklada, realny realloc
+        /// (surface + RT + webview target) probehne 1x v RedrawRequested.
+        pending_resize: Option<winit::dpi::PhysicalSize<u32>>,
         // scroll_x/y fields smazany (polarity invert) - read pres
         // self.scroll_y() method delegate webview.
         // start_time + prev_style_map fields smazany Phase 99: nikdy ctene
@@ -1587,24 +1590,16 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     event_loop.exit();
                 }
                 WindowEvent::Resized(size) => {
-                    let mut sf = 1.0_f32;
-                    if let Some(r) = &mut self.renderer {
-                        if let Some(w) = &self.window {
-                            r.scale_factor = w.scale_factor() as f32;
-                        }
-                        sf = r.scale_factor.max(0.01);
-                        r.resize(size.width.max(1), size.height.max(1));
+                    // COALESCING (mirror shell N+32): jen uloz pending size +
+                    // request_redraw. Realny resize (surface configure + 4x RT
+                    // realloc + webview target realloc) probehne 1x v
+                    // RedrawRequested. Drive SYNC v eventu -> drag-resize =
+                    // ~230ms/step (SetWindowPos blokoval na surface rebuildu),
+                    // winit dorucuje Resized per pixel kroku.
+                    if std::env::var("RWE_RESIZE_DBG").is_ok() {
+                        eprintln!("[RSZ] Resized event {}x{} t={:?}", size.width, size.height, std::time::Instant::now());
                     }
-                    // Resize WebView viewport (LOGICAL = physical / scale_factor),
-                    // jinak webview renderuje ve STARE velikosti do target_view a
-                    // present_external to natahne na nove okno = obsah se "zoomuje"
-                    // misto reflow. webview.resize invaliduje layout cache ->
-                    // skutecny reflow na novou sirku. (Mirror shell resize_views.)
-                    let lw = ((size.width as f32 / sf) as u32).max(1);
-                    let lh = ((size.height as f32 / sf) as u32).max(1);
-                    if let Some(wv) = self.webview.as_mut() {
-                        wv.resize(lw, lh, sf);
-                    }
+                    self.pending_resize = Some(size);
                     // PERF: layout cache invalidate jen pri viewport-dependent CSS.
                     // Bez @media/vh layout je viewport-independent (content size
                     // urcen z elements, ne window) -> kesovany layout zustava
@@ -2618,7 +2613,30 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     self.render();
                 }
                 WindowEvent::RedrawRequested => {
+                    let _rr_t0 = std::time::Instant::now();
+                    let _had_resize = self.pending_resize.is_some();
+                    if let Some(size) = self.pending_resize.take() {
+                        let mut sf = 1.0_f32;
+                        if let Some(r) = &mut self.renderer {
+                            if let Some(w) = &self.window {
+                                r.scale_factor = w.scale_factor() as f32;
+                            }
+                            sf = r.scale_factor.max(0.01);
+                            r.resize(size.width.max(1), size.height.max(1));
+                        }
+                        let lw = ((size.width as f32 / sf) as u32).max(1);
+                        let lh = ((size.height as f32 / sf) as u32).max(1);
+                        if let Some(wv) = self.webview.as_mut() {
+                            wv.resize(lw, lh, sf);
+                        }
+                    }
+                    let _rr_t1 = std::time::Instant::now();
                     self.render();
+                    if std::env::var("RWE_RESIZE_DBG").is_ok() && _had_resize {
+                        eprintln!("[RSZ] redraw: realloc={:.1}ms render={:.1}ms",
+                            _rr_t1.duration_since(_rr_t0).as_secs_f32()*1000.0,
+                            _rr_t1.elapsed().as_secs_f32()*1000.0);
+                    }
                     // POZN: continual redraw pump pri aktivnich animacich resi
                     // VYHRADNE about_to_wait (s frame-rate capem ~60 FPS pres
                     // WaitUntil). Driv se request_redraw volal i tady na konci
@@ -4660,10 +4678,13 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // Render page do offscreen RT.
             let renderer = match &mut self.renderer { Some(r) => r, None => return };
             let webview = match &mut self.webview { Some(w) => w, None => return };
+            let _rv0 = std::time::Instant::now();
             if webview.render_via(renderer).is_none() { return; }
+            let _rv1 = std::time::Instant::now();
             // Overlay pass - paint devtools panel + inspector overlay + FPS nad
             // webview RT (start_clear=false ABS extra draw NEsmaz page).
             let layout_clone = webview.last_layout_root().cloned();
+            let _rv2 = std::time::Instant::now();
             let target_view_present = webview.target_view().is_some();
             if let (Some(layout), true) = (layout_clone, target_view_present) {
                 let mut overlay_cmds = Vec::new();
@@ -4764,10 +4785,22 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 }
             }
             // Present do swap chain.
+            let _rv3 = std::time::Instant::now();
             let webview = self.webview.as_ref().unwrap();
             let renderer = self.renderer.as_ref().unwrap();
             if let Some(view) = webview.target_view() {
                 renderer.present_external_to_swap_chain(view);
+            }
+            if std::env::var("RWE_RESIZE_DBG").is_ok() {
+                let total = _rv0.elapsed().as_secs_f32()*1000.0;
+                if total > 30.0 {
+                    eprintln!("[RVW] total={:.1} render_via={:.1} layout_clone={:.1} overlay={:.1} present={:.1}",
+                        total,
+                        _rv1.duration_since(_rv0).as_secs_f32()*1000.0,
+                        _rv2.duration_since(_rv1).as_secs_f32()*1000.0,
+                        _rv3.duration_since(_rv2).as_secs_f32()*1000.0,
+                        _rv3.elapsed().as_secs_f32()*1000.0);
+                }
             }
         }
 
@@ -4890,6 +4923,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         renderer: None,
         mouse_x: 0.0,
         mouse_y: 0.0,
+        pending_resize: None,
         devtools: crate::devtools::DevToolsState::default(),
         devtools_resizing: false,
         last_click_time: None,

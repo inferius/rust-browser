@@ -224,6 +224,14 @@ pub struct WebView {
     /// Layout-relevantni verze pri poslednim renderu - rozliseni content-only
     /// (SVG geometry) zmen od style/layout zmen pro off-screen damage skip.
     pub(crate) last_render_dom_layout_version: u64,
+    /// Cas posledniho resize() - detekce rapid drag-resize vs settle.
+    pub(crate) last_resize_at: Option<std::time::Instant>,
+    /// Behem rapid resize: layout + cascade klicuji na TUTO (starou) velikost
+    /// -> cache HIT = zadny 73ms full relayout per drag step. Po settle
+    /// (>120ms klid, check v render_via) se zrusi + full relayout na novy
+    /// viewport. Chrome behavior: obsah se behem dragu neprelevuje, okraj
+    /// docasne clear barva.
+    pub(crate) resize_layout_override: Option<(u32, u32)>,
     /// Canvas generation pri poslednim renderu - detekce canvas kresleni
     /// (canvas ops nebumpaji dom_version) -> dirty -> repaint.
     pub(crate) last_render_canvas_gen: u64,
@@ -825,6 +833,8 @@ impl WebView {
             collected_sources: Vec::new(),
             last_render_dom_version: 0,
             last_render_dom_layout_version: 0,
+            last_resize_at: None,
+            resize_layout_override: None,
             last_render_canvas_gen: 0,
             cascade_cache_key: None,
             cascade_cache_value: None,
@@ -1262,7 +1272,9 @@ impl WebView {
     /// Zmena velikosti viewportu. Trigger relayout pri pristim `render()`.
     /// Pokud Engine ma GPU, realokuje offscreen RT na novou velikost.
     pub fn resize(&mut self, width: u32, height: u32, scale_factor: f32) {
-        let size_changed = (self.viewport_w as u32) != width || (self.viewport_h as u32) != height;
+        let old_w = self.viewport_w as u32;
+        let old_h = self.viewport_h as u32;
+        let size_changed = old_w != width || old_h != height;
         self.viewport_w = width as f32;
         self.viewport_h = height as f32;
         self.scale_factor = scale_factor;
@@ -1270,13 +1282,25 @@ impl WebView {
         if size_changed {
             self.ensure_target_texture();
             // BUG fix: realokace target_texture znamena ze stara texture s obsahem
-            // je dropped + new EMPTY texture alokovana. Vsechny paint/layout caches
-            // referenci ZASTARALY content -> seda plocha pri reuse.
-            // Invalidate paint cache aby pristim render full pipeline naplnil
-            // novou texturu.
+            // je dropped + new EMPTY texture alokovana -> re-paint nutny vzdy.
             self.last_paint_fingerprint = None;
-            self.layout_cache_key = None;
-            self.cascade_cache_key = None;
+            // RAPID drag-resize (dalsi step < 150ms od minuleho): NEinvalidovat
+            // layout/cascade - klicuji pres resize_layout_override na PUVODNI
+            // velikost => cache HIT => zadny full relayout (73ms/step) behem
+            // tazeni. Settle handling v render_via (120ms klid -> real reflow).
+            let rapid = self.last_resize_at
+                .map(|t| t.elapsed().as_millis() < 400)
+                .unwrap_or(false);
+            if rapid {
+                if self.resize_layout_override.is_none() {
+                    self.resize_layout_override = Some((old_w, old_h));
+                }
+            } else {
+                self.resize_layout_override = None;
+                self.layout_cache_key = None;
+                self.cascade_cache_key = None;
+            }
+            self.last_resize_at = Some(std::time::Instant::now());
             // Dispatch window 'resize' event do JS po skutecne zmene size.
             if let Some(interp) = self.interpreter.as_mut() {
                 interp.dispatch_window_event("resize", crate::interpreter::JsValue::Undefined);
@@ -2821,6 +2845,7 @@ impl WebView {
         &mut self,
         renderer: &mut crate::browser::render::Renderer,
     ) -> Option<&wgpu::TextureView> {
+        let _rv_enter = std::time::Instant::now();
         // Frame pacing: begin_frame na vstupu, mark_presented na vystupu.
         // Pres `browser::render::frame_pacing::FramePacer` foundation.
         let _frame_idx = self.frame_pacer.begin_frame();
@@ -3019,10 +3044,27 @@ impl WebView {
         // potrebujeme mut borrow self pres ensure_layer_texture).
         let doc = self.document.as_ref()?;
 
+        // RESIZE SETTLE: rapid drag-resize drzel layout na puvodni velikosti
+        // (resize_layout_override). Po >120ms klidu udelej REAL reflow na novy
+        // viewport (invalidate layout+cascade cache).
+        if self.resize_layout_override.is_some()
+            && self.last_resize_at.map(|t| t.elapsed().as_millis() > 350).unwrap_or(true)
+        {
+            self.resize_layout_override = None;
+            self.layout_cache_key = None;
+            self.cascade_cache_key = None;
+            self.dirty = true;
+        }
         // Layout viewport = logical CSS px / browser zoom. viewport_w/h jsou
         // uz LOGICAL (host predava surface_size / scale_factor).
-        let viewport_w = self.viewport_w / self.zoom.max(0.01);
-        let viewport_h = self.viewport_h / self.zoom.max(0.01);
+        // Behem rapid resize jede layout na OVERRIDE (stare) velikosti ->
+        // cache klice match -> zadny relayout per drag step.
+        let (eff_vp_w, eff_vp_h) = match self.resize_layout_override {
+            Some((w, h)) => (w as f32, h as f32),
+            None => (self.viewport_w, self.viewport_h),
+        };
+        let viewport_w = eff_vp_w / self.zoom.max(0.01);
+        let viewport_h = eff_vp_h / self.zoom.max(0.01);
 
         // 1. Cascade - resolve CSS styles per element. Cache pres hash klic
         // (dom_version, hovered_node, focused_node, viewport, stylesheets_len).
@@ -3063,6 +3105,10 @@ impl WebView {
         crate::browser::cascade::set_hovered_node(self.hovered_node_local);
 
         let prof_t0 = std::time::Instant::now();
+        if std::env::var("RWE_RESIZE_DBG").is_ok() {
+            let pre = prof_t0.duration_since(_rv_enter).as_secs_f32()*1000.0;
+            if pre > 20.0 { eprintln!("[RV-PRE] {:.1}ms (drains + dom diff + ensure_target)", pre); }
+        }
         // Per-element matched_decls cache invalidate pres dom mutate.
         // Pri DOM mutaci (interp.bump_dom_version), node_ptr mohou byt invalid
         // (mrtve element + recyklacky addr) - cache musime drop.
