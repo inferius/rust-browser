@@ -254,18 +254,30 @@ pub(crate) fn create_class_list(
         let dv = Rc::clone(&dom_version);
         let bump = bump.clone();
         obj_rc.borrow_mut().set("toggle".into(), native("classList.toggle", move |args| {
-            let name = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            let mut it = args.into_iter();
+            let name = it.next().map(|v| v.to_string()).unwrap_or_default();
+            // DOMTokenList.toggle(token, force) - force argument NASTAVI stav
+            // misto prepnuti. Drive ignorovan -> `toggle('visible',
+            // e.isIntersecting)` v IO callbacku PREPINAL pri kazdem fire =
+            // highlight rozsynchronizovany ("IO funguje obracene").
+            let force = it.next().filter(|v| !matches!(v, JsValue::Undefined));
             let class = n.attr("class").unwrap_or_default();
             let mut classes: Vec<String> = class.split_whitespace().map(String::from).collect();
             let has = classes.contains(&name);
-            if has {
-                classes.retain(|c| c != &name);
-            } else {
+            let want = match &force {
+                Some(v) => v.is_truthy(),
+                None => !has,
+            };
+            if want && !has {
                 classes.push(name);
+            } else if !want && has {
+                classes.retain(|c| c != &name);
             }
-            n.set_attr("class", &classes.join(" "));
-            bump(&dv);
-            Ok(JsValue::Bool(!has))
+            if want != has {
+                n.set_attr("class", &classes.join(" "));
+                bump(&dv);
+            }
+            Ok(JsValue::Bool(want))
         }));
     }
     {
