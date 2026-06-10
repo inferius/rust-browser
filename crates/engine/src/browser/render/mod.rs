@@ -89,7 +89,7 @@ mod shaders;
 use shaders::{BLUR_SHADER, TRANSFORM_SHADER, COMPOSE_SHADER, RECT_SHADER, LCD_SHADER, ADVANCED_BLEND_SHADER, BLEND_COMPOSE_SHADER};
 
 mod primitives;
-use primitives::{push_rect, push_rect_rounded, push_rect_uv, push_skewed_quad,
+use primitives::{push_rect, push_rect_rounded, push_rect_corners, push_rect_uv, push_skewed_quad,
     push_triangle, push_polygon_edge_aa, push_blurred_rect, push_image, push_gradient,
     push_clipped_linear_gradient,
     push_radial_gradient, push_conic_gradient, push_multi_stop_linear_gradient,
@@ -557,6 +557,7 @@ fn apply_color_matrix_to_cmds(cmds: &mut [DisplayCommand], matrix: &[f32; 20]) {
     for cmd in cmds.iter_mut() {
         match cmd {
             DisplayCommand::Rect { color, .. } |
+            DisplayCommand::RectRounded { color, .. } |
             DisplayCommand::Border { color, .. } |
             DisplayCommand::Text { color, .. } |
             DisplayCommand::Shadow { color, .. } |
@@ -585,6 +586,10 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
             DisplayCommand::Rect { x, y, w, h, color, radius } => {
                 let (sx, sy, sw, sh) = snap_rect(*x, *y, *w, *h, snap);
                 push_rect_rounded(&mut verts, sx, sy, sw, sh, normalize_color(color), *radius);
+            }
+            DisplayCommand::RectRounded { x, y, w, h, color, radii } => {
+                let (sx, sy, sw, sh) = snap_rect(*x, *y, *w, *h, snap);
+                push_rect_corners(&mut verts, sx, sy, sw, sh, normalize_color(color), *radii);
             }
             DisplayCommand::Border { x, y, w, h, width, color } => {
                 let c = normalize_color(color);

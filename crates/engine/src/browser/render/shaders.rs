@@ -533,6 +533,19 @@ fn sdf_rounded_box(p: vec2<f32>, half_size: vec2<f32>, r: f32) -> f32 {
     return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0, 0.0))) - r;
 }
 
+// SDF rounded box s PER-CORNER radii (radii = tl, tr, br, bl).
+// Vyber radius dle kvadrantu p (local coords, stred boxu = 0; y dolu).
+fn sdf_rounded_box_4(p: vec2<f32>, half_size: vec2<f32>, radii: vec4<f32>) -> f32 {
+    var r: f32;
+    if (p.x >= 0.0) {
+        if (p.y >= 0.0) { r = radii.z; } else { r = radii.y; }   // br : tr
+    } else {
+        if (p.y >= 0.0) { r = radii.w; } else { r = radii.x; }   // bl : tl
+    }
+    let q = abs(p) - half_size + vec2<f32>(r, r);
+    return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0, 0.0))) - r;
+}
+
 // Gradient mixing v sRGB space. CSS spec: linear-gradient interpolation v sRGB
 // (legacy) nebo oklab (modern default). Linear-space mix dava prilis svetly mid
 // (red->blue mid je purple bright misto darkish purple per Chrome).
@@ -673,6 +686,13 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     // radius) = vyplneny obdelnik jako Chrome misto preteklý kruh.
     if (in.mode > 9.5 && in.mode < 10.5) {
         let d = sdf_rounded_box(in.local, in.half_size, in.radius);
+        let aa_range = 1.0 / max(u.viewport.z, 0.0001);
+        let aa = 1.0 - smoothstep(-aa_range, aa_range, d);
+        return vec4<f32>(in.color.rgb, in.color.a * aa);
+    }
+    // Mode 11: solid s PER-CORNER radii (color2 = tl/tr/br/bl px).
+    if (in.mode > 10.5 && in.mode < 11.5) {
+        let d = sdf_rounded_box_4(in.local, in.half_size, in.color2);
         let aa_range = 1.0 / max(u.viewport.z, 0.0001);
         let aa = 1.0 - smoothstep(-aa_range, aa_range, d);
         return vec4<f32>(in.color.rgb, in.color.a * aa);

@@ -166,6 +166,10 @@ pub enum GradientKind {
 pub enum DisplayCommand {
     /// Solid filled rectangle.
     Rect { x: f32, y: f32, w: f32, h: f32, color: [u8; 4], radius: f32 },
+    /// Solid rect s PER-CORNER border-radius [tl, tr, br, bl] v px
+    /// (CSS `border-radius: a b c d` / longhandy / slash elliptical aprox).
+    /// Render: mode 11, radii v color2 slotu (zadna Vertex layout zmena).
+    RectRounded { x: f32, y: f32, w: f32, h: f32, color: [u8; 4], radii: [f32; 4] },
     /// Border (rectangle outline).
     Border { x: f32, y: f32, w: f32, h: f32, width: f32, color: [u8; 4] },
     /// Text rendering.
@@ -313,6 +317,34 @@ pub fn build_display_list(root: &LayoutBox) -> Vec<DisplayCommand> {
 /// Vykresli vertikalni a horizontalni scrollbar Rect pres viewport okraje
 /// pokud layout content presahuje viewport. Barvy auto-pick dle body bg
 /// (svetla/tmava schema).
+/// Resolve per-corner border-radius proti finalnim box rozmerum.
+/// % rohy = frakce * min(w, h). Vraci None kdyz box nema per-corner radii
+/// nebo ma clip-path (clip path ma vlastni geometrii).
+fn resolve_corner_radii(bx: &LayoutBox) -> Option<[f32; 4]> {
+    if bx.clip_path.is_some() {
+        return None;
+    }
+    let corners = bx.border_radius_corners?;
+    let m = bx.rect.width.min(bx.rect.height);
+    let mut out = [0.0f32; 4];
+    for i in 0..4 {
+        let (v, is_pct) = corners[i];
+        out[i] = if is_pct { v * m } else { v };
+    }
+    // CSS overlap constraint: soucet radii na hrane nesmi presahnout delku
+    // hrany - scale down proporcne (jinak SDF artefakty).
+    let scale = [
+        bx.rect.width / (out[0] + out[1]).max(0.001),   // top
+        bx.rect.height / (out[1] + out[2]).max(0.001),  // right
+        bx.rect.width / (out[2] + out[3]).max(0.001),   // bottom
+        bx.rect.height / (out[3] + out[0]).max(0.001),  // left
+    ].into_iter().fold(1.0f32, f32::min);
+    if scale < 1.0 {
+        for r in out.iter_mut() { *r *= scale; }
+    }
+    Some(out)
+}
+
 /// Canvas background barva (body bg, fallback html bg) - per CSS pokryva CELY
 /// viewport vcetne scrollbar gutteru a plochy pod kratkym contentem, NEscrolluje.
 /// D4 layer mode: pouzit jako clear color target_view (insert Rect na index 0
@@ -1966,6 +1998,11 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
                 if abs_pts.len() >= 3 {
                     cmds.push(DisplayCommand::ClippedRect { color: with_alpha(bg), points: abs_pts });
                 }
+            } else if let Some(radii) = resolve_corner_radii(bx) {
+                cmds.push(DisplayCommand::RectRounded {
+                    x: clip_x, y: clip_y, w: clip_w, h: clip_h,
+                    color: with_alpha(bg), radii,
+                });
             } else {
                 cmds.push(DisplayCommand::Rect {
                     x: clip_x, y: clip_y, w: clip_w, h: clip_h,
@@ -2137,6 +2174,12 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
                     points: abs_pts,
                 });
             }
+        } else if let Some(radii) = resolve_corner_radii(bx) {
+            // PER-CORNER border-radius (asym/blob) - mode 11 SDF s [tl,tr,br,bl].
+            cmds.push(DisplayCommand::RectRounded {
+                x: clip_x, y: clip_y, w: clip_w, h: clip_h,
+                color: with_alpha(bg), radii,
+            });
         } else {
             // Pokud je has_blur_subtree, RT pipeline blur aplikuje na cely subtree
             // -> emitujem normalni Rect. BlurredRect (mode 8) je legacy fallback,
@@ -2160,7 +2203,31 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
             // rects (outer = border color, inner inset = transparent cut).
             // Pres border-radius = 0: 4 sharp strips (= original Border path).
             // Bez tohoto pres rounded box border rendered sharp = corner clip.
-            if bx.border_radius > 0.5 {
+            if let Some(radii) = resolve_corner_radii(bx) {
+                // PER-CORNER rounded border ring: outer RectRounded (border
+                // barva) + inner inset RectRounded (bg) - stejny princip jako
+                // uniform vetev nize, ale s [tl,tr,br,bl] SDF.
+                let bw = bx.border_width;
+                cmds.push(DisplayCommand::RectRounded {
+                    x: bx.rect.x, y: bx.rect.y,
+                    w: bx.rect.width, h: bx.rect.height,
+                    color: with_alpha(bc),
+                    radii,
+                });
+                if let Some(bg) = bx.bg_color {
+                    let inner: [f32; 4] = [
+                        (radii[0] - bw).max(0.0), (radii[1] - bw).max(0.0),
+                        (radii[2] - bw).max(0.0), (radii[3] - bw).max(0.0),
+                    ];
+                    cmds.push(DisplayCommand::RectRounded {
+                        x: bx.rect.x + bw, y: bx.rect.y + bw,
+                        w: (bx.rect.width - 2.0 * bw).max(0.0),
+                        h: (bx.rect.height - 2.0 * bw).max(0.0),
+                        color: with_alpha(bg),
+                        radii: inner,
+                    });
+                }
+            } else if bx.border_radius > 0.5 {
                 let bw = bx.border_width;
                 // Emit outer rounded rect s border color - ON TOP of bg.
                 // Bg uz emitnut s radius == border_radius. Outer kresli pres
@@ -2653,6 +2720,7 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
             use DisplayCommand::*;
             match c {
                 Rect { x, y, w, h, .. } => Some((*x, *y, *w, *h)),
+                RectRounded { x, y, w, h, .. } => Some((*x, *y, *w, *h)),
                 Text { x, y, font_size, content, .. } => {
                     // Wrapped text ma \n - bbox = nejdelsi RADEK x pocet radku.
                     // Drive chars()*0.6 pres CELY content -> u zalomeneho textu
@@ -2692,6 +2760,12 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
                     let nx1 = (*x + *w).min(cull_x_max); let ny1 = (*y + *h).min(cull_y_max);
                     // Pri orezu zrus radius (jinak zaobleni na orezane strane vypada divne).
                     if nx0 > *x || ny0 > *y || nx1 < *x + *w || ny1 < *y + *h { *radius = 0.0; }
+                    *x = nx0; *y = ny0; *w = (nx1 - nx0).max(0.0); *h = (ny1 - ny0).max(0.0);
+                }
+                DisplayCommand::RectRounded { x, y, w, h, radii, .. } => {
+                    let nx0 = (*x).max(cull_x_min); let ny0 = (*y).max(cull_y_min);
+                    let nx1 = (*x + *w).min(cull_x_max); let ny1 = (*y + *h).min(cull_y_max);
+                    if nx0 > *x || ny0 > *y || nx1 < *x + *w || ny1 < *y + *h { *radii = [0.0; 4]; }
                     *x = nx0; *y = ny0; *w = (nx1 - nx0).max(0.0); *h = (ny1 - ny0).max(0.0);
                 }
                 DisplayCommand::Border { x, y, w, h, .. } => {
@@ -2915,6 +2989,7 @@ fn scale_cmd(cmd: &mut DisplayCommand, sx: f32, sy: f32, cx: f32, cy: f32) {
     };
     match cmd {
         DisplayCommand::Rect { x, y, w, h, .. }
+        | DisplayCommand::RectRounded { x, y, w, h, .. }
         | DisplayCommand::Border { x, y, w, h, .. }
         | DisplayCommand::Gradient { x, y, w, h, .. }
         | DisplayCommand::Shadow { x, y, w, h, .. }
@@ -2983,6 +3058,7 @@ fn rotate_cmd(cmd: &mut DisplayCommand, cos: f32, sin: f32, cx: f32, cy: f32) {
             }
         }
         DisplayCommand::Border { x, y, .. }
+        | DisplayCommand::RectRounded { x, y, .. }
         | DisplayCommand::Gradient { x, y, .. }
         | DisplayCommand::Shadow { x, y, .. }
         | DisplayCommand::Image { x, y, .. }
@@ -3011,6 +3087,7 @@ fn rotate_cmd(cmd: &mut DisplayCommand, cos: f32, sin: f32, cx: f32, cy: f32) {
 fn shift_cmd(cmd: &mut DisplayCommand, dx: f32, dy: f32) {
     match cmd {
         DisplayCommand::Rect { x, y, .. }
+        | DisplayCommand::RectRounded { x, y, .. }
         | DisplayCommand::Border { x, y, .. }
         | DisplayCommand::Text { x, y, .. }
         | DisplayCommand::Gradient { x, y, .. }

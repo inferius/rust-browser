@@ -838,6 +838,11 @@ pub struct LayoutBox {
     /// PO layoutu (box rozmery zname az tehdy). 0 = neni %. POZN: per-corner
     /// (asym/blob) zatim aproximovan uniform max hodnotou (jeden f32).
     pub border_radius_pct: f32,
+    /// PER-CORNER border-radius [tl, tr, br, bl]: (hodnota, is_pct). is_pct =
+    /// frakce 0..1, resolvuje se proti min(rect.w,h) pri paintu. Slash
+    /// elliptical (rx/ry) aproximovan prumerem. None = uniform border_radius.
+    /// Vyplnuje se JEN kdyz se rohy LISI (jinak staci uniform = levnejsi SDF).
+    pub border_radius_corners: Option<[(f32, bool); 4]>,
     pub line_height: f32,
     /// True kdyz line_height byl explicitly set z cascade (analogicky
     /// font_size_explicit). Drive `(lh - 1.2).abs() < 0.001` sentinel test
@@ -1268,6 +1273,7 @@ impl LayoutBox {
             italic: false,
             border_radius: 0.0,
             border_radius_pct: 0.0,
+            border_radius_corners: None,
             line_height: 1.2,
             line_height_explicit: false,
             position: Position::Static,
@@ -2781,6 +2787,55 @@ fn parse_border_radius_max(s: &str) -> (f32, bool) {
     if max_pct > 0.0 { (max_pct / 100.0, true) } else { (max_px, false) }
 }
 
+/// Parse border-radius do per-corner [tl, tr, br, bl]: (hodnota, is_pct).
+/// CSS expanze: 1 val -> vsechny; 2 -> tl+br / tr+bl; 3 -> tl / tr+bl / br;
+/// 4 -> tl / tr / br / bl. Slash "x-radii / y-radii": elliptical rohy se
+/// aproximuji PRUMEREM rx/ry per corner (SDF ma kruhove rohy).
+/// None pri jedinem uniform tokenu (uniform path staci).
+fn parse_border_radius_corners(s: &str) -> Option<[(f32, bool); 4]> {
+    let mut halves = s.split('/');
+    let xpart = halves.next().unwrap_or(s).trim();
+    let ypart = halves.next().map(|p| p.trim());
+    let parse_one = |tok: &str| -> (f32, bool) {
+        if let Some(p) = tok.strip_suffix('%') {
+            (p.trim().parse::<f32>().unwrap_or(0.0) / 100.0, true)
+        } else {
+            (parse_length(tok), false)
+        }
+    };
+    let expand = |part: &str| -> Option<[(f32, bool); 4]> {
+        let toks: Vec<(f32, bool)> = part.split_whitespace().map(parse_one).collect();
+        match toks.len() {
+            1 => Some([toks[0]; 4]),
+            2 => Some([toks[0], toks[1], toks[0], toks[1]]),
+            3 => Some([toks[0], toks[1], toks[2], toks[1]]),
+            4 => Some([toks[0], toks[1], toks[2], toks[3]]),
+            _ => None,
+        }
+    };
+    let xs = expand(xpart)?;
+    let corners = if let Some(yp) = ypart {
+        let ys = expand(yp)?;
+        let mut out = [(0.0_f32, false); 4];
+        for i in 0..4 {
+            // Stejny typ jednotky -> prumer; mixed px/% -> vezmi x slozku.
+            out[i] = if xs[i].1 == ys[i].1 {
+                ((xs[i].0 + ys[i].0) * 0.5, xs[i].1)
+            } else {
+                xs[i]
+            };
+        }
+        out
+    } else {
+        xs
+    };
+    // Jediny token bez slash = uniform -> None (mode 0 staci).
+    if ypart.is_none() && corners.iter().all(|c| *c == corners[0]) {
+        return None;
+    }
+    Some(corners)
+}
+
 fn build_box_inner_impl(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::cascade::PseudoStyleMap, counters: &mut HashMap<String, i32>) -> LayoutBox {
     // Debug breakpoint hook: BP_TAG/BP_ID/BP_CLASS env vars + IDE breakpoint na
     // `breakpoint_build` v src/debug_bp.rs.
@@ -3609,8 +3664,9 @@ fn build_box_inner_impl(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &supe
         bx.italic = v == "italic" || v == "oblique";
     }
     // Border radius - podporuje px, %, multi-value ("a b c d"), slash ("x / y").
-    // % se resolvuje az po layoutu (border_radius_pct). Per-corric aproximace:
-    // bereme MAX hodnotu jako uniform radius (per-corner SDF je TODO).
+    // % se resolvuje az po layoutu (border_radius_pct). Uniform max hodnota
+    // se drzi VZDY (fallback pro border/gradient/shadow SDF); per-corner
+    // [tl,tr,br,bl] navic kdyz se rohy LISI (RectRounded mode 11 SDF).
     if let Some(br) = s.get("border-radius") {
         let (val, is_pct) = parse_border_radius_max(br);
         if is_pct {
@@ -3619,6 +3675,54 @@ fn build_box_inner_impl(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &supe
         } else {
             bx.border_radius = val;
             bx.border_radius_pct = 0.0;
+        }
+        bx.border_radius_corners = parse_border_radius_corners(br);
+    }
+    // Longhandy border-<corner>-radius (asym: jen nektere rohy).
+    {
+        let corner_props = [
+            ("border-top-left-radius", 0usize),
+            ("border-top-right-radius", 1),
+            ("border-bottom-right-radius", 2),
+            ("border-bottom-left-radius", 3),
+        ];
+        let any = corner_props.iter().any(|(p, _)| s.get(*p).is_some());
+        if any {
+            let mut corners = bx.border_radius_corners
+                .unwrap_or([(bx.border_radius, false); 4]);
+            if bx.border_radius_pct > 0.0 && bx.border_radius_corners.is_none() {
+                corners = [(bx.border_radius_pct, true); 4];
+            }
+            for (prop, idx) in corner_props {
+                if let Some(v) = s.get(prop) {
+                    // Pri "rx ry" elliptical longhandu vezmi prumer (aprox).
+                    let toks: Vec<&str> = v.split_whitespace().collect();
+                    let one = |t: &str| -> (f32, bool) {
+                        if let Some(p) = t.strip_suffix('%') {
+                            (p.trim().parse::<f32>().unwrap_or(0.0) / 100.0, true)
+                        } else {
+                            (parse_length(t), false)
+                        }
+                    };
+                    corners[idx] = if toks.len() >= 2 {
+                        let (a, ap) = one(toks[0]);
+                        let (b, bp) = one(toks[1]);
+                        if ap == bp { ((a + b) * 0.5, ap) } else { (a, ap) }
+                    } else {
+                        one(v.trim())
+                    };
+                }
+            }
+            bx.border_radius_corners = Some(corners);
+            // Uniform fallback = max px slozka (pro border/shadow path).
+            let max_px = corners.iter().filter(|(_, p)| !p).map(|(v, _)| *v).fold(0.0f32, f32::max);
+            if max_px > bx.border_radius { bx.border_radius = max_px; }
+        }
+    }
+    // Vsechny rohy stejne -> uniform staci (levnejsi mode 0 SDF).
+    if let Some(c) = bx.border_radius_corners {
+        if c.iter().all(|x| *x == c[0]) {
+            bx.border_radius_corners = None;
         }
     }
     // Explicit width / height z CSS (auto = None, min/max-content = special).

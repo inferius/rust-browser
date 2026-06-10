@@ -198,6 +198,7 @@ pub fn partition_filter_segments(cmds: &[DisplayCommand]) -> Vec<Seg<'_>> {
 pub fn shift_command_y(cmd: &mut DisplayCommand, dy: f32) {
     match cmd {
         DisplayCommand::Rect { y, .. }
+        | DisplayCommand::RectRounded { y, .. }
         | DisplayCommand::Border { y, .. }
         | DisplayCommand::Text { y, .. }
         | DisplayCommand::Shadow { y, .. }
@@ -238,6 +239,7 @@ pub fn shift_command_y(cmd: &mut DisplayCommand, dy: f32) {
 pub fn shift_command_x(cmd: &mut DisplayCommand, dx: f32) {
     match cmd {
         DisplayCommand::Rect { x, .. }
+        | DisplayCommand::RectRounded { x, .. }
         | DisplayCommand::Border { x, .. }
         | DisplayCommand::Text { x, .. }
         | DisplayCommand::Shadow { x, .. }

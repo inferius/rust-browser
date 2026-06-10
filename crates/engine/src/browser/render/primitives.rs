@@ -33,6 +33,35 @@ pub(super) fn push_rect_rounded(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32,
     verts.extend_from_slice(&[tl, tr, bl, bl, tr, br]);
 }
 
+/// Rect s PER-CORNER border-radius [tl, tr, br, bl] px - mode 11. Radii jedou
+/// v color2 slotu (Vertex layout beze zmeny), shader vybira radius dle
+/// kvadrantu local pozice (sdf_rounded_box_4).
+pub(super) fn push_rect_corners(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
+                     color: [f32; 4], radii: [f32; 4]) {
+    let hw = w * 0.5;
+    let hh = h * 0.5;
+    let cx = x + hw;
+    let cy = y + hh;
+    let make = |px: f32, py: f32| -> Vertex {
+        Vertex {
+            pos: [px, py],
+            color,
+            uv: [0.0, 0.0],
+            mode: 11.0,
+            local: [px - cx, py - cy],
+            half_size: [hw, hh],
+            radius: 0.0,
+            color2: radii,
+            blur: 0.0,
+        }
+    };
+    let tl = make(x,     y);
+    let tr = make(x + w, y);
+    let bl = make(x,     y + h);
+    let br = make(x + w, y + h);
+    verts.extend_from_slice(&[tl, tr, bl, bl, tr, br]);
+}
+
 pub(super) fn push_rect(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
              color: [f32; 4], uv: [f32; 2], mode: f32) {
     push_rect_uv(verts, x, y, w, h, color, uv, [uv[0], uv[1]], mode);
