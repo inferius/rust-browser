@@ -93,12 +93,13 @@ fn collect_boxes(
     let visual_x2 = visual_x + bx.rect.width;
     let visual_y2 = visual_y + bx.rect.height;
 
-    // "Special" subtree = transform applied OR position:fixed (scroll-independent)
+    // "Special" subtree = transform applied OR position:fixed/sticky
+    // (scroll-independent - paint NoScrollShift drzi na viewport pozici)
     // OR pointer-events: none (zachovava semantiku pri descent). Pri special node
     // r-tree mark fallback - tree walk dovrsi accurate hit. Propaguje na descendants.
     let self_special = !bx.transforms.is_empty()
         || bx.transform.is_some()
-        || matches!(bx.position, Position::Fixed);
+        || matches!(bx.position, Position::Fixed | Position::Sticky);
     let has_special = parent_special || self_special;
 
     let node_ptr = bx.node.as_ref()
@@ -159,6 +160,17 @@ pub fn hit_test_point(tree: &RTree<HitEntry>, x: f32, y: f32) -> HitResult {
         });
     }
     HitResult::Miss
+}
+
+/// Query pro fixed/sticky pri scrollu: special entries (sticky/fixed) maji
+/// v r-tree LAYOUT aabb, ale vizualne sedi na VIEWPORT pozici (paint
+/// NoScrollShift). Content-coords query je mine -> tento check s viewport
+/// coords odhali "bod je nad sticky elementem" -> caller tree-walk fallback
+/// (hit_test_scrolled sticky vetev). Bez tohoto hover/klik PROLETI sticky
+/// sidebar/header na obsah pod nim.
+pub fn special_at_point(tree: &RTree<HitEntry>, x: f32, y: f32) -> bool {
+    tree.locate_all_at_point(&[x, y])
+        .any(|c| c.has_special && !c.pointer_events_none && !c.visibility_hidden)
 }
 
 /// Result jednoho hit query. NeedsFallback = caller fallne na tree walk.

@@ -3712,6 +3712,78 @@ fn hit_test_returns_node_bearing_box_not_pseudo() {
 }
 
 #[test]
+fn hit_test_scrolled_sticky_sidebar_clickable() {
+    // position:sticky element (sidebar/top bar) zustava vizualne na viewport
+    // pozici (paint NoScrollShift) - hit_test_scrolled ho MUSI najit s
+    // viewport coords i pri scrollu. Regrese: sticky sidebar pri scroll > 0
+    // kompletne neklikatelny (klik proletel na content pod nim).
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(
+        r##"<html><body><nav id="side"><a id="lnk" href="#x">Link</a></nav><div class="content">obsah</div></body></html>"##,
+        "",
+    );
+    let css = parse_stylesheet(
+        r#"body { margin: 0; } nav { position: sticky; top: 0; height: 50px; }
+           a { display: block; height: 20px; } .content { height: 5000px; }"#,
+    );
+    let map = cascade::cascade(&doc.root, &[css]);
+    let lr = layout::layout_tree(&doc.root, &map, 400.0, 300.0);
+    // Hit muze byt text node uvnitr <a> (node bez tag_name) - resolvni
+    // nejblizsi element s tagem pres DOM parent chain (stejne jako event
+    // dispatch bubbling).
+    fn element_tag(hit: Option<&crate::browser::layout::LayoutBox>) -> Option<String> {
+        let mut n = hit.and_then(|b| b.node.clone());
+        while let Some(node) = n {
+            if let Some(t) = node.tag_name() { return Some(t); }
+            n = node.parent.borrow().upgrade();
+        }
+        None
+    }
+    // Scroll 1000 px. Klik na viewport (10, 10) = content (10, 1010).
+    // Sticky nav je vizualne na viewport y=0..50 -> link (0..20) musi byt hit.
+    let hit = lr.hit_test_scrolled(10.0, 1010.0, 0.0, 1000.0);
+    let tag = element_tag(hit);
+    assert_eq!(tag.as_deref(), Some("a"),
+        "klik na sticky sidebar pri scrollu musi trefit link, dostal: {:?}", tag);
+    // Bez scrollu: stejny bod v content coords trefi link primo.
+    let tag0 = element_tag(lr.hit_test_scrolled(10.0, 10.0, 0.0, 0.0));
+    assert_eq!(tag0.as_deref(), Some("a"));
+    // Klik MIMO sidebar (content oblast) pri scrollu musi trefit content div.
+    let tag_c = element_tag(lr.hit_test_scrolled(10.0, 1200.0, 0.0, 1000.0));
+    assert_eq!(tag_c.as_deref(), Some("div"),
+        "klik pod sidebarem musi trefit content, dostal: {:?}", tag_c);
+}
+
+#[test]
+fn hit_test_scrolled_fixed_header_clickable() {
+    // position:fixed header - stejny pripad jako sticky (NoScrollShift).
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(
+        r#"<html><body><div id="bar"><button id="btn">B</button></div><div class="content">x</div></body></html>"#,
+        "",
+    );
+    let css = parse_stylesheet(
+        r#"body { margin: 0; } #bar { position: fixed; top: 0; left: 0; width: 100%; height: 40px; }
+           #btn { width: 60px; height: 30px; } .content { height: 4000px; }"#,
+    );
+    let map = cascade::cascade(&doc.root, &[css]);
+    let lr = layout::layout_tree(&doc.root, &map, 400.0, 300.0);
+    // Scroll 800. Klik na viewport (20, 15) -> content (20, 815). Fixed bar
+    // vizualne na 0..40 -> button musi byt hit.
+    fn element_tag(hit: Option<&crate::browser::layout::LayoutBox>) -> Option<String> {
+        let mut n = hit.and_then(|b| b.node.clone());
+        while let Some(node) = n {
+            if let Some(t) = node.tag_name() { return Some(t); }
+            n = node.parent.borrow().upgrade();
+        }
+        None
+    }
+    let tag = element_tag(lr.hit_test_scrolled(20.0, 815.0, 0.0, 800.0));
+    assert_eq!(tag.as_deref(), Some("button"),
+        "klik na fixed header pri scrollu musi trefit button, dostal: {:?}", tag);
+}
+
+#[test]
 fn has_selector_reevaluates_after_checked_change() {
     // :has(input:checked) musi reflektovat zmenu checked atributu (re-cascade).
     use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};

@@ -1878,9 +1878,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         .is_some();
                     // Klik na draggable=true element -> NEselektovat (tah = drag&drop,
                     // ne text selection).
+                    let (sc_x, sc_y) = (self.scroll_x(), self.scroll_y());
                     let on_draggable = self.webview.as_ref()
                         .and_then(|w| w.last_layout_root())
-                        .and_then(|root| root.hit_test(self.mouse_x, self.mouse_y))
+                        .and_then(|root| root.hit_test_scrolled(self.mouse_x, self.mouse_y, sc_x, sc_y))
                         .and_then(|bx| bx.node.clone())
                         .and_then(|n| crate::embed::webview::find_draggable_ancestor(&n))
                         .is_some();
@@ -1890,24 +1891,51 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     let on_unselectable = self.webview.as_ref()
                         .and_then(|w| w.last_layout_root())
                         .map(|root| {
-                            fn path_unsel(b: &super::layout::LayoutBox, mx: f32, my: f32) -> bool {
+                            fn path_unsel(b: &super::layout::LayoutBox, mx: f32, my: f32, sx: f32, sy: f32) -> bool {
+                                // Fixed/sticky subtree sedi na viewport pozici -> test
+                                // s viewport coords (konzistentni s hit_test_scrolled).
+                                if (sx != 0.0 || sy != 0.0)
+                                    && matches!(b.position, super::layout::Position::Fixed | super::layout::Position::Sticky) {
+                                    return path_unsel(b, mx - sx, my - sy, 0.0, 0.0);
+                                }
                                 if mx < b.rect.x || mx >= b.rect.x + b.rect.width
                                     || my < b.rect.y || my >= b.rect.y + b.rect.height { return false; }
                                 if b.user_select_none { return true; }
                                 let cx = mx + b.scroll_offset_x;
                                 let cy = my + b.scroll_offset_y;
-                                b.children.iter().any(|c| path_unsel(c, cx, cy))
+                                b.children.iter().any(|c| path_unsel(c, cx, cy, sx, sy))
                             }
-                            path_unsel(root, self.mouse_x, self.mouse_y)
+                            path_unsel(root, self.mouse_x, self.mouse_y, sc_x, sc_y)
                         })
                         .unwrap_or(false);
                     if std::env::var("RWE_INPUT_DBG").is_ok() {
                         let tag = self.webview.as_ref().and_then(|w| w.last_layout_root())
-                            .and_then(|r| r.hit_test(self.mouse_x, self.mouse_y))
+                            .and_then(|r| r.hit_test_scrolled(self.mouse_x, self.mouse_y, sc_x, sc_y))
                             .and_then(|b| b.node.clone())
                             .and_then(|n| n.tag_name()).unwrap_or_else(|| "?".into());
                         eprintln!("[SEL] MouseDown mouse=({:.0},{:.0}) hit={} on_grip={} on_drag={} unsel={}",
                             self.mouse_x, self.mouse_y, tag, on_resize_grip, on_draggable, on_unselectable);
+                        // Hit-chain dump: cesta root -> hit (rect + tag + class) pro
+                        // diagnozu layout-vs-render mismatchu (RWE_INPUT_DBG=chain).
+                        if std::env::var("RWE_INPUT_DBG").map(|v| v == "chain").unwrap_or(false) {
+                            fn dump_chain(b: &crate::browser::layout::LayoutBox, x: f32, y: f32, depth: usize) {
+                                let cx = x + b.scroll_offset_x;
+                                let cy = y + b.scroll_offset_y;
+                                let inside = x >= b.rect.x && x <= b.rect.x + b.rect.width
+                                    && y >= b.rect.y && y <= b.rect.y + b.rect.height;
+                                let tag = b.node.as_ref().and_then(|n| n.tag_name()).unwrap_or_else(|| "anon".into());
+                                let cls = b.node.as_ref().and_then(|n| n.attr("class")).unwrap_or_default();
+                                if inside || depth == 0 || tag == "a" || tag == "nav" {
+                                    eprintln!("[CHAIN] {}<{} class='{}'> rect=({:.0},{:.0},{:.0}x{:.0}) pos={:?} scrolloff=({:.0},{:.0}) inside={}",
+                                        "  ".repeat(depth), tag, cls, b.rect.x, b.rect.y, b.rect.width, b.rect.height, b.position,
+                                        b.scroll_offset_x, b.scroll_offset_y, inside);
+                                }
+                                for ch in &b.children { dump_chain(ch, cx, cy, depth + 1); }
+                            }
+                            if let Some(root) = self.webview.as_ref().and_then(|w| w.last_layout_root()) {
+                                dump_chain(root, self.mouse_x, self.mouse_y, 0);
+                            }
+                        }
                     }
                     if !on_resize_grip && !on_draggable && !on_unselectable {
                         self.page_sel_begin((self.mouse_x, self.mouse_y));
@@ -4578,9 +4606,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             //   nad button/a, I-beam nad textem) se NIKDY neaplikoval. Ted hit-test
             //   pres webview.last_layout_root().
             if self.window.is_some() {
+                let (sc_x, sc_y) = (self.scroll_x(), self.scroll_y());
                 let target_box = self.webview.as_ref()
                     .and_then(|wv| wv.last_layout_root())
-                    .and_then(|root| root.hit_test(self.mouse_x, self.mouse_y));
+                    .and_then(|root| root.hit_test_scrolled(self.mouse_x, self.mouse_y, sc_x, sc_y));
                 if std::env::var("RWE_CURSOR_DBG").is_ok() {
                     let tag = target_box.and_then(|b| b.node.as_ref())
                         .and_then(|n| n.tag_name()).unwrap_or_else(|| "?".into());

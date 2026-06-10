@@ -1424,11 +1424,30 @@ impl LayoutBox {
     }
 
     /// Hit test: vrati nejdetailnejsi (deepest) box obsahujici (x, y).
+    /// Content coords (viewport + scroll). Pro stranky bez scrollu staci tohle;
+    /// pri scrollu pouzij hit_test_scrolled (respektuje fixed/sticky).
     pub fn hit_test(&self, x: f32, y: f32) -> Option<&LayoutBox> {
+        self.hit_test_scrolled(x, y, 0.0, 0.0)
+    }
+
+    /// Hit test se scroll offsetem. position:fixed/sticky subtree zustava
+    /// vizualne na viewport pozici (paint je obaluje NoScrollShift = nekresli
+    /// se scroll posunem), takze hit-test je MUSI testovat s viewport coords:
+    /// (x - scroll_x, y - scroll_y). Bez tohoto je sticky sidebar / fixed top
+    /// bar pri scroll > 0 kompletne neklikatelny (klik proleti na content pod).
+    /// Zrcadli paint.rs is_fixed (Fixed | Sticky) chovani.
+    pub fn hit_test_scrolled(&self, x: f32, y: f32, scroll_x: f32, scroll_y: f32) -> Option<&LayoutBox> {
         // CSS pointer-events: none -> element + descendants ignored pri hit test.
         // (pointer-events: all / auto = standard).
         if self.pointer_events.is_none() {
             return None;
+        }
+        // Fixed/Sticky: prepni na viewport coords pro CELY subtree (deti uz
+        // scroll neodecitaji - jednou stacilo). Nested fixed v fixed = no-op.
+        if (scroll_x != 0.0 || scroll_y != 0.0)
+            && matches!(self.position, Position::Fixed | Position::Sticky)
+        {
+            return self.hit_test_scrolled(x - scroll_x, y - scroll_y, 0.0, 0.0);
         }
         // CSS opacity NEMA affect hit-test. Element s opacity:0 zustava klikatelny
         // (presne dle spec a Chromium chovani).
@@ -1455,8 +1474,20 @@ impl LayoutBox {
         let cy = qy + self.scroll_offset_y;
         // Recursivne pres deti (reverse = top-most z-order wins). I kdyz self je
         // mimo bod / visibility:hidden, child muze byt hit.
-        for child in self.children.iter().rev() {
-            if let Some(hit) = child.hit_test(cx, cy) {
+        // CSS painting order (2.1 App E): positioned elementy (fixed/sticky/
+        // absolute, z-index auto) se kresli NAD normal-flow sourozenci ->
+        // hit-test je testuje PRVNI. Jinak pozdejsi normal-flow sibling
+        // (content) "prekryje" sticky sidebar pri hit-testu, ackoli vizualne
+        // je sidebar nahore.
+        let positioned = |b: &LayoutBox| matches!(b.position,
+            Position::Fixed | Position::Sticky | Position::Absolute);
+        for child in self.children.iter().rev().filter(|c| positioned(c)) {
+            if let Some(hit) = child.hit_test_scrolled(cx, cy, scroll_x, scroll_y) {
+                return Some(hit);
+            }
+        }
+        for child in self.children.iter().rev().filter(|c| !positioned(c)) {
+            if let Some(hit) = child.hit_test_scrolled(cx, cy, scroll_x, scroll_y) {
                 return Some(hit);
             }
         }

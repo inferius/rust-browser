@@ -1488,8 +1488,9 @@ impl WebView {
     fn dispatch_wheel_event(&mut self, x: f32, y: f32, dx: f32, dy: f32) -> bool {
         let content_x = x + self.scroll_x;
         let content_y = y + self.scroll_y;
+        let (ssx, ssy) = (self.scroll_x, self.scroll_y);
         let target = match self.last_layout_root.as_ref()
-            .and_then(|r| r.hit_test(content_x, content_y))
+            .and_then(|r| r.hit_test_scrolled(content_x, content_y, ssx, ssy))
             .and_then(|bx| bx.node.clone()) {
             Some(n) => n,
             None => return false,
@@ -1730,8 +1731,9 @@ impl WebView {
                                 if let Some(d) = self.drag.as_mut() { d.started = true; }
                             }
                             // 2. Element pod kurzorem.
+                            let (ssx, ssy) = (self.scroll_x, self.scroll_y);
                             let over = self.last_layout_root.as_ref()
-                                .and_then(|r| r.hit_test(cx_inner, cy_inner))
+                                .and_then(|r| r.hit_test_scrolled(cx_inner, cy_inner, ssx, ssy))
                                 .and_then(|b| b.node.clone());
                             let same = match (&over, &last_over) {
                                 (Some(a), Some(b)) => std::rc::Rc::ptr_eq(a, b),
@@ -1861,8 +1863,19 @@ impl WebView {
                                     crate::browser::spatial_hit::build_hit_rtree(root));
                             }
                         }
-                        let from_rtree = self.hit_rtree.as_ref()
-                            .map(|t| hit_test_point(t, content_x, content_y));
+                        // Sticky/fixed pri scrollu: special entries sedi vizualne
+                        // na VIEWPORT pozici - kdyz je bod (viewport coords) nad
+                        // nimi, content-coords query je mine -> force fallback.
+                        let over_special = (self.scroll_x != 0.0 || self.scroll_y != 0.0)
+                            && self.hit_rtree.as_ref()
+                                .map(|t| crate::browser::spatial_hit::special_at_point(t, x, y))
+                                .unwrap_or(false);
+                        let from_rtree = if over_special {
+                            Some(HitResult::NeedsFallback)
+                        } else {
+                            self.hit_rtree.as_ref()
+                                .map(|t| hit_test_point(t, content_x, content_y))
+                        };
                         match from_rtree {
                             Some(HitResult::Hit(info)) => (
                                 Some(info.node_ptr),
@@ -1870,11 +1883,12 @@ impl WebView {
                                 info.has_text,
                             ),
                             Some(HitResult::Miss) => (None, None, false),
-                            // Pri NeedsFallback (transform/fixed subtree) ANO nebo
+                            // Pri NeedsFallback (transform/fixed/sticky subtree) NEBO
                             // pri No-Rtree fallne na klasicky tree walk.
                             _ => {
+                                let (ssx, ssy) = (self.scroll_x, self.scroll_y);
                                 let hit_box = self.last_layout_root.as_ref()
-                                    .and_then(|root| root.hit_test(content_x, content_y));
+                                    .and_then(|root| root.hit_test_scrolled(content_x, content_y, ssx, ssy));
                                 let id = hit_box
                                     .and_then(|bx| bx.node.as_ref().map(|n|
                                         std::rc::Rc::as_ptr(n) as usize));
@@ -2238,9 +2252,13 @@ impl WebView {
                         self.dirty = true;
                         return response;
                     }
-                    let hit_node = self.last_layout_root.as_ref()
-                        .and_then(|root| root.hit_test(content_x, content_y))
-                        .and_then(|bx| bx.node.clone());
+                    let (ssx, ssy) = (self.scroll_x, self.scroll_y);
+                    let hit_box = self.last_layout_root.as_ref()
+                        .and_then(|root| root.hit_test_scrolled(content_x, content_y, ssx, ssy));
+                    // user-select:none na hit boxu (INHERITED -> nejhlubsi box ma
+                    // zdedenou hodnotu) -> neselektovat (button/UI/draggable).
+                    let hit_unselectable = hit_box.map(|bx| bx.user_select_none).unwrap_or(false);
+                    let hit_node = hit_box.and_then(|bx| bx.node.clone());
                     // HTML5 drag&drop: klik na draggable=true element (nebo potomka)
                     // -> zaloz drag session (dragstart az pri pohybu > threshold).
                     if let Some(hn) = hit_node.as_ref() {
@@ -2371,7 +2389,10 @@ impl WebView {
                     if let Some(target) = target_node {
                         self.mouse_down_at = Some((x, y, target));
                     }
-                    if !click_on_noselect {
+                    // Selekci NEzacinat pri: (a) DnD sessione (tah draggable =
+                    // drag&drop, ne text select - jinak "zasekne se select"),
+                    // (b) user-select:none na hit elementu (button/UI).
+                    if !click_on_noselect && self.drag.is_none() && !hit_unselectable {
                         self.sel_begin(content_x, content_y);
                     }
                     response.dirty = true;
@@ -2428,8 +2449,9 @@ impl WebView {
                     let content_y = y + self.scroll_y;
                     // End selection drag (collapse pri <3px movement).
                     self.sel_end();
+                    let (ssx, ssy) = (self.scroll_x, self.scroll_y);
                     let up_target = self.last_layout_root.as_ref()
-                        .and_then(|root| root.hit_test(content_x, content_y))
+                        .and_then(|root| root.hit_test_scrolled(content_x, content_y, ssx, ssy))
                         .and_then(|bx| bx.node.clone())
                         // Klik na <label> -> control (konzistentne s MouseDown aby
                         // same_target check + click toggle padly na control).
@@ -2482,6 +2504,29 @@ impl WebView {
                                 while let Some(n) = cur {
                                     if n.tag_name().as_deref() == Some("a") {
                                         if let Some(href) = n.attr("href") {
+                                            // Fragment (#id) = in-page scroll na element
+                                            // s tim id (Chrome scrollIntoView ekvivalent).
+                                            // Drive kompletne ignorovano = anchor nav mrtva.
+                                            if href.len() > 1 && href.starts_with('#') {
+                                                let frag = href[1..].to_string();
+                                                fn find_y_by_id(b: &crate::browser::layout::LayoutBox, id: &str) -> Option<f32> {
+                                                    if b.node.as_ref().and_then(|n| n.attr("id")).as_deref() == Some(id) {
+                                                        return Some(b.rect.y);
+                                                    }
+                                                    b.children.iter().find_map(|c| find_y_by_id(c, id))
+                                                }
+                                                if let Some(root) = self.last_layout_root.as_ref() {
+                                                    if let Some(ty) = find_y_by_id(root, &frag) {
+                                                        let max_scroll = (root.rect.height - self.viewport_h).max(0.0);
+                                                        let ny = ty.clamp(0.0, max_scroll);
+                                                        self.scroll_y = ny;
+                                                        self.scroll_target_y = ny;
+                                                        self.scroll_anim_y = None;
+                                                        self.dirty = true;
+                                                        response.dirty = true;
+                                                    }
+                                                }
+                                            }
                                             if !href.is_empty() && !href.starts_with('#') {
                                                 let resolved = if let Some(base) = &self.base_url {
                                                     crate::browser::render::resolve_url(base, &href)
