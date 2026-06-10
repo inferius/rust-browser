@@ -102,6 +102,34 @@ scrollu), anchor nav (po fixu), formulare render.
 - **offsetY v mousemove NENI bug** - offset je vuci nejhlubsimu
   targetu (text/p dite), Chrome stejne.
 
+## Session N+36b: PERF "zalostny vykon" - idle 240 FPS, resize 3.4x
+
+Mereno RWE_PROF + [PAINT-SUB]/[RVW]/[RV-PRE]/[RSZ] instrumentace (gated).
+Vysledky: IDLE 95 -> 240 FPS (vsync cap, 698 -> 23 full renderu/10s);
+SCROLL pres celou stranku 127-240 FPS (drive dipy 42-68); viditelne
+animace ~100-150 FPS (PROF total 5.3ms); RESIZE drag 230 -> 67ms/step.
+
+Komity ae2de01 (idle/anim) + 744eed7 (resize):
+1. Content-only DOM mutace (SVG points RAF anim) per-node tracking ->
+   off-screen zmeny NEdirti render (Chrome damage model).
+2. CSS animace mimo viewport netickaji (any_active_animation_visible).
+3. layout_fp z CASCADE BASE ^ hash animovanych layout hodnot (fp cache
+   HIT misto O(N) rehash; fill:forwards konstanta = HIT).
+4. layer_local_cache PERSISTENT (drive new HashMap kazdy frame = full
+   re-paint vseho).
+5. Resize: pending_resize koalescing (engine bin, mirror shell) +
+   resize_layout_override debounce (rapid <400ms -> layout/cascade na
+   puvodni velikosti = cache HIT + 0 raster; settle 350ms -> reflow).
+
+ZBYVA (dalsi perf level - HANDOFF TOP sekce "compositor-only fast
+path"): anim frame ~5.3ms breakdown: layout-blok 1.4 (clone 0.46 +
+paint_anims 0.57 + extract 0.65) + paint 2.5 (warm+raster colorCycle
+layeru 2.3 - submit overhead per raster) + gpu 1.1 (compose 41 layeru,
+per-layer buffer/bind alloc). Pro 240 pri viditelnych anim: zapojit
+CompositorAnimStore + batch raster submitu + bind group cache.
+POZN: full layout MISS (textContent 2x/s FPS counter) = ~12ms full
+layout_tree - subtree cache hit rate stoji za audit.
+
 ### TODO dalsi session (zbytek docx v4)
 - **Canvas sekce NEKRESLI** (hlavni zbyvajici JS bug): klik "Sine wave"
   button zaregistrovan (highlight ✓) ale canvas zustal prazdny. Zadny
