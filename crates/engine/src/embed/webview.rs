@@ -515,6 +515,16 @@ fn walk_layer_local(
                 crate::browser::render::segments::shift_command_x(cmd, dx);
                 crate::browser::render::segments::shift_command_y(cmd, dy);
             }
+            if std::env::var("RWE_LAYERCACHE_DBG").is_ok() {
+                let texts: Vec<String> = tmp.iter().filter_map(|c| match c {
+                    crate::browser::paint::DisplayCommand::Text { content, x, y, .. } =>
+                        Some(format!("'{}'@({:.1},{:.1})", content.chars().take(12).collect::<String>(), x, y)),
+                    _ => None,
+                }).collect();
+                eprintln!("[LCACHE] layer={} rect=({:.1},{:.1},{:.1}x{:.1}) cmds={} texts={:?}",
+                    layer.id, layer.root_rect.x, layer.root_rect.y,
+                    layer.root_rect.width, layer.root_rect.height, tmp.len(), texts);
+            }
             cache.insert(layer.id, tmp);
         }
     }
@@ -3812,6 +3822,16 @@ impl WebView {
             if std::env::var("RWE_DAMAGE_DBG").is_ok() {
                 eprintln!("[D4 GPU] {} layers, {} tiles rendered ({}/{} total layers)",
                     d4_renders, d4_tile_renders, d4_renders + d4_tile_renders, flat.len());
+            }
+            // DEBUG: dump layer textur do PNG (RWE_DUMP_LAYERS=<dir>). Diagnoza
+            // rozbiteho layer obsahu vs compose chyby.
+            if let Ok(dir) = std::env::var("RWE_DUMP_LAYERS") {
+                for layer in &flat {
+                    if let Some(slot) = self.layer_textures.get(&layer.id) {
+                        let path = format!("{}/layer_{}_{}x{}.png", dir, layer.id, slot.width, slot.height);
+                        renderer.debug_dump_texture(&slot.texture, slot.width, slot.height, &path);
+                    }
+                }
             }
             // Track display_list len at point overlay items zacinaji byt appendovany.
             // Vse pred = layer content (replaced by composite). Vse po = overlay

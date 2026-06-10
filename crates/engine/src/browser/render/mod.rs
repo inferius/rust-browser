@@ -7678,7 +7678,15 @@ impl Renderer {
                 // LCD subpixel text - second pass s dual-source pipeline.
                 // Filter vertices na mode == 9. Hardware si kresli per-channel
                 // mask blend (real ClearType-style color fringes).
-                if let Some(lcd_pipe) = &self.lcd_pipeline {
+                // SKIP v layer/tile rasteru (VIEWPORT_OVERRIDE aktivni): dual-
+                // source per-channel blend do TRANSPARENT textury produkuje
+                // barevna per-channel data ktera nasledny premul-OVER compose
+                // neslozi = "rozsypany barevny text" v layerech (mix-blend
+                // .blend-text, z-index text layery). Chrome stejne: subpixel AA
+                // jen pri opaque backdropu, composited layery = grayscale AA
+                // (mode 9 avg z main passu je uz nakresleny).
+                let in_layer_raster = VIEWPORT_OVERRIDE.with(|c| c.get()) != (0.0, 0.0);
+                if let Some(lcd_pipe) = (&self.lcd_pipeline).as_ref().filter(|_| !in_layer_raster) {
                     let lcd_verts: Vec<Vertex> = vertices.iter()
                         .filter(|v| (v.mode - 9.0).abs() < 0.5)
                         .copied().collect();
@@ -8207,6 +8215,51 @@ impl Renderer {
     /// (snapshot vidi predchozi compose passy - GPU serializuje commandy).
     /// `mode` = computed_style::BlendMode discriminant (1=Multiply..15=Luminosity).
     #[allow(clippy::too_many_arguments)]
+    /// DEBUG: dump GPU textury do PNG souboru (RWE_DUMP_LAYERS). Blocking
+    /// readback - jen pro diagnostiku.
+    pub fn debug_dump_texture(&self, tex: &wgpu::Texture, w: u32, h: u32, path: &str) {
+        let bpr = ((w * 4 + 255) / 256) * 256;
+        let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("dbg_dump"),
+            size: (bpr * h) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut enc = self.device.create_command_encoder(&Default::default());
+        enc.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo { texture: tex, mip_level: 0,
+                origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::TexelCopyBufferInfo { buffer: &buf,
+                layout: wgpu::TexelCopyBufferLayout { offset: 0,
+                    bytes_per_row: Some(bpr), rows_per_image: Some(h) } },
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        self.queue.submit(std::iter::once(enc.finish()));
+        let slice = buf.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+        if rx.recv().map(|r| r.is_ok()).unwrap_or(false) {
+            let data = slice.get_mapped_range();
+            let mut img: Vec<u8> = Vec::with_capacity((w * h * 4) as usize);
+            for row in 0..h {
+                let start = (row * bpr) as usize;
+                for px in 0..w {
+                    let i = start + (px * 4) as usize;
+                    // BGRA -> RGBA
+                    img.push(data[i + 2]);
+                    img.push(data[i + 1]);
+                    img.push(data[i]);
+                    img.push(data[i + 3]);
+                }
+            }
+            drop(data);
+            let _ = image::save_buffer(path, &img, w, h, image::ColorType::Rgba8);
+            eprintln!("[DUMP] {} ({}x{})", path, w, h);
+        }
+        buf.unmap();
+    }
+
     pub fn compose_blend_layer_into_encoder(
         &self,
         encoder: &mut wgpu::CommandEncoder,

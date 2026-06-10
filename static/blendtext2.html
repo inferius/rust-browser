@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  body { margin: 20px; background: #0a0a0c; }
+  .blend-wrap {
+    position: relative;
+    width: 200px; height: 80px;
+    background: linear-gradient(to right, #e8ff6a, #6affdb);
+    overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .blend-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(255,106,155,0.6);
+    mix-blend-mode: multiply;
+  }
+  .blend-text {
+    position: relative;
+    z-index: 1;
+    font-size: 0.6rem;
+    color: #e8e6df;
+  }
+</style>
+</head>
+<body>
+  <div class="blend-wrap">
+    <div class="blend-overlay"></div>
+    <span class="blend-text">multiply</span>
+  </div>
+</body>
+</html>

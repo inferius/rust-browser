@@ -420,9 +420,25 @@ fn walk_box(b: &LayoutBox, current: &mut LayerNode) {
             // "padding" area mimo section bg. Border-radius pres SDF v src tex
             // = rounded corners visible v rotated direction (= correct chrome
             // behavior).
+            // Snap layer origin na cele px (Chrome raster-origin snapping).
+            // Sub-px layer pozice (text span 103.73,54.24) + nearest compose
+            // sampler = glyph pixely "preskakuji" = rozsypany maly text
+            // (mix-blend .blend-text). Floor origin + ceil size s frakci aby
+            // pravy/dolni okraj porad pokryl cely content; sub-px frakce
+            // zustava v layer-LOCAL coords kde ji glyph raster snapne.
+            let snapped_rect = {
+                let fx = child.rect.x.floor();
+                let fy = child.rect.y.floor();
+                crate::browser::layout::Rect {
+                    x: fx,
+                    y: fy,
+                    width: (child.rect.width + (child.rect.x - fx)).ceil(),
+                    height: (child.rect.height + (child.rect.y - fy)).ceil(),
+                }
+            };
             let mut sub = LayerNode {
                 id: layer_id,
-                root_rect: child.rect,
+                root_rect: snapped_rect,
                 z_index: child.z_index,
                 opacity: child.opacity,
                 blend_mode: child.mix_blend_mode,
