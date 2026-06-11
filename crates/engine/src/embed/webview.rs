@@ -229,6 +229,10 @@ pub struct WebView {
     /// barvou pres puvodni vrstvu). Set v render_via selection bloku,
     /// spotrebovano po overlay draw.
     pub(crate) pending_selection_texts: Option<(Vec<crate::browser::paint::DisplayCommand>, Vec<(f32, f32, f32, f32)>)>,
+    /// Overlay cmds posledniho FULL framu (scrollbar/popup/devtools slice za
+    /// d4_overlay_start). COMPOSITOR FAST PATH je re-kresli pri anim-only
+    /// re-compose bez paint walku.
+    pub(crate) last_overlay_cmds: Vec<crate::browser::paint::DisplayCommand>,
     /// Cas posledniho resize() - detekce rapid drag-resize vs settle.
     pub(crate) last_resize_at: Option<std::time::Instant>,
     /// Behem rapid resize: layout + cascade klicuji na TUTO (starou) velikost
@@ -558,6 +562,181 @@ pub fn last_layer_cache_stats() -> LayerCacheStats {
     LAYER_CACHE_STATS.with(|c| c.get())
 }
 
+/// Prevod @keyframes na CompositorAnim entries, pokud je animace
+/// compositor-friendly: PRESNE 2 stopy (0% a 100%), VSECHNY props jen
+/// transform/opacity, transform = single op STEJNE varianty na obou stopach
+/// (lerp_transform umi jen same-variant). Jinak None -> main pipeline.
+fn compositor_friendly_anims(
+    kf: &crate::browser::css_parser::Keyframes,
+    spec: &crate::browser::cascade::AnimationSpec,
+) -> Option<Vec<crate::browser::compositor::anim::CompositorAnim>> {
+    use crate::browser::compositor::anim::{CompositorAnim, Easing};
+    if kf.frames.len() != 2 { return None; }
+    let (p0, d0) = &kf.frames[0];
+    let (p1, d1) = &kf.frames[1];
+    if *p0 > 0.001 || (*p1 - 1.0).abs() > 0.001 { return None; }
+    // Vsechny props na obou stopach musi byt transform/opacity.
+    let only_comp = |decls: &[crate::browser::css_parser::Declaration]| {
+        !decls.is_empty() && decls.iter().all(|d|
+            matches!(d.property.as_str(), "transform" | "opacity"))
+    };
+    if !only_comp(d0) || !only_comp(d1) { return None; }
+    let easing = match spec.timing_function.as_str() {
+        "linear" => Easing::Linear,
+        "ease-in" => Easing::EaseIn,
+        "ease-out" => Easing::EaseOut,
+        "ease-in-out" | "ease" => Easing::EaseInOut,
+        _ => return None, // cubic-bezier/steps -> main pipeline
+    };
+    let alternate = matches!(spec.direction.as_str(), "alternate" | "alternate-reverse");
+    if spec.direction == "reverse" || spec.direction == "alternate-reverse" {
+        // Reverse start smery zatim main pipeline (start hodnota by byla `to`).
+        return None;
+    }
+    if spec.delay_secs.abs() > 0.001 { return None; }
+    let start = std::time::Instant::now();
+    let duration_ms = spec.duration_secs.max(0.001) * 1000.0;
+    let get = |decls: &[crate::browser::css_parser::Declaration], p: &str| {
+        decls.iter().find(|d| d.property == p).map(|d| d.value.clone())
+    };
+    let mut out = Vec::new();
+    if let (Some(f), Some(t)) = (get(d0, "opacity"), get(d1, "opacity")) {
+        let (f, t) = (f.trim().parse::<f32>().ok()?, t.trim().parse::<f32>().ok()?);
+        out.push(CompositorAnim::Opacity {
+            from: f, to: t, start, duration_ms, easing,
+            iterations: spec.iteration_count, alternate,
+            current: f, done: false,
+        });
+    }
+    if let (Some(f), Some(t)) = (get(d0, "transform"), get(d1, "transform")) {
+        let fc = crate::browser::layout::parse_transform_chain(&f);
+        let tc = crate::browser::layout::parse_transform_chain(&t);
+        // Single-op + stejna varianta (lerp constraint).
+        if fc.len() != 1 || tc.len() != 1 { return None; }
+        let (fo, to_) = (fc[0].clone(), tc[0].clone());
+        if std::mem::discriminant(&fo) != std::mem::discriminant(&to_) { return None; }
+        out.push(CompositorAnim::Transform {
+            from: fo.clone(), to: to_, start, duration_ms, easing,
+            iterations: spec.iteration_count, alternate,
+            current: fo, done: false,
+        });
+    }
+    if out.is_empty() { return None; }
+    Some(out)
+}
+
+/// Compose vsech layeru (z-order flatten) z jejich textur do target_view +
+/// overlay cmds nad nimi. Sdileno MAIN pipeline a COMPOSITOR FAST PATH
+/// (anim-only frame skip layout+paint) - jedna implementace, zadny drift.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn compose_layer_tree_into(
+    renderer: &mut crate::browser::render::Renderer,
+    layer_tree: &crate::browser::compositor::LayerNode,
+    target_view: &wgpu::TextureView,
+    target_texture: &wgpu::Texture,
+    layer_textures: &std::collections::HashMap<usize, LayerTextureSlot>,
+    tile_textures: &std::collections::HashMap<(usize, usize), TileTextureSlot>,
+    scroll_x: f32,
+    scroll_y: f32,
+    zoom: f32,
+    scale_factor: f32,
+    overlay: &[crate::browser::paint::DisplayCommand],
+) {
+    let mut flat: Vec<&crate::browser::compositor::LayerNode> = Vec::new();
+    crate::browser::compositor::flatten_layers(layer_tree, &mut flat);
+    // Single encoder pres celou compose phase = 1 submit.
+    let mut compose_encoder = renderer.device.create_command_encoder(
+        &wgpu::CommandEncoderDescriptor { label: Some("d4_compose_batch") });
+    let mut first = true;
+    for layer in &flat {
+        let is_fixed = matches!(layer.reason,
+            crate::browser::compositor::LayerReason::PositionFixed);
+        let pos_x = layer.root_rect.x - if is_fixed { 0.0 } else { scroll_x };
+        let pos_y = layer.root_rect.y - if is_fixed { 0.0 } else { scroll_y };
+        // Tile compose path - walk per-tile textures + compose kazdou.
+        let sf_compose = zoom * scale_factor;
+        let force_tiles_c = std::env::var("RWE_FORCE_TILES").is_ok();
+        let layer_needs_tiles = !layer.tiles.is_empty()
+            && (force_tiles_c
+                || (layer.root_rect.width * sf_compose).max(layer.root_rect.height * sf_compose) > 8192.0);
+        if layer_needs_tiles && layer.transform.is_none() {
+            for (idx, tile) in layer.tiles.iter().enumerate() {
+                let key = (layer.id, idx);
+                let tile_view = match tile_textures.get(&key) {
+                    Some(s) => s.view.clone(),
+                    None => continue,
+                };
+                renderer.compose_view_to_view_into_encoder(
+                    &mut compose_encoder,
+                    target_view, &tile_view,
+                    pos_x + tile.local_rect.x,
+                    pos_y + tile.local_rect.y,
+                    tile.local_rect.width,
+                    tile.local_rect.height,
+                    layer.opacity.clamp(0.0, 1.0),
+                    first,
+                );
+                first = false;
+            }
+            continue;
+        }
+        let view = match layer_textures.get(&layer.id) {
+            Some(s) => s.view.clone(),
+            None => continue,
+        };
+        if std::env::var("RWE_COMPOSE_DBG").is_ok() {
+            eprintln!("[COMPOSE] layer={} root_rect=({},{},{},{}) pos=({},{}) scroll=({},{}) damage={:?} transform={:?}",
+                layer.id, layer.root_rect.x, layer.root_rect.y,
+                layer.root_rect.width, layer.root_rect.height,
+                pos_x, pos_y, scroll_x, scroll_y,
+                layer.damage_rect, layer.transform);
+        }
+        if layer.transform.is_some() {
+            // Layer texture obsahuje UNTRANSFORMED content. Compose pres
+            // transform pipeline rotuje quad na GPU. PLNY CHAIN
+            // (layer.transforms) - singular by rozbil multi-op 3D.
+            let m = crate::browser::layout::compute_transform_matrix(
+                &layer.transforms, None);
+            renderer.compose_view_to_view_transform_into_encoder(
+                &mut compose_encoder,
+                target_view, &view,
+                pos_x, pos_y,
+                layer.root_rect.width, layer.root_rect.height,
+                &m, first,
+            );
+        } else if !first && !matches!(layer.blend_mode,
+                crate::browser::computed_style::BlendMode::Normal) {
+            // mix-blend-mode: blend layer tex pres dosud vykompozitlovany
+            // backdrop. !first = existuje backdrop (jinak normal compose).
+            let mode_id = blend_mode_discriminant(layer.blend_mode);
+            renderer.compose_blend_layer_into_encoder(
+                &mut compose_encoder,
+                target_view, target_texture, &view,
+                pos_x, pos_y,
+                layer.root_rect.width, layer.root_rect.height,
+                mode_id,
+                layer.opacity.clamp(0.0, 1.0),
+            );
+        } else {
+            renderer.compose_view_to_view_into_encoder(
+                &mut compose_encoder,
+                target_view, &view,
+                pos_x, pos_y,
+                layer.root_rect.width, layer.root_rect.height,
+                layer.opacity.clamp(0.0, 1.0),
+                first,
+            );
+        }
+        first = false;
+    }
+    // Submit batched compose encoder = single GPU sync.
+    renderer.queue.submit(std::iter::once(compose_encoder.finish()));
+    // Po composite: overlay cmds (scrollbar, select popup, devtools...).
+    if !overlay.is_empty() {
+        renderer.draw_segments_into_view_clipped(target_view, overlay, first, None);
+    }
+}
+
 /// DEBUG: najdi prvni node s danou CSS tridou (pro RWE_FORCE_HOVER mereni).
 fn find_first_node_by_class(bx: &crate::browser::layout::LayoutBox, class: &str) -> Option<usize> {
     if let Some(n) = &bx.node {
@@ -839,6 +1018,7 @@ impl WebView {
             last_render_dom_version: 0,
             last_render_dom_layout_version: 0,
             pending_selection_texts: None,
+            last_overlay_cmds: Vec::new(),
             last_resize_at: None,
             resize_layout_override: None,
             last_render_canvas_gen: 0,
@@ -3078,6 +3258,60 @@ impl WebView {
             }
         }
 
+        // === COMPOSITOR FAST PATH (CompositorAnimStore gate) ===
+        // Anim-only frame: jedine co se od posledniho FULL framu meni jsou
+        // compositor anim hodnoty (transform/opacity @keyframes registrovane
+        // v compositor_anims). Skip cascade/layout/paint/extract - jen tick
+        // store, apply na last_layer_tree a re-compose z EXISTUJICICH textur
+        // + cached overlay. Chrome cc::AnimationHost model.
+        // Podminky drzet konzervativni - cokoliv jineho => full pipeline.
+        if !self.dirty
+            && self.compositor_anims.active_count() > 0
+            && self.active_transitions.is_empty()
+            && self.scroll_anim_y.is_none()
+            && self.scroll_anim_x.is_none()
+            && (self.scroll_y - self.scroll_target_y).abs() < 0.01
+            && (self.scroll_x - self.scroll_target_x).abs() < 0.01
+            && self.resize_layout_override.is_none()
+            && self.pending_selection_texts.is_none()
+            && self.last_layer_tree.is_some()
+            && self.target_view.is_some()
+            && self.target_texture.is_some()
+            && std::env::var("RWE_LAYER_GPU_OFF").is_err()
+            && std::env::var("RWE_COMPOSITOR_GATE_OFF").is_err()
+        {
+            let now_cf = std::time::Instant::now();
+            let any_anim = self.compositor_anims.tick(now_cf);
+            if any_anim {
+                let mut tree = self.last_layer_tree.take().unwrap();
+                self.compositor_anims.apply_to_layer_tree(&mut tree);
+                {
+                    let target_view = self.target_view.as_ref().unwrap();
+                    let target_texture = self.target_texture.as_ref().unwrap();
+                    compose_layer_tree_into(
+                        renderer, &tree, target_view, target_texture,
+                        &self.layer_textures, &self.tile_textures,
+                        self.scroll_x, self.scroll_y, self.zoom, self.scale_factor,
+                        &self.last_overlay_cmds,
+                    );
+                }
+                self.last_layer_tree = Some(tree);
+                if std::env::var("RWE_GATE_DBG").is_ok() {
+                    eprintln!("[GATE] compositor-only frame ({} anim) {:.2}ms",
+                        self.compositor_anims.active_count(),
+                        now_cf.elapsed().as_secs_f32() * 1000.0);
+                }
+                self.prof_cascade_ms = 0.0;
+                self.prof_layout_ms = 0.0;
+                self.prof_paint_ms = 0.0;
+                self.prof_gpu_ms = now_cf.elapsed().as_secs_f32() * 1000.0;
+                self.frame_pacer.mark_presented(_frame_idx);
+                return self.target_view.as_ref();
+            }
+            // any_anim=false: anim prave dobehla (store ji vycistil) ->
+            // propadnout do full pipeline (final stav se musi zapect).
+        }
+
         // Drain async jobs (image lazy loads, file IO callbacks). Volane PRED
         // cascade aby novy state byl dostupny v style_map (e.g. image natural
         // dims po load aktualizuji layout).
@@ -3415,6 +3649,35 @@ impl WebView {
         let started: Vec<(usize, String)> = current_anims.difference(&self.active_animations).cloned().collect();
         let ended_anims: Vec<(usize, String)> = self.active_animations.difference(&current_anims).cloned().collect();
         self.active_animations = current_anims;
+
+        // 1d2. COMPOSITOR ANIM REGISTRACE: started @keyframes animace, ktere
+        // jsou compositor-friendly (JEN transform/opacity props, 2 stopy
+        // 0%/100%, transform single-op stejne varianty), jdou do
+        // compositor_anims store. FAST PATH (vyse) pak anim-only framy
+        // resi tick+re-compose bez layout/paint. Ne-friendly animace
+        // (barvy, width, multi-stop) zustavaji na main pipeline.
+        if has_keyframes && !started.is_empty() {
+            for (node_id, anim_name) in &started {
+                let spec = style_map.get(node_id)
+                    .and_then(|s| crate::browser::cascade::AnimationSpec::from_styles_multi(s)
+                        .into_iter().find(|sp| sp.name == *anim_name));
+                let Some(spec) = spec else { continue; };
+                // Paused / fill modes komplikuji gate - skip do main pipeline.
+                if spec.play_state == "paused" { continue; }
+                let kf = self.stylesheets.iter()
+                    .flat_map(|s| s.keyframes.iter())
+                    .find(|k| k.name == *anim_name);
+                let Some(kf) = kf else { continue; };
+                if let Some(anims) = compositor_friendly_anims(kf, &spec) {
+                    for a in anims {
+                        self.compositor_anims.insert(*node_id, a);
+                    }
+                }
+            }
+        }
+        for (node_id, _) in &ended_anims {
+            self.compositor_anims.remove(*node_id);
+        }
 
         // 1e. Dispatch transition / animation events do JS interpretu.
         if let Some(interp) = self.interpreter.as_mut() {
@@ -4360,115 +4623,23 @@ impl WebView {
         let target_texture = self.target_texture.as_ref()?;
         let _tile_gpu_mode = std::env::var("RWE_TILE_GPU").is_ok();
         if layer_gpu_mode {
-            // Composite all layers into target_view.
+            // Composite all layers into target_view + overlay (sdilena fn
+            // s COMPOSITOR FAST PATH - viz compose_layer_tree_into).
             let layer_tree_ref = self.last_layer_tree.as_ref()
                 .expect("layer_tree saved pred draw");
-            let mut flat: Vec<&crate::browser::compositor::LayerNode> = Vec::new();
-            crate::browser::compositor::flatten_layers(layer_tree_ref, &mut flat);
-            // Single encoder pres celou compose phase = 1 submit (drive N submits/frame
-            // = ~25-80x mensi GPU sync overhead).
-            let mut compose_encoder = renderer.device.create_command_encoder(
-                &wgpu::CommandEncoderDescriptor { label: Some("d4_compose_batch") });
-            let mut first = true;
-            for layer in &flat {
-                let is_fixed = matches!(layer.reason,
-                    crate::browser::compositor::LayerReason::PositionFixed);
-                let pos_x = layer.root_rect.x - if is_fixed { 0.0 } else { self.scroll_x };
-                let pos_y = layer.root_rect.y - if is_fixed { 0.0 } else { self.scroll_y };
-                // Tile compose path - walk per-tile textures + compose kazdou.
-                let sf_compose = self.zoom * self.scale_factor;
-                let force_tiles_c = std::env::var("RWE_FORCE_TILES").is_ok();
-                let layer_needs_tiles = !layer.tiles.is_empty()
-                    && (force_tiles_c
-                        || (layer.root_rect.width * sf_compose).max(layer.root_rect.height * sf_compose) > 8192.0);
-                if layer_needs_tiles && layer.transform.is_none() {
-                    for (idx, tile) in layer.tiles.iter().enumerate() {
-                        let key = (layer.id, idx);
-                        let tile_view = match self.tile_textures.get(&key) {
-                            Some(s) => s.view.clone(),
-                            None => continue,
-                        };
-                        renderer.compose_view_to_view_into_encoder(
-                            &mut compose_encoder,
-                            target_view, &tile_view,
-                            pos_x + tile.local_rect.x,
-                            pos_y + tile.local_rect.y,
-                            tile.local_rect.width,
-                            tile.local_rect.height,
-                            layer.opacity.clamp(0.0, 1.0),
-                            first,
-                        );
-                        first = false;
-                    }
-                    continue;
-                }
-                let view = match self.layer_textures.get(&layer.id) {
-                    Some(s) => s.view.clone(),
-                    None => continue,
-                };
-                if std::env::var("RWE_COMPOSE_DBG").is_ok() {
-                    eprintln!("[COMPOSE] layer={} root_rect=({},{},{},{}) pos=({},{}) scroll=({},{}) damage={:?} transform={:?}",
-                        layer.id, layer.root_rect.x, layer.root_rect.y,
-                        layer.root_rect.width, layer.root_rect.height,
-                        pos_x, pos_y, self.scroll_x, self.scroll_y,
-                        layer.damage_rect, layer.transform);
-                }
-                if layer.transform.is_some() {
-                    // Layer texture obsahuje UNTRANSFORMED content (paint emit
-                    // skip transform pri layer). Compose pres transform pipeline
-                    // rotuje quad pres GPU (= rotates content + glyphs spolu).
-                    // Center = pos + w/2 = element rect center (layer.root_rect
-                    // = orig rect = element bbox).
-                    // POUZIVAME PLNY CHAIN (layer.transforms), ne singular
-                    // layer.transform - jinak multi-op 3D (rotateX+rotateY,
-                    // perspective+rotateY) dostane jen rozbity prvni op.
-                    let m = crate::browser::layout::compute_transform_matrix(
-                        &layer.transforms, None);
-                    renderer.compose_view_to_view_transform_into_encoder(
-                        &mut compose_encoder,
-                        target_view, &view,
-                        pos_x, pos_y,
-                        layer.root_rect.width, layer.root_rect.height,
-                        &m, first,
-                    );
-                } else if !first && !matches!(layer.blend_mode,
-                        crate::browser::computed_style::BlendMode::Normal) {
-                    // mix-blend-mode: blend layer tex pres dosud vykompozitlovany
-                    // backdrop. !first = existuje backdrop (jinak normal compose).
-                    let mode_id = blend_mode_discriminant(layer.blend_mode);
-                    renderer.compose_blend_layer_into_encoder(
-                        &mut compose_encoder,
-                        target_view, target_texture, &view,
-                        pos_x, pos_y,
-                        layer.root_rect.width, layer.root_rect.height,
-                        mode_id,
-                        layer.opacity.clamp(0.0, 1.0),
-                    );
-                } else {
-                    renderer.compose_view_to_view_into_encoder(
-                        &mut compose_encoder,
-                        target_view, &view,
-                        pos_x, pos_y,
-                        layer.root_rect.width, layer.root_rect.height,
-                        layer.opacity.clamp(0.0, 1.0),
-                        first,
-                    );
-                }
-                first = false;
-            }
-            // Submit batched compose encoder = single GPU sync.
-            renderer.queue.submit(std::iter::once(compose_encoder.finish()));
-            // Po composite: draw overlay-only cmds (vse appendoval po build_layered).
-            if d4_overlay_start < display_list.len() {
-                let overlay = &display_list[d4_overlay_start..];
-                if !overlay.is_empty() {
-                    renderer.draw_segments_into_view_clipped(
-                        target_view, overlay, first, None);
-                }
-            } else if first {
-                // No layers at all - clear target_view via draw_segments empty path
-                // (alespoň clear color). Pri page bez layers (rare) by zustal stale.
-            }
+            let overlay: &[crate::browser::paint::DisplayCommand] =
+                if d4_overlay_start < display_list.len() {
+                    &display_list[d4_overlay_start..]
+                } else { &[] };
+            compose_layer_tree_into(
+                renderer, layer_tree_ref, target_view, target_texture,
+                &self.layer_textures, &self.tile_textures,
+                self.scroll_x, self.scroll_y, self.zoom, self.scale_factor,
+                overlay,
+            );
+            // Overlay cache pro fast path (anim-only frame re-compose musi
+            // prekreslit scrollbar/popup overlay bez paint walku).
+            self.last_overlay_cmds = overlay.to_vec();
             // Chrome-style selection: prebarvene Text klony s glyph clipem
             // na highlight recty (jen vybrane znaky pres puvodni vrstvu).
             // Coords jsou content-space -> shift o -scroll (jako overlay).
