@@ -2,6 +2,80 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`, `debug_utils.md`.
 
+## Session N+37: docx v5 - selection painting, sidebar vh bug, FORMS refaktor
+
+User mandat: docx v5 (a) Chrome-kontrastni selection, (b) sidebar border
+az dolu, (c) PORADNY refaktor formularu, (d) odpoved na architekturu text
+renderingu. 4 commity, 4201 testu pass.
+
+### 1. Chrome-style selection painting (573a3fb)
+Highlight plnou alphou (#3297FD / ::selection bg) + recolor JEN vybranych
+znaku: recolor Text klony jdou zvlast passem (draw_selection_text_pass)
+s thread-local SELECTION_GLYPH_CLIP - build_vertices kresli jen glyfy
+s centrem uvnitr sel rectu. Auto-kontrast dle luma bg (tmavy->bily text).
+Nevybrane znaky zustavaji z puvodni vrstvy. Overeno pixel-presne.
+
+### 2. Sidebar border / VH BUG (008a986) - SYSTEMOVY
+`height: calc(100vh - 48px)` v runtime = 720 (768 fallback!) misto 852.
+ROOT CAUSE: stranka s @container jde pres cascade_with_container_sizes,
+ktera NEsetovala MATH_VIEWPORT thread-local ani NEvolala
+resolve_viewport_units na deklaracich -> VSECHNY vh/vw na strance
+resolvovaly proti 1024x768 fallbacku. Fix = stejny prolog jako
+cascade_with_viewport. Diagnostika: RWE_SB_DBG=<id> vypise po layoutu
+rect boxu + vp_arg + math_vp (takhle se naslo math_vp=0x0).
+
+### 3. FORMS refaktor (5cfe44e) - control_text replaced model
+Root cause vetsiny form bugu: obsah controlu sel do bx.text -> layout
+sizoval box podle TEXTU:
+- input se po 1. znaku SCVRKNUL na vysku radky bez paddingu (text branch
+  flush_inline misto children/replaced branch; placeholder byl virtualni
+  text CHILD = jina cesta nez s value = nestabilni vyska),
+- select 12px vysoky s textem POD boxem, range ignoroval width:100%
+  (UA default explicit_width 129 vyhraval nad width_pct), progress 120x0
+  (flex measure reset rect.height non-explicit childu).
+
+Refaktor (Chrome model: form control = REPLACED element):
+- `LayoutBox.control_text` - obsah (value/selected/textarea) ODDELENY od
+  text. Layout ho NEVIDI. Kresli jen paint (padding + v-center; pri empty
+  placeholder z attru placeholder_color barvou). Form control NEMA
+  obsahove children (skip v build loop).
+- Synteticke dims po CSS apply: h = line_h + pad + border (border-box),
+  min-height clamp, zafixovano i do explicit_height (flex/grid measure
+  reset by jinak spadl na pad+border floor = 14px prouzek).
+- CSS width/height `%` NULUJE UA/attr explicit default.
+- DAMAGE: layer structural_fp + tile fp hashuji control_text + checked +
+  input value (jinak psani/klik NEdamaguje -> stary obraz; presne tohle
+  bylo "psani se zpozdenim" a "checkbox dead"). D4 overlay items (select
+  popup...) potrebuji warm_atlas_for - drive glyfy popup options chybely.
+- Interakce: type=number filtr znaku; AltGr (Ctrl+Alt = @ na CZ) neni
+  ctrl-shortcut + input-local Ctrl+A/C/V/X jde do dispatch_text_key
+  (paste do inputu driv MRTVY); Enter v textarea = newline; value mutace
+  bumpa STYLE verzi kdyz CSS ma :valid/:invalid/:placeholder-shown
+  (jinak cascade cache prezila a invalid border se neukazal); caret
+  pozice z Document.selection registry (ne legacy input_caret mapy).
+
+Harness pozn.: typekeys2.ps1 (SendKeys + AttachThreadInput foreground
+force; SetForegroundWindow sam o sobe FLAKY - kdyz selze, klavesy jdou
+do konzole a "nic se nedeje" = falesny zaver). "~" v SendKeys = Enter,
+muj escape ho posilal doslovne - pro Enter pouzit {ENTER}.
+
+### Zbyva (priority dle docx v5)
+- **CompositorAnimStore gate** (perf next level, user approved):
+  compositor_anims.tick + apply_to_layer_tree UZ BEZI v render_via;
+  zbyva GATE = pri compositor-only zmenach skip layout+paint a jen
+  re-compose z last_layer_tree (plan v N+36b TODO nize).
+- Top bar "pruhlednost" pri scrollu = chybejici backdrop-filter blur
+  (header rgba bg .7 bez bluru prosvita ostre). Task #10.
+- Canvas sekce, tabulka hover jump, @container/:has, SVG sekce,
+  writing-mode glyphy, repeating gradienty, text-shadow - viz N+36 TODO.
+- Select popup: hover highlight + option text barvy pro dark theme
+  stranky (kosmetika).
+- Textarea multi-line caret (x_at_char pres celou value vc. \n - caret
+  na 2.+ radku spatne x; render OK, jen caret pozice).
+- 13 unused-import warnings v interpreter/browser modulech NEpochazi
+  z teto session (web_locks/popover/jxl_decode/test262... - cizi
+  rozpracovana prace, nesahano).
+
 ## Session N+36: chyby-rbro v4 "od podlahy" - systemove fixy jadra
 
 User mandat: docx v4 (10.6. po N+35 fixech) + HANDOFF deferred, "vezmi to
