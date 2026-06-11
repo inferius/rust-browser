@@ -3349,7 +3349,15 @@ impl WebView {
         // Podminky drzet konzervativni - cokoliv jineho => full pipeline.
         if !self.dirty
             && self.compositor_anims.active_count() > 0
+            // KLIC: store musi pokryvat VSECHNY aktivni @keyframes animace.
+            // Gate frame tika JEN store - neregistrovane animace (multi-stop,
+            // barvy) by behem gate ZAMRZLY a pohly se az pri plnem framu
+            // ("animace jedou 2 FPS, pri scrollu/hoveru plynule" regrese).
+            && self.active_animations.iter()
+                .all(|(nid, _)| self.compositor_anims.has_node(*nid))
             && self.active_transitions.is_empty()
+            // Caret blink potrebuje plny frame (overlay rebuild).
+            && !self.focused_is_input()
             && self.scroll_anim_y.is_none()
             && self.scroll_anim_x.is_none()
             && (self.scroll_y - self.scroll_target_y).abs() < 0.01

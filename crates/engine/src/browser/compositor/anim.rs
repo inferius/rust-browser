@@ -123,6 +123,13 @@ impl CompositorAnimStore {
         self.entries.values().map(|v| v.len()).sum()
     }
 
+    /// Ma node aktivni compositor anim? Gate check: fast path smi bezet jen
+    /// kdyz store pokryva VSECHNY aktivni animace (jinak neregistrovane
+    /// zamrznou - tick maji jen pri full framu).
+    pub fn has_node(&self, node_id: usize) -> bool {
+        self.entries.contains_key(&node_id)
+    }
+
     /// Tick - posune progress kazde anim na now. Vraci true pokud
     /// jakakoli anim aktivni (still ticking, ne done).
     pub fn tick(&mut self, now: Instant) -> bool {
