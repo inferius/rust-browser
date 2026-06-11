@@ -1033,6 +1033,17 @@ impl WebView {
         self.nav_id
     }
 
+    /// CSS pouziva value-dependent pseudo-tridy (:valid / :invalid /
+    /// :placeholder-shown / :in-range / :out-of-range)? Host pri psani do
+    /// inputu pak musi bumpnout i STYLE verzi (plny re-cascade), jinak
+    /// cascade cache prezije a border/barvy na :invalid se neprepocitaji.
+    pub fn css_uses_value_pseudos(&self) -> bool {
+        const PS: [&str; 5] = ["valid", "invalid", "placeholder-shown",
+            "in-range", "out-of-range"];
+        self.stylesheets.iter().any(|s|
+            PS.iter().any(|p| crate::browser::cascade::stylesheet_uses_pseudo(s, p)))
+    }
+
     /// Drainne nasbirane HTML/CSS/JS sources do (url, body, lang_marker) Vec.
     /// Volat po detekci nav_id zmeny - DevTools registruje do Sources panelu.
     /// `lang_marker`: "html" | "css" | "js".
@@ -4004,7 +4015,21 @@ impl WebView {
                 let nid = std::rc::Rc::as_ptr(&focused) as usize;
                 let value = focused.attr("value").unwrap_or_default();
                 let chars: Vec<char> = value.chars().collect();
-                let caret = (*self.input_caret.get(&nid).unwrap_or(&chars.len()))
+                // Caret PRIMARNE z Document.selection registry (DomInputBuffer
+                // commit_back tam zapisuje cursor po kazde klavese). Legacy
+                // input_caret mapa se plni jen pri kliku - po psani by caret
+                // zustal na klik pozici (vizualne "caret na zacatku").
+                let caret = self.interpreter.as_ref()
+                    .and_then(|interp| {
+                        let doc = interp.document.borrow();
+                        let sel = doc.selection.borrow();
+                        sel.input_state(nid).map(|s| {
+                            let cb = s.cursor.min(value.len());
+                            value[..cb].chars().count()
+                        })
+                    })
+                    .or_else(|| self.input_caret.get(&nid).copied())
+                    .unwrap_or(chars.len())
                     .min(chars.len());
                 // Find LayoutBox pre this node (walk layout_root).
                 fn find_box<'a>(b: &'a crate::browser::layout::LayoutBox, target_id: usize)
@@ -4232,9 +4257,13 @@ impl WebView {
 
         // 4. Warm-up glyph atlas + image atlas pred draw.
         // Pri D4 layer_gpu_mode warm uz probehl vyse pres local_cache (= full
-        // layer content). Tady jen monolithic path nebo D4 overlay items.
+        // layer content) - ale JEN pro layer cast. Overlay items (select popup,
+        // scrollbar, devtools) appendovane po d4_overlay_start tudy neprosly
+        // -> jejich glyfy chybely v atlasu (select popup options byly prazdne).
         if !layer_gpu_mode {
             renderer.warm_atlas_for(&display_list, self.base_url.as_deref());
+        } else if d4_overlay_start < display_list.len() {
+            renderer.warm_atlas_for(&display_list[d4_overlay_start..], self.base_url.as_deref());
         }
 
         // 4b. Extract text runs (per-glyph cumulative advances) - foundation

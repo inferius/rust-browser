@@ -3032,10 +3032,21 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             eprintln!("[KEYIN] focused_id={:?} dt_focus_text={} ctrl={}",
                                 focused_id, self.devtools.focus.is_text_input(), self.modifiers.control_key());
                         }
+                        // Ctrl eventy do input handleru pousti jen: AltGr (Ctrl+Alt =
+                        // CZ/DE znaky @#{}...) a input-local shortcuts (Ctrl+A/C/V/X
+                        // resi dispatch_text_key). Ostatni Ctrl (L/F/P...) propadnou
+                        // na browser-level handlery nize. Drive blokovalo VSECHNY
+                        // ctrl eventy = @ na CZ layoutu nesel napsat + paste mrtvy.
+                        let ctrl_raw = self.modifiers.control_key();
+                        let altgr = ctrl_raw && self.modifiers.alt_key();
+                        let input_local_ctrl = ctrl_raw && !altgr
+                            && matches!(&key_event.logical_key,
+                                Key::Character(s) if matches!(s.as_str(),
+                                    "a" | "A" | "c" | "C" | "v" | "V" | "x" | "X"));
                         if let Some(fid) = focused_id {
                             if !false && !false
                                 && !self.devtools.focus.is_text_input()
-                                && !self.modifiers.control_key()
+                                && (!ctrl_raw || altgr || input_local_ctrl)
                             {
                                 let (node_opt, doc_rc) = self.interp().map(|interp| {
                                     let doc_root = std::rc::Rc::clone(&interp.document.borrow().root);
@@ -3050,8 +3061,24 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                     if matches!(tag.as_str(), "input" | "textarea") {
                                         use crate::browser::dom_input_buffer::DomInputBuffer;
                                         use crate::browser::render::text_input::{dispatch_text_key, TextKeyOutcome};
-                                        let ctrl = self.modifiers.control_key();
+                                        // AltGr (Ctrl+Alt) = znak, ne shortcut (viz vyse).
+                                        let ctrl = input_local_ctrl;
                                         let shift = self.modifiers.shift_key();
+                                        // type=number: filtruj ne-numericke znaky uz na vstupu
+                                        // (Chrome chovani - pismena se do number inputu nedostanou).
+                                        let input_type = node.attr("type")
+                                            .map(|t| t.to_lowercase()).unwrap_or_default();
+                                        if input_type == "number" && !ctrl {
+                                            if let winit::keyboard::Key::Character(s) = &key_event.logical_key {
+                                                let ok = s.chars().all(|c|
+                                                    c.is_ascii_digit() || matches!(c, '.' | '-' | '+' | 'e' | 'E'));
+                                                if !ok {
+                                                    // Konzumovat bez efektu (zadny beep, zadny insert).
+                                                    if let Some(w) = &self.window { w.request_redraw(); }
+                                                    return;
+                                                }
+                                            }
+                                        }
                                         // Hodnota PRED editaci - detekce realne mutace (vs arrow/home).
                                         let value_before = node.attr("value").unwrap_or_default();
                                         let mut buf = DomInputBuffer::new(std::rc::Rc::clone(&node), doc_rc);
@@ -3060,8 +3087,13 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                         if std::env::var("RWE_INPUT_DBG").is_ok() {
                                             eprintln!("[KEYIN] dispatch outcome consumed={} key={:?}", consumed, key_event.logical_key);
                                         }
-                                        if matches!(outcome, TextKeyOutcome::Submit) {
-                                            // TODO form submit (najit ancestor form).
+                                        if matches!(outcome, TextKeyOutcome::Submit | TextKeyOutcome::Newline) {
+                                            if tag == "textarea" {
+                                                // Enter v textarea = novy radek (Chrome).
+                                                use crate::devtools::model::text_buffer::TextBuffer;
+                                                buf.insert("\n");
+                                            }
+                                            // TODO form submit pro single-line input (ancestor form).
                                         }
                                         drop(buf); // Drop -> commit_back value attr.
                                         // Pri realne zmene value: bump dom_version (jinak
@@ -3070,7 +3102,21 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                         // JS-driven UI se nikdy neaktualizuje). Driv
                                         // commit_back jen tise zapsal attr.
                                         let value_after = node.attr("value").unwrap_or_default();
+                                        if std::env::var("RWE_INPUT_DBG").is_ok() {
+                                            eprintln!("[KEYIN] value '{}' -> '{}'", value_before, value_after);
+                                        }
                                         if value_after != value_before {
+                                            // :valid/:invalid/:placeholder-shown zavisi na
+                                            // value -> pri jejich pouziti v CSS bump i STYLE
+                                            // verzi (re-cascade prepocita border/barvy).
+                                            let needs_style_bump = self.webview.as_ref()
+                                                .map(|w| w.css_uses_value_pseudos())
+                                                .unwrap_or(false);
+                                            if needs_style_bump {
+                                                if let Some(interp) = self.interp_mut() {
+                                                    interp.bump_dom_version();
+                                                }
+                                            }
                                             if let Some(interp) = self.interp_mut() {
                                                 interp.bump_dom_version_layout();
                                                 let mut ev = crate::interpreter::JsObject::new();

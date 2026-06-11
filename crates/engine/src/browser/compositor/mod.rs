@@ -240,6 +240,19 @@ fn compute_fingerprints_inner(
             bx.border_width.to_bits().hash(&mut h_full);
             bx.border_width.to_bits().hash(&mut h_struct);
             if let Some(t) = &bx.text { t.hash(&mut h_full); t.hash(&mut h_struct); }
+            // Form control obsah (input value / select option) - bez nej psani
+            // do inputu nedamaguje layer -> stary obraz (placeholder) zustal.
+            if let Some(t) = &bx.control_text { t.hash(&mut h_full); t.hash(&mut h_struct); }
+            // Checked stav (checkbox/radio) - paint kresli checkmark/dot primo
+            // z attru, bez hashe klik na checkbox nedamagoval layer.
+            if bx.tag.as_deref() == Some("input") {
+                if let Some(n) = &bx.node {
+                    n.attr("checked").is_some().hash(&mut h_full);
+                    n.attr("checked").is_some().hash(&mut h_struct);
+                    // Range value - thumb pozice se kresli z value attru.
+                    if let Some(v) = n.attr("value") { v.hash(&mut h_full); v.hash(&mut h_struct); }
+                }
+            }
         }
     }
     // Children layer fingerprints (rekursivni signal).
@@ -307,6 +320,16 @@ fn compute_layer_tiles(
                     if let Some(c) = bx.border_color { c.hash(&mut h); }
                     bx.border_width.to_bits().hash(&mut h);
                     if let Some(t) = &bx.text { t.hash(&mut h); }
+                    // Form control obsah - stejny duvod jako v layer fp (psani
+                    // do inputu jinak nedirti tile -> stary obraz).
+                    if let Some(t) = &bx.control_text { t.hash(&mut h); }
+                    // Checked + range value (checkbox/radio/range paint z attru).
+                    if bx.tag.as_deref() == Some("input") {
+                        if let Some(n) = &bx.node {
+                            n.attr("checked").is_some().hash(&mut h);
+                            if let Some(v) = n.attr("value") { v.hash(&mut h); }
+                        }
+                    }
                 }
             }
             tiles.push(Tile {

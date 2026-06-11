@@ -274,34 +274,20 @@ fn apply_post_children_pseudos(
         }
     }
 
-    // ::placeholder - pro input/textarea: virtualni text child s placeholder textem.
-    // Jen kdyz je value PRAZDNE (:placeholder-shown) - jinak placeholder zustaval
-    // viditelny i kdyz user psal (psani neodstranilo placeholder).
+    // ::placeholder - pro input/textarea: jen barva do placeholder_color.
+    // Samotny placeholder text kresli PAINT z attru (kdyz value empty) -
+    // drive byl virtualni text CHILD box, kvuli kteremu mel input s
+    // placeholderem jinou layout cestu (children branch) nez s value (text
+    // branch) -> vyska boxu se po napsani prvniho znaku zmenila ("border
+    // shrink"). Form control nesmi mit obsahove children vubec.
     let is_input_like = matches!(bx.tag.as_deref(), Some("input") | Some("textarea"));
-    let value_empty = node.attr("value").map(|v| v.is_empty()).unwrap_or(true)
-        && node.text_content().trim().is_empty(); // textarea text content
-    if is_input_like && value_empty {
-        if let Some(placeholder_text) = node.attr("placeholder") {
-            let ph_styles = super::cascade::get_pseudo_styles(pseudo_map, node, "placeholder");
-            let color = ph_styles
-                .and_then(|s| s.get("color"))
-                .and_then(|c| parse_color(c))
-                .unwrap_or([169, 169, 169, 255]); // darkgray default
-            bx.placeholder_color = Some(color);
-            let mut ph_box = LayoutBox::new();
-            ph_box.display = Display::Inline;
-            ph_box.tag = Some("::placeholder".to_string());
-            ph_box.text = Some(placeholder_text);
-            ph_box.text_color = Some(color);
-            ph_box.font_size = bx.font_size;
-            if let Some(s) = ph_styles {
-                if let Some(fs) = s.get("font-size") { ph_box.font_size = parse_length(fs); }
-                if let Some(fw) = s.get("font-weight") {
-                    ph_box.bold = matches!(fw.trim(), "bold" | "700" | "800" | "900");
-                }
-            }
-            bx.children.push(ph_box);
-        }
+    if is_input_like && node.attr("placeholder").is_some() {
+        let ph_styles = super::cascade::get_pseudo_styles(pseudo_map, node, "placeholder");
+        let color = ph_styles
+            .and_then(|s| s.get("color"))
+            .and_then(|c| parse_color(c))
+            .unwrap_or([169, 169, 169, 255]); // darkgray default
+        bx.placeholder_color = Some(color);
     }
 
     // ::selection - uloz barvy vyberu z pseudo map (aplikovano za behu pri renderovani)
@@ -446,7 +432,8 @@ fn apply_tag_html_attrs(bx: &mut LayoutBox, node: &Rc<Node>) {
         if bx.rect.height == 0.0 { bx.rect.height = 40.0; }
     }
     // <select>: dropdown closed. Vyber selected <option> a renderuj jako text.
-    // Default size: 120x24.
+    // Default size: 120x24. Obsah jde do control_text (NE text - layout nesmi
+    // sizovat select podle popisku; viz LayoutBox::control_text).
     if bx.tag.as_deref() == Some("select") {
         if bx.rect.width == 0.0 { bx.rect.width = 120.0; }
         if bx.rect.height == 0.0 { bx.rect.height = 24.0; }
@@ -464,10 +451,10 @@ fn apply_tag_html_attrs(bx: &mut LayoutBox, node: &Rc<Node>) {
                 }
             }
         }
-        bx.text = selected_text.or(first_text);
+        bx.control_text = selected_text.or(first_text);
     }
-    // <input type="text|email|...">: vykresli value attr jako text content.
-    // Password type maskuje *. Bez value paint zustane bg/border + placeholder.
+    // <input type="text|email|...">: value attr do control_text (paint-only).
+    // Password type maskuje *. Bez value paint kresli placeholder z attru.
     if bx.tag.as_deref() == Some("input") {
         let typ = node.attr("type").unwrap_or_else(|| "text".to_string()).to_lowercase();
         if matches!(typ.as_str(),
@@ -477,21 +464,25 @@ fn apply_tag_html_attrs(bx: &mut LayoutBox, node: &Rc<Node>) {
                     let display = if typ == "password" {
                         "\u{2022}".repeat(val.chars().count())
                     } else { val };
-                    bx.text = Some(display);
+                    bx.control_text = Some(display);
                 }
+            }
+            if std::env::var("RWE_INPUT_DBG").is_ok() {
+                eprintln!("[BUILD] input value={:?} control_text={:?}",
+                    node.attr("value"), bx.control_text);
             }
         }
     }
-    // <textarea>: multi-line input. Default 200x50. Value/text content
-    // analogicky.
+    // <textarea>: multi-line input. Default 200x50. Value/DOM text content
+    // do control_text (paint-only; DOM text children se v build skipuji).
     if bx.tag.as_deref() == Some("textarea") {
         if bx.rect.width == 0.0 { bx.rect.width = 200.0; }
         if bx.rect.height == 0.0 { bx.rect.height = 60.0; }
         if let Some(val) = node.attr("value") {
-            if !val.is_empty() { bx.text = Some(val); }
+            if !val.is_empty() { bx.control_text = Some(val); }
         } else {
             let inner = node.text_content();
-            if !inner.is_empty() { bx.text = Some(inner); }
+            if !inner.is_empty() { bx.control_text = Some(inner); }
         }
     }
     // <progress>: progress bar.
@@ -775,6 +766,12 @@ pub struct LayoutBox {
     pub bg_color: Option<[u8; 4]>,   // RGBA
     pub text_color: Option<[u8; 4]>,
     pub text: Option<String>,
+    /// Obsah form controlu (input value / textarea value / select selected
+    /// option). ODDELENE od `text`: layout NESMI sizovat box podle obsahu
+    /// (form control = replaced element se stabilnimi dims; pri `text` se
+    /// input po napsani scvrknul na vysku radky textu bez paddingu).
+    /// Kresli ho POUZE paint (stejna text logika: padding + v-center).
+    pub control_text: Option<String>,
     pub tag: Option<String>,
     pub children: Vec<LayoutBox>,
     pub padding: f32,
@@ -1233,6 +1230,7 @@ impl LayoutBox {
             bg_color: None,
             text_color: None,
             text: None,
+            control_text: None,
             tag: None,
             children: Vec::new(),
             padding: 0.0,
@@ -3771,6 +3769,10 @@ fn build_box_inner_impl(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &supe
                 let pct_str = &v[..v.len() - 1];
                 if let Ok(p) = pct_str.parse::<f32>() {
                     bx.width_pct = Some(p / 100.0);
+                    // CSS width vyhrava nad UA/attr defaultem (range 129px,
+                    // select 120...). Bez resetu flex est_w bral explicit_width
+                    // prednostne -> width:100% na range se ignorovalo.
+                    bx.explicit_width = None;
                 }
             }
             _ => {
@@ -3789,6 +3791,8 @@ fn build_box_inner_impl(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &supe
                 let pct_str = &v[..v.len() - 1];
                 if let Ok(p) = pct_str.parse::<f32>() {
                     bx.height_pct = Some(p / 100.0);
+                    // CSS height % vyhrava nad UA/attr defaultem (viz width).
+                    bx.explicit_height = None;
                 }
             } else {
                 let px = parse_length(v);
@@ -4004,8 +4008,15 @@ fn build_box_inner_impl(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &supe
         }
     }
 
-    // Children - skip None display, skip whitespace-only text uzly
+    // Children - skip None display, skip whitespace-only text uzly.
+    // Form controls (textarea/select) NEbuildi obsahove children vubec:
+    // textarea DOM text -> control_text (paint-only), select <option> texty
+    // resi apply_tag_html_attrs. Children by zpusobily content-driven sizing
+    // (replaced element musi mit stabilni box dims nezavisle na obsahu).
+    let skip_content_children = matches!(bx.tag.as_deref(),
+        Some("textarea") | Some("select") | Some("input"));
     for child in node.children.borrow().iter() {
+        if skip_content_children { break; }
         // Pre-filter: ciste whitespace text uzly preskocime. ALE NBSP (U+00A0)
         // je significant (renderuje se jako mezera) -> node s nbsp NEskipovat.
         // Rust trim() trimuje i nbsp (Unicode whitespace) -> "A &nbsp; B" mezi
@@ -4041,6 +4052,64 @@ fn build_box_inner_impl(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &supe
     }
 
     apply_post_children_pseudos(&mut bx, node, pseudo_map, counters);
+
+    // Form control = replaced element: box dims pocitane VZDY stejne,
+    // NEZAVISLE na obsahu (value/placeholder/selected option). Chrome model:
+    // content area = 1 radka textu (input/select) nebo rows radek (textarea),
+    // + padding + border. CSS height (explicit_height) wins jako border-box.
+    // Bez tohoto: vyska se menila podle toho, kterou layout cestou box prosel
+    // (placeholder child / value text / prazdny) - "border shrink po psani".
+    {
+        let typ = node.attr("type").map(|t| t.to_lowercase()).unwrap_or_default();
+        let is_text_control = match bx.tag.as_deref() {
+            Some("textarea") | Some("select") => true,
+            Some("input") => matches!(typ.as_str(),
+                "" | "text" | "email" | "password" | "url" | "tel" | "search" | "number"),
+            _ => false,
+        };
+        if is_text_control && bx.display != Display::None {
+            let pad_t = bx.padding_top.unwrap_or(bx.padding);
+            let pad_b = bx.padding_bottom.unwrap_or(bx.padding);
+            let bw = bx.border_width.max(0.0);
+            let line_h = bx.font_size * if bx.line_height > 0.0 { bx.line_height } else { 1.2 };
+            let content_h = if bx.tag.as_deref() == Some("textarea") {
+                let rows = node.attr("rows").and_then(|r| r.parse::<f32>().ok())
+                    .filter(|r| *r > 0.0).unwrap_or(3.0);
+                rows * line_h
+            } else {
+                line_h
+            };
+            bx.rect.height = if let Some(eh) = bx.explicit_height {
+                // CSS height: border-box pri box-sizing:border-box, jinak content.
+                if bx.box_sizing.is_border_box() { eh } else { eh + pad_t + pad_b + 2.0 * bw }
+            } else {
+                content_h + pad_t + pad_b + 2.0 * bw
+            };
+            // min-height clamp (fd-textarea min-height: 80px) - border-box.
+            if bx.min_height.is_specified() {
+                let mn = bx.min_height.resolve(&ResolveCtx {
+                    font_size: bx.font_size, ..Default::default() });
+                if mn > 0.0 { bx.rect.height = bx.rect.height.max(mn); }
+            }
+            // Syntetickou vysku zafixovat i jako explicit_height: flex/grid
+            // measure passy resetuji rect.height non-explicit childu na 0 a
+            // re-meri z obsahu (ktery form control nema) -> est_h spadl na
+            // padding+border floor (14px tenky prouzek). Explicit = stabilni.
+            if bx.explicit_height.is_none() {
+                bx.explicit_height = Some(bx.rect.height);
+            }
+            // Sirka: default content fallbacky (input 154 / select 120 /
+            // textarea 200 uz v rect.width z apply_tag_html_attrs). Explicit
+            // sirku / width_pct resolvuje flex/block/inline normalne.
+        }
+        // <progress>/<meter>: replaced bar - default vyska 14 px (apply_tag_
+        // html_attrs) musi prezit flex measure reset stejne jako text controls.
+        if matches!(bx.tag.as_deref(), Some("progress") | Some("meter"))
+            && bx.explicit_height.is_none()
+        {
+            bx.explicit_height = Some(bx.rect.height.max(14.0));
+        }
+    }
 
     // Inherit font_size + line_height + bold/italic + colors do text node deti
     // (text nodes nemaji vlastni cascade entry). Bez teto inheritance flex/grid

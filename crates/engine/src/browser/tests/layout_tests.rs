@@ -3253,10 +3253,10 @@ fn pseudo_placeholder_default_color() {
     let input = find_box_by_tag(&root, "input").unwrap();
     // placeholder_color nastaven na darkgray default
     assert!(input.placeholder_color.is_some());
-    // child ::placeholder existuje s textem
-    let ph = input.children.iter().find(|c| c.tag.as_deref() == Some("::placeholder"));
-    assert!(ph.is_some());
-    assert_eq!(ph.unwrap().text.as_deref(), Some("typ neco"));
+    // Placeholder NENI layout child (form control bez obsahovych children =
+    // stabilni box dims pres empty/typed stavy). Text kresli paint z attru.
+    assert!(input.children.is_empty(),
+        "form control nesmi mit obsahove children (placeholder je paint-only)");
 }
 
 #[test]
@@ -3267,9 +3267,9 @@ fn pseudo_placeholder_custom_color() {
     let pseudo_map = cascade::cascade_pseudo(&doc.root, &[css]);
     let root = layout::layout_tree_with_pseudo(&doc.root, &style_map, &pseudo_map, 1024.0, 768.0);
     let input = find_box_by_tag(&root, "input").unwrap();
+    // Custom ::placeholder color do placeholder_color (paint kresli z attru).
     assert_eq!(input.placeholder_color, Some([255, 0, 0, 255]));
-    let ph = input.children.iter().find(|c| c.tag.as_deref() == Some("::placeholder")).unwrap();
-    assert_eq!(ph.text_color, Some([255, 0, 0, 255]));
+    assert!(input.children.is_empty());
 }
 
 #[test]

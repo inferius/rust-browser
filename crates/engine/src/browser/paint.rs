@@ -2409,8 +2409,28 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         }
     }
 
-    // Text - aplikuj text_align: x posun podle align
-    if let Some(text) = &bx.text {
+    // Text - aplikuj text_align: x posun podle align.
+    // Form controls: obsah z control_text (value/selected option), pri prazdne
+    // hodnote placeholder z attru (sedou placeholder_color barvou). Layout
+    // tyto texty nevidi (stabilni box dims) - kresli se TADY stejnou logikou
+    // jako bezny text (padding + v-center).
+    let control_paint: Option<(String, Option<[u8; 4]>)> = if bx.text.is_none() {
+        match &bx.control_text {
+            Some(ct) if !ct.is_empty() => Some((ct.clone(), None)),
+            _ => {
+                let ph = bx.node.as_ref().and_then(|n| n.attr("placeholder"))
+                    .filter(|p| !p.is_empty());
+                ph.map(|p| (p, Some(bx.placeholder_color.unwrap_or([169, 169, 169, 255]))))
+            }
+        }
+    } else { None };
+    let text_src: Option<&String> = bx.text.as_ref().or(control_paint.as_ref().map(|(t, _)| t));
+    let control_color_override: Option<[u8; 4]> = control_paint.as_ref().and_then(|(_, c)| *c);
+    if bx.control_text.is_some() && std::env::var("RWE_INPUT_DBG").is_ok() {
+        eprintln!("[PAINT] tag={:?} control_text={:?} text_src={:?}",
+            bx.tag, bx.control_text, text_src);
+    }
+    if let Some(text) = text_src {
         // text-transform aplikace pred mereni
         let text_owned: String;
         let text: &str = match bx.text_transform {
@@ -2489,7 +2509,8 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
             0.0
         };
         let text_y = bx.rect.y + border + pad_t + v_offset;
-        let text_color = with_alpha(bx.text_color.unwrap_or([0, 0, 0, 255]));
+        let text_color = with_alpha(control_color_override
+            .or(bx.text_color).unwrap_or([0, 0, 0, 255]));
         // Text shadow - vsechny vrstvy v reverse poradi (posledni vrstva nejvic
         // vzadu) pred main text. Blur aproximovan: pri blur>1.5 emit ring 8 kopii
         // na polomeru ~blur*0.5 se snizenou alpha = fake glow/spread (real Gaussian
