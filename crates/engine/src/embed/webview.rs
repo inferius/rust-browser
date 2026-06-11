@@ -562,6 +562,68 @@ pub fn last_layer_cache_stats() -> LayerCacheStats {
     LAYER_CACHE_STATS.with(|c| c.get())
 }
 
+/// Vysledek pokusu o in-place text patch (same-length textContent mutace).
+pub(crate) enum TextPatch {
+    /// bx.text aktualizovan, tile damage to chyti - zadny layout.
+    Patched,
+    /// Text byl wrapovany (\n) nebo jina komplikace - nutny full layout.
+    NeedsLayout,
+    /// Node neni v layout strome jako element s text detmi (SVG geometry
+    /// apod.) - nic se nepatchovalo, bezny content-dirty flow.
+    NotText,
+}
+
+/// Najde box ELEMENTU (el_ptr = Rc ptr elementu, na kterem JS nastavil
+/// textContent) a prepise text jeho text-node deti novym DOM obsahem.
+/// Same-length invariant zarucuje stejnou sirku u tabular/monospace textu;
+/// u proporcionalnich fontu drobna odchylka sirky (akceptovano - Chrome ma
+/// incremental layout, my tenhle fast path).
+pub(crate) fn patch_text_box_for_element(
+    bx: &mut crate::browser::layout::LayoutBox,
+    el_ptr: usize,
+) -> TextPatch {
+    if let Some(n) = &bx.node {
+        if std::rc::Rc::as_ptr(n) as usize == el_ptr {
+            let new_text = n.text_content();
+            // Whitespace collapse jako build_box (runs -> single space).
+            let mut collapsed = String::with_capacity(new_text.len());
+            let mut prev_ws = false;
+            for c in new_text.chars() {
+                if c == '\u{00A0}' { collapsed.push(c); prev_ws = false; }
+                else if c.is_whitespace() {
+                    if !prev_ws { collapsed.push(' '); }
+                    prev_ws = true;
+                } else { collapsed.push(c); prev_ws = false; }
+            }
+            let fresh_children: Vec<std::rc::Rc<crate::browser::dom::Node>> =
+                n.children.borrow().iter().cloned().collect();
+            let mut patched_any = false;
+            for ch in bx.children.iter_mut() {
+                if ch.tag.is_none() && ch.text.is_some() {
+                    if ch.text.as_deref().map(|t| t.contains('\n')).unwrap_or(false) {
+                        return TextPatch::NeedsLayout; // wrapped text
+                    }
+                    ch.text = Some(collapsed.clone());
+                    // Re-point na novy text DOM node (set_text_content vymenil
+                    // children) - hit-test/selection jinak drzi mrtvy ptr.
+                    if let Some(fresh) = fresh_children.first() {
+                        ch.node = Some(std::rc::Rc::clone(fresh));
+                    }
+                    patched_any = true;
+                }
+            }
+            return if patched_any { TextPatch::Patched } else { TextPatch::NotText };
+        }
+    }
+    for ch in bx.children.iter_mut() {
+        match patch_text_box_for_element(ch, el_ptr) {
+            TextPatch::NotText => continue,
+            r => return r,
+        }
+    }
+    TextPatch::NotText
+}
+
 /// Prevod @keyframes na CompositorAnim entries, pokud je animace
 /// compositor-friendly: PRESNE 2 stopy (0% a 100%), VSECHNY props jen
 /// transform/opacity, transform = single op STEJNE varianty na obou stopach
@@ -3109,13 +3171,33 @@ impl WebView {
                     // Style/layout/structural mutace - vzdy render.
                     self.dirty = true;
                 } else {
-                    // CONTENT-ONLY zmeny (SVG geometry attr z JS RAF animace).
+                    // CONTENT-ONLY zmeny (SVG geometry attr z JS RAF animace,
+                    // same-length textContent updaty).
                     // Dirty JEN kdyz nektery mutovany node zasahuje viewport -
                     // off-screen wave animace drive tocila full pipeline ~70x/s
                     // "na prazdno" (Chrome damage model: neviditelna zmena =
                     // zadny frame). Pri scrollu zpet nastavi dirty scroll sam
                     // a render vezme aktualni DOM stav.
                     let nodes = interp.take_content_mutated_nodes();
+                    // In-place TEXT patch: same-length textContent mutace
+                    // (FPS counter) nejdou pres layout (verze nebumpla) ->
+                    // bx.text aktualizovat primo v cached strome. Tile fp
+                    // (text hash) pak damagne spravnou oblast. Multi-line
+                    // (wrapped \n) text patchovat nelze -> force full layout.
+                    let mut need_full_layout = false;
+                    if let Some(root) = self.last_layout_root.as_mut() {
+                        for nid in &nodes {
+                            match patch_text_box_for_element(root, *nid) {
+                                TextPatch::Patched => {}
+                                TextPatch::NeedsLayout => { need_full_layout = true; }
+                                TextPatch::NotText => {}
+                            }
+                        }
+                    }
+                    if need_full_layout {
+                        self.layout_cache_key = None;
+                        self.dirty = true;
+                    }
                     let top = self.scroll_y - 200.0;
                     let bot = self.scroll_y + self.viewport_h + 200.0;
                     let left = self.scroll_x - 200.0;
@@ -3835,8 +3917,9 @@ impl WebView {
         let layout_hit = Some(layout_key) == self.layout_cache_key
             && self.last_layout_root.is_some();
         if std::env::var("RWE_HOVER_DBG").is_ok() {
-            eprintln!("[HOV] hovered={:?} cascade_miss={} layout_hit={} layout_fp={} value_pseudos={}",
-                self.hovered_node_local, cascade_was_miss, layout_hit, layout_fp, uses_value_pseudos);
+            eprintln!("[HOV] hovered={:?} cascade_miss={} layout_hit={} layout_fp={} value_pseudos={} dom_layout_ver={} key_cached={:?}",
+                self.hovered_node_local, cascade_was_miss, layout_hit, layout_fp, uses_value_pseudos,
+                dom_layout_ver, self.layout_cache_key.map(|k| k.1));
         }
         let mut layout_root = if layout_hit
         {

@@ -1064,6 +1064,9 @@ impl Interpreter {
     /// frame pri FPS counter / log / input psani.
     #[inline]
     pub fn bump_dom_version_layout(&self) {
+        if std::env::var("RWE_BUMP_DBG").is_ok() {
+            eprintln!("[BUMP] bump_dom_version_layout (textContent/value path)");
+        }
         self.dom_version.set(self.dom_version.get().wrapping_add(1));
         self.dom_layout_version.set(self.dom_layout_version.get().wrapping_add(1));
     }
@@ -1315,6 +1318,10 @@ impl Interpreter {
             self.bump_dom_version_content_only();
             self.note_content_mutated_node(Rc::as_ptr(target) as usize);
         } else {
+            if std::env::var("RWE_BUMP_DBG").is_ok() {
+                eprintln!("[BUMP] dispatch_mutation_full type={} attr={:?} tag={:?}",
+                    record_type, attribute_name, target.tag_name_ref());
+            }
             self.bump_dom_version();
         }
         // Diag: cumulative mutation count per Interpreter instance.
@@ -1392,6 +1399,10 @@ impl Interpreter {
             self.bump_dom_version_content_only();
             self.note_content_mutated_node(Rc::as_ptr(target) as usize);
         } else {
+            if std::env::var("RWE_BUMP_DBG").is_ok() {
+                eprintln!("[BUMP] dispatch_mutation type={} attr={:?} tag={:?}",
+                    record_type, attribute_name, target.tag_name_ref());
+            }
             self.bump_dom_version();
         }
         let target_ptr = Rc::as_ptr(target) as usize;

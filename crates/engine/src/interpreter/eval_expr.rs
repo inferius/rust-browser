@@ -551,13 +551,24 @@ impl Interpreter {
                         // DOM property setters
                         match key.as_str() {
                             "textContent" | "innerText" => {
-                                n.set_text_content(&val.to_string());
-                                // Layout bump (NE style): text meni velikost ->
-                                // re-layout, ale NEovlivnuje kaskadu -> cascade cache
-                                // PREZIJE. Bez toho FPS counter / log / psani meni
-                                // textContent kazdy frame = full re-cascade (12ms)
-                                // = <1 FPS pri animaci/RAF.
-                                self.bump_dom_version_layout();
+                                let new_text = val.to_string();
+                                let old_text = n.text_content();
+                                if new_text == old_text { return Ok(()); }
+                                n.set_text_content(&new_text);
+                                // SAME-LENGTH fast path: stejny pocet znaku (FPS
+                                // counter, tabular-nums hodnoty, citace) layout
+                                // merit-elne nemeni -> content-only bump + note.
+                                // Host patchne bx.text in-place v cached layout
+                                // stromu (tile damage pres text hash). Plny layout
+                                // bump per FPS-counter update drive zabijel scroll
+                                // (full 9ms layout KAZDY frame behem rAF ticku).
+                                if new_text.chars().count() == old_text.chars().count() {
+                                    self.bump_dom_version_content_only();
+                                    self.note_content_mutated_node(Rc::as_ptr(n) as usize);
+                                } else {
+                                    // Jina delka = sirka se meni -> regulerni reflow.
+                                    self.bump_dom_version_layout();
+                                }
                                 return Ok(());
                             }
                             "value" => {
