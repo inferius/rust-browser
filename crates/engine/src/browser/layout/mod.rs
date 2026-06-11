@@ -1716,6 +1716,27 @@ pub fn layout_tree_with_pseudo_cached(
         // Reset stats (auto_log path nebo fast path).
         let _ = take_dispatch_stats();
     }
+    // DEBUG: RWE_SB_DBG=<id> vypise rect boxu s danym id + layout viewport
+    // + MATH_VIEWPORT po kazdem layoutu (diagnostika viewport-relative sizingu).
+    if let Ok(want_id) = std::env::var("RWE_SB_DBG") {
+        fn find_by_id<'a>(bx: &'a LayoutBox, id: &str) -> Option<&'a LayoutBox> {
+            if let Some(n) = &bx.node {
+                if n.attr("id").as_deref() == Some(id) { return Some(bx); }
+            }
+            for c in &bx.children {
+                if let Some(f) = find_by_id(c, id) { return Some(f); }
+            }
+            None
+        }
+        let mv = super::cascade::MATH_VIEWPORT.with(|c| *c.borrow());
+        match find_by_id(&layout_root, &want_id) {
+            Some(b) => eprintln!(
+                "[SB] #{} rect=({:.0},{:.0},{:.0}x{:.0}) vp_arg={:.0}x{:.0} math_vp={:.0}x{:.0}",
+                want_id, b.rect.x, b.rect.y, b.rect.width, b.rect.height,
+                viewport_width, viewport_height, mv.0, mv.1),
+            None => eprintln!("[SB] #{} NENALEZEN vp_arg={:.0}x{:.0}", want_id, viewport_width, viewport_height),
+        }
+    }
     layout_root
 }
 

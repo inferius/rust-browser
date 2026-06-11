@@ -2313,13 +2313,33 @@ pub fn cascade_with_container_sizes(
     viewport_w: f32, viewport_h: f32,
     container_sizes: &HashMap<usize, (f32, f32)>,
 ) -> StyleMap {
+    // STEJNY prolog jako cascade_with_viewport - bez nej (root cause sidebar
+    // border bug): MATH_VIEWPORT zustal (0,0) -> calc()/clamp() vh/vw v layoutu
+    // resolvovaly proti fallbacku 1024x768, a decl hodnoty ("100vh") zustaly
+    // neresolvene. Stranka s @container tim mela VSECHNY viewport jednotky
+    // spatne (sidebar height calc(100vh-48px) = 720 misto 852 pri 900 oknu).
+    cascade_prof_reset();
+    rebuild_state_chains(root);
+    MATH_VIEWPORT.with(|c| *c.borrow_mut() = (viewport_w, viewport_h));
     // Sjednotit jen media queries - container queries vyresime per-element.
     let mut effective: Vec<Stylesheet> = Vec::new();
     for sheet in stylesheets {
         let mut combined = sheet.clone();
+        // Pre-resolve vh/vw v decl values na px hodnoty z viewport.
+        for rule in &mut combined.rules {
+            for d in &mut rule.declarations {
+                d.value = resolve_viewport_units(&d.value, viewport_w, viewport_h);
+            }
+        }
         for mq in &sheet.media_queries {
             if super::css_parser::evaluate_media_query(&mq.query, viewport_w, viewport_h) {
-                combined.rules.extend(mq.rules.clone());
+                let mut rules = mq.rules.clone();
+                for rule in &mut rules {
+                    for d in &mut rule.declarations {
+                        d.value = resolve_viewport_units(&d.value, viewport_w, viewport_h);
+                    }
+                }
+                combined.rules.extend(rules);
             }
         }
         combined.media_queries.clear();
@@ -2352,6 +2372,8 @@ pub fn cascade_with_container_sizes(
                                 for d in &rule.declarations {
                                     let resolved = resolve_value(&d.value, &variables);
                                     let resolved = resolve_attr_in_value(&resolved, node);
+                                    // vh/vw -> px (parita s cascade_with_viewport).
+                                    let resolved = resolve_viewport_units(&resolved, viewport_w, viewport_h);
                                     expand_shorthand(&d.property, &resolved, entry);
                                 }
                             }
