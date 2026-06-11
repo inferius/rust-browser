@@ -1539,6 +1539,11 @@ impl Interpreter {
                 let crossed = obs.thresholds.iter().any(|&th| {
                     (prev < th && ratio >= th) || (prev >= th && ratio < th)
                 }) || prev < 0.0;  // first observation
+                if crossed && std::env::var("RWE_IO_DBG").is_ok() {
+                    eprintln!("[IO] target=#{} ratio={:.2} prev={:.2} isInt={} rect=({:.0},{:.0},{:.0}x{:.0}) root=({:.0},{:.0},{:.0}x{:.0})",
+                        node.attr("id").unwrap_or_default(), ratio, prev, ratio > 0.0,
+                        tx, ty, tw, th, rx, ry, rw, rh);
+                }
                 if !crossed { continue; }
                 obs.prev_ratios.borrow_mut().insert(id, ratio);
                 let mut entry = JsObject::new();
@@ -1565,7 +1570,16 @@ impl Interpreter {
         }
         drop(obs_list);
         for (cb, arr) in pending {
-            let _ = self.call_function(cb, vec![arr], None);
+            if std::env::var("RWE_IO_DBG").is_ok() {
+                let n = if let JsValue::Array(a) = &arr { a.borrow().len() } else { 0 };
+                eprintln!("[IO-FIRE] callback s {} entries", n);
+            }
+            let r = self.call_function(cb, vec![arr], None);
+            if std::env::var("RWE_IO_DBG").is_ok() {
+                if let Err(e) = &r {
+                    eprintln!("[IO-FIRE] CALLBACK ERROR: {:?}", e);
+                }
+            }
         }
     }
 

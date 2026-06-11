@@ -3767,6 +3767,9 @@ impl WebView {
         let has_observers = self.interpreter.as_ref().map(|i|
             !i.resize_observers.borrow().is_empty()
             || !i.intersection_observers.borrow().is_empty()).unwrap_or(false);
+        if std::env::var("RWE_IO_DBG").is_ok() {
+            eprintln!("[IO-CALL] has_observers={} scroll_y={:.0}", has_observers, self.scroll_y);
+        }
         if has_observers {
             let mut rect_map: std::collections::HashMap<usize, (f32, f32, f32, f32)> =
                 std::collections::HashMap::new();
