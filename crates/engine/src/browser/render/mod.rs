@@ -893,9 +893,144 @@ fn try_decode_svg_into_atlas(bytes: &[u8], cache_key: &str,
     true
 }
 
+/// Prefix platneho cisla pro input[type=number]: [+-]? cislice* (.cislice*)?
+/// ([eE][+-]?cislice*)?. "Prefix" = povoluje rozepsane stavy ("1e", "-",
+/// "3.") ale ne "e", "+-", "1ee".
+pub(crate) fn is_valid_number_prefix(s: &str) -> bool {
+    let mut it = s.chars().peekable();
+    if matches!(it.peek(), Some('+') | Some('-')) { it.next(); }
+    let mut seen_digit = false;
+    while matches!(it.peek(), Some(c) if c.is_ascii_digit()) { it.next(); seen_digit = true; }
+    if it.peek() == Some(&'.') {
+        it.next();
+        while matches!(it.peek(), Some(c) if c.is_ascii_digit()) { it.next(); seen_digit = true; }
+    }
+    if matches!(it.peek(), Some('e') | Some('E')) {
+        if !seen_digit { return false; }
+        it.next();
+        if matches!(it.peek(), Some('+') | Some('-')) { it.next(); }
+        while matches!(it.peek(), Some(c) if c.is_ascii_digit()) { it.next(); }
+    }
+    it.next().is_none()
+}
+
 pub fn apply_paint_animations(box_: &mut crate::browser::layout::LayoutBox,
                            style_map: &crate::browser::cascade::StyleMap) {
     apply_paint_animations_inner(box_, style_map, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+}
+
+/// Rebake paint props na CACHED layout stromu pro nody jejichz computed styly
+/// se zmenily mezi framy (hover/focus/active/:valid prepnuti). Od zruseni
+/// force re-layoutu pri cascade miss je tohle jedina cesta jak se hover-OFF
+/// dostane do stromu: apply_paint_animations prepisuje jen props PRITOMNE
+/// ve stylech, takze zmizela hover bg by zustala baknuta navzdy.
+///
+/// Na rozdil od apply_paint_animations dela RESET na default pri chybejici
+/// prop (bg None, transform clear, opacity 1...). Bezi jen na diff nodech
+/// (HashMap eq porovnani per node = levne).
+pub fn rebake_changed_paint_props(
+    box_: &mut crate::browser::layout::LayoutBox,
+    new_map: &crate::browser::cascade::StyleMap,
+    prev_map: &crate::browser::cascade::StyleMap,
+) {
+    let node_id = box_.node.as_ref().map(|n| Rc::as_ptr(n) as usize).unwrap_or(0);
+    if node_id != 0 {
+        let new_s = new_map.get(&node_id);
+        let prev_s = prev_map.get(&node_id);
+        let differs = match (new_s, prev_s) {
+            (Some(a), Some(b)) => !Rc::ptr_eq(a, b) && a.as_ref() != b.as_ref(),
+            (None, None) => false,
+            _ => true,
+        };
+        if differs {
+            if let Some(styles) = new_s {
+                use crate::browser::layout as lay;
+                // color (inherited - po propagate vzdy pritomna; pri chybejici nech).
+                if let Some(c) = styles.get("color") {
+                    if let Some(rgb) = lay::parse_color(c) { box_.text_color = Some(rgb); }
+                }
+                // background: color varianta. Gradienty nech (vzacny hover case).
+                let bgval = styles.get("background-color").or_else(|| styles.get("background"));
+                match bgval {
+                    Some(v) => {
+                        if let Some(rgb) = lay::parse_color(v.trim()) {
+                            box_.bg_color = Some(rgb);
+                            for layer in box_.backgrounds.iter_mut() {
+                                if layer.color.is_some() { layer.color = Some(rgb); }
+                            }
+                        }
+                    }
+                    None => {
+                        // Hover-off: zadny bg v computed stylech -> reset.
+                        box_.bg_color = None;
+                        box_.backgrounds.retain(|l| l.color.is_none());
+                    }
+                }
+                match styles.get("border-color") {
+                    Some(c) => { if let Some(rgb) = lay::parse_color(c.trim()) { box_.border_color = Some(rgb); } }
+                    None => {
+                        // border shorthand muze nest barvu - zkus z "border".
+                        if let Some(b) = styles.get("border") {
+                            for tok in b.split_whitespace() {
+                                if let Some(c) = lay::parse_color(tok) { box_.border_color = Some(c); }
+                            }
+                        }
+                    }
+                }
+                match styles.get("opacity").and_then(|o| o.parse::<f32>().ok()) {
+                    Some(v) => box_.opacity = v,
+                    None => box_.opacity = 1.0,
+                }
+                match styles.get("transform") {
+                    Some(t) => {
+                        box_.transforms = lay::parse_transform_chain(t);
+                        box_.transform = box_.transforms.first().cloned();
+                    }
+                    None => {
+                        box_.transforms.clear();
+                        box_.transform = None;
+                    }
+                }
+                match styles.get("filter") {
+                    Some(f) => box_.filter = lay::parse_filter_chain(f),
+                    None => box_.filter.clear(),
+                }
+                match styles.get("box-shadow") {
+                    Some(bs) => box_.box_shadow = lay::parse_box_shadow(bs),
+                    None => box_.box_shadow = None,
+                }
+                match styles.get("text-shadow") {
+                    Some(ts) => box_.text_shadow = lay::parse_text_shadow(ts),
+                    None => box_.text_shadow.clear(),
+                }
+                match styles.get("outline-color").and_then(|c| lay::parse_color(c.trim())) {
+                    Some(rgb) => box_.outline_color = Some(rgb),
+                    None => {}
+                }
+                if let Some(ow) = styles.get("outline-width") {
+                    box_.outline_width = lay::parse_length(ow.trim());
+                }
+                if let Some(os) = styles.get("outline-style") {
+                    box_.outline_style = os.trim().to_string();
+                }
+                if let Some(ac) = styles.get("accent-color") {
+                    box_.accent_color = lay::parse_color(ac.trim());
+                }
+                // Inherited text barva do primych TEXT-node deti (nemaji vlastni
+                // cascade entry; pri buildu ji dedi - cached strom musi taky).
+                if let Some(tc) = box_.text_color {
+                    for ch in box_.children.iter_mut() {
+                        if ch.tag.is_none() && ch.node.is_some() {
+                            ch.text_color = Some(tc);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for ch in box_.children.iter_mut() {
+        rebake_changed_paint_props(ch, new_map, prev_map);
+    }
 }
 
 fn apply_paint_animations_inner(box_: &mut crate::browser::layout::LayoutBox,
@@ -1005,6 +1140,36 @@ fn apply_paint_animations_inner(box_: &mut crate::browser::layout::LayoutBox,
         }
         if let Some(f) = styles.get("filter") {
             box_.filter = crate::browser::layout::parse_filter_chain(f);
+        }
+        // Dalsi paint props bakovane pri cached layoutu. Od zruseni force
+        // re-layoutu pri cascade miss (hover) je tahle fn JEDINA cesta jak se
+        // hover/focus/active paint zmeny dostanou do cached stromu.
+        if let Some(bs) = styles.get("box-shadow") {
+            box_.box_shadow = crate::browser::layout::parse_box_shadow(bs);
+        }
+        if let Some(ts) = styles.get("text-shadow") {
+            box_.text_shadow = crate::browser::layout::parse_text_shadow(ts);
+        }
+        if let Some(oc) = styles.get("outline-color") {
+            if let Some(rgb) = crate::browser::layout::parse_color(oc.trim()) {
+                box_.outline_color = Some(rgb);
+            }
+        }
+        if let Some(ow) = styles.get("outline-width") {
+            box_.outline_width = crate::browser::layout::parse_length(ow.trim());
+        }
+        if let Some(os) = styles.get("outline-style") {
+            box_.outline_style = os.trim().to_string();
+        }
+        if let Some(ac) = styles.get("accent-color") {
+            box_.accent_color = crate::browser::layout::parse_color(ac.trim());
+        }
+        if let Some(br) = styles.get("border-radius") {
+            let v = br.trim();
+            // % resi border_radius_pct blok vyse; tady jen px/em hodnoty.
+            if !v.contains('%') {
+                box_.border_radius = crate::browser::layout::parse_length(v);
+            }
         }
         // INCREMENTAL LAYOUT: aplikuj animovanou width/height na rect kdyz
         // element ma overflow:hidden NEBO position != static (self-contained,
@@ -3066,6 +3231,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                         let shift = self.modifiers.shift_key();
                                         // type=number: filtruj ne-numericke znaky uz na vstupu
                                         // (Chrome chovani - pismena se do number inputu nedostanou).
+                                        // Whitelist znaku je 1. brana; po editu jeste prefix-check
+                                        // cele hodnoty (samotne "e"/"+"/"eee" by jinak proslo).
                                         let input_type = node.attr("type")
                                             .map(|t| t.to_lowercase()).unwrap_or_default();
                                         if input_type == "number" && !ctrl {
@@ -3101,24 +3268,35 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                         // nezmizi) + fire 'input' event (jinak oninput /
                                         // JS-driven UI se nikdy neaktualizuje). Driv
                                         // commit_back jen tise zapsal attr.
-                                        let value_after = node.attr("value").unwrap_or_default();
+                                        let mut value_after = node.attr("value").unwrap_or_default();
+                                        // type=number 2. brana: vysledek musi byt prefix
+                                        // platneho cisla ([+-]?dig*(.dig*)?(e[+-]?dig*)?).
+                                        // Samotne "e"/"+-"/"1ee" whitelist pustil - revert.
+                                        if input_type == "number"
+                                            && value_after != value_before
+                                            && !is_valid_number_prefix(&value_after)
+                                        {
+                                            node.attributes.borrow_mut()
+                                                .insert("value".to_string(), value_before.clone());
+                                            value_after = value_before.clone();
+                                        }
                                         if std::env::var("RWE_INPUT_DBG").is_ok() {
                                             eprintln!("[KEYIN] value '{}' -> '{}'", value_before, value_after);
                                         }
                                         if value_after != value_before {
-                                            // :valid/:invalid/:placeholder-shown zavisi na
-                                            // value -> pri jejich pouziti v CSS bump i STYLE
-                                            // verzi (re-cascade prepocita border/barvy).
-                                            let needs_style_bump = self.webview.as_ref()
-                                                .map(|w| w.css_uses_value_pseudos())
-                                                .unwrap_or(false);
-                                            if needs_style_bump {
-                                                if let Some(interp) = self.interp_mut() {
-                                                    interp.bump_dom_version();
-                                                }
+                                            // Typing NEMENI layout (form control ma synteticke
+                                            // stabilni dims) -> CONTENT-only bump + primy update
+                                            // control_text v cached layout stromu. Plny re-layout
+                                            // + re-cascade per pismeno byl zdroj "psani se
+                                            // zpozdenim". Validity stav (:valid/:invalid) chyta
+                                            // cascade cache klic (hash stavu inputu) - re-cascade
+                                            // probehne JEN pri prepnuti stavu.
+                                            let node_ptr = std::rc::Rc::as_ptr(&node) as usize;
+                                            if let Some(wv) = self.webview.as_mut() {
+                                                wv.update_control_text(node_ptr, &value_after);
                                             }
                                             if let Some(interp) = self.interp_mut() {
-                                                interp.bump_dom_version_layout();
+                                                interp.bump_dom_version_content_only();
                                                 let mut ev = crate::interpreter::JsObject::new();
                                                 ev.set("type".into(), crate::interpreter::JsValue::Str("input".into()));
                                                 ev.set("target".into(), crate::interpreter::JsValue::DomNode(

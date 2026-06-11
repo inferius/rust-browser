@@ -17,7 +17,7 @@ use super::css_parser::{Stylesheet, Selector, SimpleSelector, Combinator, Rule, 
 // Cache klice obsahuji (host_id, dom_version) - host_id rozlisuje multi-WV
 // (sdileny thread_local cache), dom_version auto-invaliduje stale entries pri
 // DOM mutaci (mrtve node_ptr by jinak matchnul recyklovany alokat).
-type MatchedKey = (u64, u64, usize, u8, u8, u64);  // host_id, dom_ver, node_ptr, hover, focus, sheets_sig
+type MatchedKey = (u64, u64, usize, u8, u8, u64);  // host_id, dom_ver, node_ptr, hover, focus|value_state, sheets_sig
 /// Cascade sort key: (important, layer_priority, spec_id, spec_class, spec_type, order).
 /// Tuple compare lex - higher takes precedence. Drive bylo packed spec_packed = id*1000 +
 /// class + type, ktere prelilo pri >1000 class/type selectoru (audit #1). Nyni tuple
@@ -2807,7 +2807,26 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
         // :hover/:focus-within stav se zmenil). Bez chain by predci drzeli stary
         // (cerveny) cache = sticky hover.
         let hover_bit: u8 = if hovered_chain_contains(node_ptr) { 1 } else { 0 };
-        let focus_bit: u8 = if focused_chain_contains(node_ptr) { 1 } else { 0 };
+        // focus_bit nese i VALUE-STATE bity form controlu (empty/invalid):
+        // :valid/:invalid/:placeholder-shown zavisi na value attr, ktery NENI
+        // v dom_style_version (typing bumpa jen content verzi). Bez bitu cache
+        // vracela matched decls z doby pred psanim -> :invalid border se
+        // neukazal. Bity se meni jen pri zmene STAVU (ne kazdym pismenem).
+        let focus_bit: u8 = {
+            let mut b: u8 = if focused_chain_contains(node_ptr) { 1 } else { 0 };
+            if matches!(node_tag, "input" | "textarea" | "select") {
+                let val = node.attr("value").unwrap_or_default();
+                let empty = val.is_empty();
+                let required = node.attr("required").is_some();
+                let typ = node.attr("type").map(|t| t.to_lowercase()).unwrap_or_default();
+                let invalid = (required && empty)
+                    || (typ == "email" && !empty && !val.contains('@'));
+                b |= 4; // form control marker
+                if empty { b |= 8; }
+                if invalid { b |= 16; }
+            }
+            b
+        };
         let cache_key: MatchedKey = (host_id, dom_ver, node_ptr, hover_bit, focus_bit, sheets_sig);
 
         // Walk-output cache HIT: skip cely build (inline parse + apply decls + insert).

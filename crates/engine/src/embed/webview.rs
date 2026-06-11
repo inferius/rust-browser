@@ -1034,14 +1034,45 @@ impl WebView {
     }
 
     /// CSS pouziva value-dependent pseudo-tridy (:valid / :invalid /
-    /// :placeholder-shown / :in-range / :out-of-range)? Host pri psani do
-    /// inputu pak musi bumpnout i STYLE verzi (plny re-cascade), jinak
-    /// cascade cache prezije a border/barvy na :invalid se neprepocitaji.
+    /// :placeholder-shown / :in-range / :out-of-range)? Pri true jde do
+    /// cascade cache klice hash VALIDITY STAVU inputu (re-cascade probehne
+    /// jen pri zmene stavu, ne pri kazdem pismenu).
     pub fn css_uses_value_pseudos(&self) -> bool {
         const PS: [&str; 5] = ["valid", "invalid", "placeholder-shown",
             "in-range", "out-of-range"];
         self.stylesheets.iter().any(|s|
             PS.iter().any(|p| crate::browser::cascade::stylesheet_uses_pseudo(s, p)))
+    }
+
+    /// Po editaci input value: updatne control_text primo v cached layout
+    /// stromu (typing NEMENI layout - box dims jsou syntetic stabilni; plny
+    /// re-layout per pismeno byl zdroj "psani se zpozdenim"). Tile damage
+    /// chyti zmenu pres control_text hash -> repaint jen input oblasti.
+    pub fn update_control_text(&mut self, node_ptr: usize, value: &str) {
+        fn upd(bx: &mut crate::browser::layout::LayoutBox, id: usize, v: &str) -> bool {
+            if let Some(n) = &bx.node {
+                if std::rc::Rc::as_ptr(n) as usize == id {
+                    bx.control_text = if v.is_empty() { None } else {
+                        // Password maskovani (paint kresli control_text 1:1).
+                        let typ = n.attr("type").map(|t| t.to_lowercase()).unwrap_or_default();
+                        if typ == "password" {
+                            Some("\u{2022}".repeat(v.chars().count()))
+                        } else {
+                            Some(v.to_string())
+                        }
+                    };
+                    return true;
+                }
+            }
+            for ch in bx.children.iter_mut() {
+                if upd(ch, id, v) { return true; }
+            }
+            false
+        }
+        if let Some(root) = self.last_layout_root.as_mut() {
+            upd(root, node_ptr, value);
+        }
+        self.dirty = true;
     }
 
     /// Drainne nasbirane HTML/CSS/JS sources do (url, body, lang_marker) Vec.
@@ -3145,6 +3176,7 @@ impl WebView {
             .any(|s| crate::browser::cascade::stylesheet_uses_pseudo(s, "focus"));
         let uses_active = self.stylesheets.iter()
             .any(|s| crate::browser::cascade::stylesheet_uses_pseudo(s, "active"));
+        let uses_value_pseudos = self.css_uses_value_pseudos();
         // @container queries: build mapu container_node_ptr -> (w,h) z PREDCHOZIHO
         // layoutu (+ prev style_map pro detekci container-type). Cascade bezi pred
         // layoutem -> 1-frame lag (browsers resi multi-pass; lag neviditelny). Bez
@@ -3199,6 +3231,31 @@ impl WebView {
             // nepromitly (cache hit -> stara cascade).
             if uses_active {
                 crate::browser::cascade::get_active_node().unwrap_or(0).hash(&mut hasher);
+            }
+            // :valid/:invalid/:placeholder-shown - hash VALIDITY STAVU inputu
+            // (ne value samotne!). Re-cascade jen pri prepnuti stavu (prazdny ->
+            // neprazdny, valid -> invalid), psani uvnitr stavu = cache HIT =
+            // zadny 10ms cascade per pismeno (drive global style bump).
+            if uses_value_pseudos {
+                fn hash_validity(n: &std::rc::Rc<crate::browser::dom::Node>, h: &mut std::collections::hash_map::DefaultHasher) {
+                    use std::hash::Hash;
+                    if let Some(tag) = n.tag_name() {
+                        if matches!(tag.as_str(), "input" | "textarea" | "select") {
+                            let val = n.attr("value").unwrap_or_default();
+                            let required = n.attr("required").is_some();
+                            let typ = n.attr("type").map(|t| t.to_lowercase()).unwrap_or_default();
+                            let empty = val.is_empty();
+                            // Zrcadli matches_simple :valid/:invalid logiku.
+                            let invalid = (required && empty)
+                                || (typ == "email" && !empty && !val.contains('@'));
+                            (std::rc::Rc::as_ptr(n) as usize).hash(h);
+                            empty.hash(h);
+                            invalid.hash(h);
+                        }
+                    }
+                    for ch in n.children.borrow().iter() { hash_validity(ch, h); }
+                }
+                hash_validity(&doc.root, &mut hasher);
             }
             // viewport rounded
             (viewport_w as u32).hash(&mut hasher);
@@ -3403,6 +3460,10 @@ impl WebView {
             }
         }
 
+        // Snapshot PREV style mapy pred syncem - rebake_changed_paint_props
+        // (nize, pri layout cache HIT po cascade zmene) diffuje starou vs novou
+        // mapu aby resetnul stale baked hover/focus paint props.
+        let prev_style_for_rebake = self.prev_style_map.clone();
         // Sync prev_style_map pro pristi frame transitions detection.
         // Pouzij cascade BASE (ne post-transition style_map) - viz komentar vyse.
         self.prev_style_map = Some(cascade_base.clone());
@@ -3500,19 +3561,19 @@ impl WebView {
             (viewport_w as u32),
             (viewport_h as u32),
         );
-        // cascade_was_miss => style_map se zmenil (hover/focus/active/class).
-        // layout_fingerprint zamerne VYNECHAVA paint props (background/color) kvuli
-        // perf - ale ty se BAKUJI do LayoutBox pri layoutu. Pri cache HIT na layout
-        // by se reuse-nul strom se STALE baked bg -> hover bg se neaplikoval / nezmizel
-        // (sticky :hover na table row). Pri cascade zmene proto force re-layout;
-        // subtree LAYOUT_CACHE (fingerprint vc. vsech props) rebuildne JEN zmenene
-        // podstromy (hovered/unhovered radek), zbytek reuse = levne.
+        // cascade_was_miss (hover/focus/active/class) uz NEforcuje re-layout:
+        // layout_fp pres LAYOUT_RELEVANT_PROPS rozhodne sam (hover menici
+        // width/display -> fp MISS -> relayout; hover menici jen paint props
+        // -> fp HIT -> reuse strom). Stale baked paint props v cached stromu
+        // resi apply_paint_animations (bezi KAZDY frame na cely strom a bakuje
+        // bg/color/border-color/transform/opacity/filter/box-shadow/... ze
+        // style_map). Drive force re-layout = 13ms per hover ON/OFF frame =
+        // pohyb mysi pres elementy ~30 FPS.
         let layout_hit = Some(layout_key) == self.layout_cache_key
-            && self.last_layout_root.is_some()
-            && !cascade_was_miss;
+            && self.last_layout_root.is_some();
         if std::env::var("RWE_HOVER_DBG").is_ok() {
-            eprintln!("[HOV] hovered={:?} cascade_miss={} layout_hit={} layout_fp={}",
-                self.hovered_node_local, cascade_was_miss, layout_hit, layout_fp);
+            eprintln!("[HOV] hovered={:?} cascade_miss={} layout_hit={} layout_fp={} value_pseudos={}",
+                self.hovered_node_local, cascade_was_miss, layout_hit, layout_fp, uses_value_pseudos);
         }
         let mut layout_root = if layout_hit
         {
@@ -3523,7 +3584,17 @@ impl WebView {
             // (tenhle + ten po pass_a). Take() = jen jeden clon. Mezi take a
             // restore se self.last_layout_root necte (HIT vetev nejde do MISS
             // vetve co ho borrowuje pro subtree reuse) a fn nema early-return.
-            self.last_layout_root.take().unwrap()
+            let mut tree = self.last_layout_root.take().unwrap();
+            // Cascade zmena (hover/focus/active/:valid) + cached strom: rebake
+            // paint props na diff nodech. Bez tohoto hover-OFF nechal baknutou
+            // hover bg/transform navzdy (apply_paint_animations resetovat neumi).
+            if cascade_was_miss {
+                if let Some(prev) = prev_style_for_rebake.as_ref() {
+                    crate::browser::render::rebake_changed_paint_props(
+                        &mut tree, &cascade_base, prev);
+                }
+            }
+            tree
         } else {
             self.layout_cache_key = Some(layout_key);
             // Layout subtree cache: pri MISS na top-level (fingerprint zmena nekde),
