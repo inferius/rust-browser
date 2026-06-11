@@ -2,6 +2,79 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`, `debug_utils.md`.
 
+## Session N+38: hover/typing perf, value pseudos, kompositor GATE
+
+User feedback po N+37: hover 240->30 FPS, typing porad lagoval, border
+:valid/:invalid se neukazoval/mizel, pismena v number, menu active
+"spatne", + vytka ze docx v5 nebyl zpracovan cely (sekce viz TODO nize).
+4 commity, 4201 testu pass.
+
+### 1. HOVER perf (28ms -> 7.3ms move frame) - 2c00c04
+- cascade miss UZ NEforcuje re-layout (layout_fp rozhoduje sam).
+- rebake_changed_paint_props (render/mod.rs): pri layout cache HIT po
+  cascade zmene diff prev vs new style_map per node a prepis paint props
+  VC. RESETU (hover-off -> bg None, transform clear...). KLIC: apply_
+  paint_animations resetovat neumi (prepisuje jen pritomne props) ->
+  stale hover bg zustavala navzdy ("oznacene" nav linky).
+- POZOR ARCH: hover menici ::before/::after pseudo styly rebake nevidi
+  (pseudo boxy bez node) - pri probleme force full layout pres dirty.
+
+### 2. TYPING (25ms+ -> 4.5-6ms per pismeno) - 2c00c04
+- value mutace = bump_dom_version_content_only + WebView::
+  update_control_text (primy zapis do cached layout stromu). ZADNY
+  re-layout/re-cascade per pismeno.
+- :valid/:invalid/:placeholder-shown: (a) cascade cache klic hashuje
+  validity STAVY inputu (hash_validity ve webview render_via);
+  (b) matched_decls/walk cache focus_bit nese value-state bity
+  (empty=8, invalid=16, form marker=4) - bez toho per-node cache
+  vracela matched rules z doby pred psanim.
+- number filtr: 2. brana is_valid_number_prefix po editu (revert pri
+  fail) - "ee12e3e" -> "12e3" Chrome parity.
+
+### 3. MENU active "spatna sekce" - VERDIKT: Chrome parity (800205a)
+Ground-truth v realnem Chrome (localhost http server + JS sonda):
+klik na "15 Formulare" -> Chrome oznaci "19 Modern CSS"; scroll 1470 ->
+"09 Clip-path". Identicke chovani jako my = vlastnost naivniho
+scroll-spy JS na strance (posledni isIntersecting entry vyhrava),
+NE nas bug. RWE_IO_DBG / [IO-CALL] / [IO-FIRE] instrumentace zustava.
+
+### 4. CompositorAnimStore GATE (35bc011) - 156 -> 238 FPS na anim sekci
+- compose_layer_tree_into: compose smycka extrahovana do fn (sdilena).
+- FAST PATH na zacatku render_via: anim-only frame (podminky: !dirty,
+  no transitions/scroll anim/resize/selection) = tick store + apply na
+  last_layer_tree + re-compose z textur + cached overlay
+  (last_overlay_cmds). 0.84-0.99ms per frame.
+- Registrace: started @keyframes 2-stop 0/100% transform/opacity-only
+  single-op anim -> CompositorAnim; ended -> remove. Ne-friendly
+  zustavaji main pipeline (multi-stop, barvy, cubic-bezier, delay).
+- RWE_GATE_DBG, RWE_COMPOSITOR_GATE_OFF. Znama omezeni: animation-
+  iteration eventy se behem gate nedispatchuji (animationend ano -
+  gate propada do full framu pri dobehu); caret blink behem gate
+  zamrzly (cached overlay) - fokus+anim soucasne je vzacne.
+
+### TODO z docx v5 NEZPRACOVANE (task #19) - DALSI SESSION ZACIT TADY
+- JS Events sekce: keyboard area neklikatelna/no focus border/keys;
+  mousemove "jen nekdy".
+- Observers: IO demo boxy mozna obracene (overit proti Chrome jako
+  menu); resize element styl + nejde resizovat + chybi obsah;
+  MutationObserver layout pod tlacitky (margin/cislo na radku).
+- Sekce 11: VNITRNI scrollbar (overflow container) thumb se nehybe +
+  preteceni textu.
+- Buttony: release animace az po odjeti mysi (:active clear na MouseUp
+  bez ohledu na pozici?), cursor rucicka vs text-beam sjednotit, teal
+  focus border po kliku (focus-visible vs focus).
+- Gradienty: radial circle tvar, animated gradient se neanimuje,
+  repeating-linear/radial tiling.
+- filter: blur cut nahore + slabsi nez Chrome; drop-shadow styl.
+- mix-blend-mode: cela sekce jina (vsechny barvy stejne) - mozna
+  blend compose path nefunguje per-mode.
+- clip-path: circle prvni 2 male, ellipse tvar.
+- Typografie: text-shadow nefunguje, writing-mode otoceni glyfu,
+  column-count chovani, typewriter border pozice, marquee nejede.
+- Inline SVG sekce 13/14 (circle 75% temer neviditelny, prazdne boxy).
+- Obskurni CSS horni cast; tabulka hover jump (px); top bar backdrop
+  blur; devtools responsivita; plynuly resize.
+
 ## Session N+37: docx v5 - selection painting, sidebar vh bug, FORMS refaktor
 
 User mandat: docx v5 (a) Chrome-kontrastni selection, (b) sidebar border
