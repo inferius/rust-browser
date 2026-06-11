@@ -224,6 +224,11 @@ pub struct WebView {
     /// Layout-relevantni verze pri poslednim renderu - rozliseni content-only
     /// (SVG geometry) zmen od style/layout zmen pro off-screen damage skip.
     pub(crate) last_render_dom_layout_version: u64,
+    /// Chrome-style selection: recolor Text klony + highlight recty pro
+    /// glyph-level pass (render kresli JEN glyfy uvnitr rectu kontrastni
+    /// barvou pres puvodni vrstvu). Set v render_via selection bloku,
+    /// spotrebovano po overlay draw.
+    pub(crate) pending_selection_texts: Option<(Vec<crate::browser::paint::DisplayCommand>, Vec<(f32, f32, f32, f32)>)>,
     /// Cas posledniho resize() - detekce rapid drag-resize vs settle.
     pub(crate) last_resize_at: Option<std::time::Instant>,
     /// Behem rapid resize: layout + cascade klicuji na TUTO (starou) velikost
@@ -833,6 +838,7 @@ impl WebView {
             collected_sources: Vec::new(),
             last_render_dom_version: 0,
             last_render_dom_layout_version: 0,
+            pending_selection_texts: None,
             last_resize_at: None,
             resize_layout_override: None,
             last_render_canvas_gen: 0,
@@ -4079,42 +4085,52 @@ impl WebView {
                     // sveho boxu. Scoped `.foo::selection` se drzi jen ve .foo.
                     let mut hits: Vec<(f32, f32, f32, f32, Option<[u8; 4]>, Option<[u8; 4]>)> = Vec::new();
                     collect_text_lines(&layout_root, start.0, start.1, end.0, end.1, &mut hits);
-                    // 1) bg rect pod text (alpha < 255 aby text prosvital = citelny
-                    // bez prebarveni). S gamma-space blendem (rgba fix) blenduje
-                    // ted spravne jako Chrome. Alpha 150/120 = subtle highlight,
-                    // original text prosvita.
+                    // CHROME-STYLE selection painting:
+                    // 1) SYTY highlight (plna alpha; Chrome default #3297FD).
+                    // 2) Text se PREBARVI kontrastni barvou - ale JEN vybrane
+                    //    znaky: recolor klony Text cmds jdou zvlast pres
+                    //    SELECTION_GLYPH_CLIP (render skipne glyfy mimo highlight
+                    //    recty; nevybrane znaky zustanou z puvodni vrstvy).
+                    //    Kontrast: ::selection color explicit, jinak auto dle
+                    //    luma highlight bg (tmavy bg -> bily text).
+                    let mut sel_rects: Vec<(f32, f32, f32, f32)> = Vec::new();
                     for (hx, hy, hw, hh, sel_bg, _) in &hits {
-                        let color = sel_bg
-                            .map(|c| if c[3] >= 255 { [c[0], c[1], c[2], 150] } else { c })
-                            .unwrap_or([80, 150, 255, 120]);
+                        let color = sel_bg.unwrap_or([50, 151, 253, 255]);
+                        sel_rects.push((*hx, *hy, *hw, *hh));
                         display_list.push(crate::browser::paint::DisplayCommand::Rect {
                             x: *hx, y: *hy, w: *hw, h: *hh, color, radius: 0.0,
                         });
                     }
-                    // 2) ::selection {color} prebarvi text JEN kdyz je explicitne
-                    // nastaveny (sel_col Some). NEPREBARVUJEME automaticky - text je
-                    // jeden DisplayCommand per uzel, takze "always recolor" prebarvil
-                    // CELY uzel i kdyz byla vybrana jen cast (regrese). Subtle bg
-                    // (krok 1) zajisti citelnost i bez recoloringu.
-                    let recolor: Vec<crate::browser::paint::DisplayCommand> = display_list.iter()
-                        .filter_map(|cmd| {
-                            if let crate::browser::paint::DisplayCommand::Text { x, y, .. } = cmd {
-                                for (hx, hy, hw, hh, _, sel_col) in &hits {
-                                    if let Some(sc) = sel_col {
-                                        if *x >= hx - 2.0 && *x <= hx + hw + 2.0
-                                            && *y >= hy - 2.0 && *y <= hy + hh + 2.0 {
-                                            let mut c = cmd.clone();
-                                            if let crate::browser::paint::DisplayCommand::Text { color, .. } = &mut c {
-                                                *color = *sc;
-                                            }
-                                            return Some(c);
-                                        }
-                                    }
+                    let mut recolor: Vec<crate::browser::paint::DisplayCommand> = Vec::new();
+                    for cmd in display_list.iter() {
+                        if let crate::browser::paint::DisplayCommand::Text { x, y, font_size, content, .. } = cmd {
+                            // Bbox testu vuci hits - text muze byt multi-line.
+                            let n_lines = content.split('\n').count().max(1) as f32;
+                            let t_h = n_lines * font_size * 1.4;
+                            let intersects = hits.iter().any(|(hx, hy, hw, hh, _, _)| {
+                                *y < hy + hh && y + t_h > *hy
+                                    && *x < hx + hw + 600.0 && x + 600.0 > *hx - 600.0
+                            });
+                            if intersects {
+                                let sel_col = hits.iter()
+                                    .find_map(|(_, _, _, _, _, sc)| *sc);
+                                let bg = hits.first()
+                                    .and_then(|(_, _, _, _, b, _)| *b)
+                                    .unwrap_or([50, 151, 253, 255]);
+                                let luma = 0.299 * bg[0] as f32 + 0.587 * bg[1] as f32
+                                    + 0.114 * bg[2] as f32;
+                                let auto_col = if luma > 140.0 { [15, 15, 20, 255] } else { [255, 255, 255, 255] };
+                                let mut c = cmd.clone();
+                                if let crate::browser::paint::DisplayCommand::Text { color, .. } = &mut c {
+                                    *color = sel_col.unwrap_or(auto_col);
                                 }
+                                recolor.push(c);
                             }
-                            None
-                        }).collect();
-                    display_list.extend(recolor);
+                        }
+                    }
+                    // NEjde do display_list (tam by se kreslil cely uzel) -
+                    // zvlastni pass s glyph clipem po overlay draw.
+                    self.pending_selection_texts = Some((recolor, sel_rects));
                 }
             }
         }
@@ -4350,9 +4366,34 @@ impl WebView {
                 // No layers at all - clear target_view via draw_segments empty path
                 // (alespoň clear color). Pri page bez layers (rare) by zustal stale.
             }
+            // Chrome-style selection: prebarvene Text klony s glyph clipem
+            // na highlight recty (jen vybrane znaky pres puvodni vrstvu).
+            // Coords jsou content-space -> shift o -scroll (jako overlay).
+            if let Some((mut sel_cmds, mut sel_rects)) = self.pending_selection_texts.take() {
+                for cmd in sel_cmds.iter_mut() {
+                    crate::browser::render::segments::shift_command_x(cmd, -self.scroll_x);
+                    crate::browser::render::segments::shift_command_y(cmd, -self.scroll_y);
+                }
+                for r in sel_rects.iter_mut() {
+                    r.0 -= self.scroll_x;
+                    r.1 -= self.scroll_y;
+                }
+                renderer.draw_selection_text_pass(target_view, &sel_cmds, &sel_rects);
+            }
         } else {
             let _had = renderer.draw_segments_into_view_clipped(
                 target_view, &display_list, true, None);
+            if let Some((mut sel_cmds, mut sel_rects)) = self.pending_selection_texts.take() {
+                for cmd in sel_cmds.iter_mut() {
+                    crate::browser::render::segments::shift_command_x(cmd, -self.scroll_x);
+                    crate::browser::render::segments::shift_command_y(cmd, -self.scroll_y);
+                }
+                for r in sel_rects.iter_mut() {
+                    r.0 -= self.scroll_x;
+                    r.1 -= self.scroll_y;
+                }
+                renderer.draw_selection_text_pass(target_view, &sel_cmds, &sel_rects);
+            }
         }
 
         // 5b. WebGL canvas frame - per <canvas> s WebGL state encode wgpu

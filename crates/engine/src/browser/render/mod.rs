@@ -266,6 +266,12 @@ thread_local! {
     /// drive prepisoval uniform na vp_dims (= full WebView viewport) ALE tile
     /// raster potrebuje vp = tile dims. Pri (w, h) > 0 = override aktivni.
     static VIEWPORT_OVERRIDE: std::cell::Cell<(f32, f32)> = const { std::cell::Cell::new((0.0, 0.0)) };
+    /// Glyph-level selection clip (Chrome selection painting): pri ne-prazdnem
+    /// seznamu rectu build_vertices kresli Text glyfy JEN s centrem uvnitr
+    /// nektereho rectu (prebarvene znaky pres puvodni vrstvu; nevybrane
+    /// zustavaji z layer textury pod tim).
+    static SELECTION_GLYPH_CLIP: std::cell::RefCell<Vec<(f32, f32, f32, f32)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
     /// Raster boost pres render_into_layer pro layery se scale transformem.
     /// Layer texture se alokuje scale_hint x vetsi a glyf/image raster se musi
     /// boostnout o stejny faktor (jinak atlas glyf zustane base size = upscale
@@ -579,6 +585,8 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
     // PIXEL_SNAP_SCALE thread_local nastavi Renderer pred call (= zoom * dpr).
     // Default 1.0 = bez snapu.
     let snap = PIXEL_SNAP_SCALE.with(|c| c.get());
+    // Selection glyph clip - lokalni kopie (prazdna = zadne filtrovani).
+    let sel_clip: Vec<(f32, f32, f32, f32)> = SELECTION_GLYPH_CLIP.with(|c| c.borrow().clone());
     // PERF: pre-alloc capacity estimate (6 verts per cmd avg).
     let mut verts = Vec::with_capacity(commands.len() * 6);
     for cmd in commands {
@@ -682,6 +690,16 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
                             let gy_raw = pen_y - g_by;
                             let gx = (gx_raw * z).round() * inv_z;
                             let gy = (gy_raw * z).round() * inv_z;
+                            // Selection pass: glyf mimo highlight recty SKIP
+                            // (zustane puvodni z vrstvy pod) - prebarvi se jen
+                            // vybrane znaky, presne jako Chrome.
+                            if !sel_clip.is_empty() {
+                                let ccx = gx + g_w * 0.5;
+                                let ccy = gy + g_h * 0.5;
+                                let inside = sel_clip.iter().any(|(rx, ry, rw, rh)|
+                                    ccx >= *rx && ccx <= rx + rw && ccy >= *ry && ccy <= ry + rh);
+                                if !inside { continue; }
+                            }
                             let text_mode = if g.lcd { 9.0 } else { 1.0 };
                             if italic_skew != 0.0 {
                                 let skew = g_h * italic_skew;
@@ -8159,6 +8177,30 @@ impl Renderer {
     /// Allokuje SVUJ uniform buffer per call (NESDILI self.compose_uniform_buf
     /// jako single compose path - write_buffer by mezi N calls prepsal vsechny
     /// na poslední uniform).
+    /// Chrome-style selection text pass: kresli recolor Text klony s
+    /// glyph-level clipem na highlight recty (jen vybrane znaky). Vola
+    /// webview po overlay draw; bez clear (pres existujici obsah).
+    pub fn draw_selection_text_pass(
+        &mut self,
+        view: &wgpu::TextureView,
+        cmds: &[DisplayCommand],
+        rects: &[(f32, f32, f32, f32)],
+    ) {
+        if cmds.is_empty() || rects.is_empty() { return; }
+        SELECTION_GLYPH_CLIP.with(|c| *c.borrow_mut() = rects.to_vec());
+        // Vert cache bypass neni nutny - hash cmds (jine barvy nez original)
+        // + rects hash pridan do klice v draw_segments neni; misto toho
+        // build primo bez cache:
+        PIXEL_SNAP_SCALE.with(|c| c.set(self.zoom * self.scale_factor));
+        let (vp_w, vp_h) = self.vp_dims();
+        let vp = [vp_w, vp_h, self.zoom, 0.0];
+        self.queue.write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&vp));
+        let verts = build_vertices(cmds, &self.atlas, &self.image_atlas, self.zoom);
+        SELECTION_GLYPH_CLIP.with(|c| c.borrow_mut().clear());
+        if verts.is_empty() { return; }
+        self.draw_main_pass_clipped(view, &verts, false, None);
+    }
+
     /// Clear barva prvniho render passu - page canvas bg (body/html z
     /// paint::canvas_background) nebo UA default svetla 0.95. Na tmavych
     /// strankach bez tohoto prosvitala bila za layout rootem (scrollbar
