@@ -52,6 +52,23 @@ NE nas bug. RWE_IO_DBG / [IO-CALL] / [IO-FIRE] instrumentace zustava.
   gate propada do full framu pri dobehu); caret blink behem gate
   zamrzly (cached overlay) - fokus+anim soucasne je vzacne.
 
+### NOVA TRAJEKTORIE: GOOGLE.COM COMPAT (user: "posunout to")
+Smoke test `cargo run -- browser https://www.google.com` renderuje
+prekvapive blizko (logo, search box, header linky). Opraveno (a6e6e72):
+flex:<basis> shorthand (search pole 200->504px), input submit label +
+intrinsic sirka (tlacitka maji text). Chrome ground-truth screenshot
+porizen pres Chrome MCP (prihlaseny ucet - pro fair srovnani pouzit
+anonymni). ZBYVAJICI Google blockery (priorita pro dalsi session):
+- "Co se vam honi hlavou?" JS-vlozeny element s obrim fontem spatne
+  positioned (v Chrome maly/skryty) - zjistit pres runtime DOM dump
+  ktery selektor/styl nematchujeme (JS-inserted <style>? CSSOM?).
+- SVG ikony rozsypane (hamburger/avatar oblast vpravo nahore, lupa
+  v search boxu - cerna cara + blob).
+- Footer se nerenderuje (Cesko + linky radky).
+- Cookies/consent + prihlasovaci tlacitko (anonymni HTML varianta).
+- Dump rezim nespousti skripty - pro Google debugging pridat
+  `dump --run-js` nebo runtime layout dump hotkey.
+
 ### TODO z docx v5 NEZPRACOVANE (task #19) - DALSI SESSION ZACIT TADY
 - JS Events sekce: keyboard area neklikatelna/no focus border/keys;
   mousemove "jen nekdy".
