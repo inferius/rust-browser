@@ -1,4 +1,4 @@
-/// Layout engine - tvori box tree z DOM + computed styles.
+﻿/// Layout engine - tvori box tree z DOM + computed styles.
 ///
 /// Zatim zakladni block layout. Inline/flex/grid pozdeji.
 /// Box tree je separator: kazdy DOM uzel ma 0..N boxu.
@@ -219,7 +219,7 @@ fn apply_post_children_pseudos(
                         if let Some(bg) = pseudo_styles.get("background-color") {
                             letter_box.bg_color = parse_color(bg);
                         }
-                        // Zkrátit puvodni text na rest
+                        // ZkrĂˇtit puvodni text na rest
                         child.text = Some(rest);
                         // Insert pred child - vlozim na pozici child v collection
                         // (predchazejici cyklus bere prvni inline - vlozim hned).
@@ -1965,7 +1965,7 @@ fn compute_subtree_hash_uncached(node: &Rc<Node>, style_map: &StyleMap) -> u64 {
     }
     // Styles - XOR commutative hash misto sort (drive `keys.collect()` +
     // `keys.sort()` alocoval Vec + O(N log N) per element. Pro 1000 elements
-    // = 1000× Vec alloc + sort. XOR akumulator je commutative -> order-independent
+    // = 1000Ă— Vec alloc + sort. XOR akumulator je commutative -> order-independent
     // bez sortovani).
     if let Some(styles) = super::cascade::get_styles(style_map, node) {
         let mut style_xor = 0u64;
@@ -2301,7 +2301,7 @@ pub fn interpolate_keyframes(
 }
 
 /// Jako interpolate_keyframes ale aplikuje easing PER-SEGMENT (mezi sousednimi
-/// keyframy), per CSS Animations §3. KLIC pro step-end/steps(): driv se easing
+/// keyframy), per CSS Animations Â§3. KLIC pro step-end/steps(): driv se easing
 /// aplikoval na CELKOVY progress -> step-end skocil 0->1 -> prostredni keyframe
 /// (napr. blink 50% opacity:0) se NIKDY nedosahl = blink staticky. Per-segment
 /// easing to opravi (segment 0%->50% step-end = drz prvni do konce, pak skok).
@@ -2313,7 +2313,7 @@ pub fn interpolate_keyframes_eased(
     let ease = |t: f32| crate::browser::cascade::apply_easing(t, timing_fn);
     let mut out = std::collections::HashMap::new();
     if frames.is_empty() { return out; }
-    // CSS Animations §3: chybejici 0%/100% keyframe se synthetizuje z elementoveho
+    // CSS Animations Â§3: chybejici 0%/100% keyframe se synthetizuje z elementoveho
     // base/initial. Bez tohoto napr. `@keyframes spin { to { rotate(360deg) } }`
     // (jen 100%) vrati vzdy rotate(360)=rotate(0) = STATICKY. Synteza 0%=initial
     // (transform:none) -> interpoluj none->rotate(360) = realna rotace.
@@ -2799,9 +2799,9 @@ fn cache_lookup_subtree(node: &Rc<Node>, style_map: &StyleMap) -> Option<LayoutB
 /// nedokazala shrinkovat (napr. pri scrollbar reservation second pass).
 fn reset_subtree_rect(bx: &mut LayoutBox) {
     bx.rect = Rect { x: 0.0, y: 0.0, width: 0.0, height: 0.0 };
-    // anim_baseline take reset - cache hit drzí baseline z prvni pass. Pri
+    // anim_baseline take reset - cache hit drzĂ­ baseline z prvni pass. Pri
     // animation tick (= NEW layout pass s diff cascade values), NEW rect.y
-    // = baseline + delta. Bez tohoto text drzí old baseline.y -> dragging
+    // = baseline + delta. Bez tohoto text drzĂ­ old baseline.y -> dragging
     // out of parent anim-box pres jakekoli rect.y shift (= "slide text
     // posunuty dolu pod modry box").
     bx.anim_baseline = None;
@@ -4935,7 +4935,7 @@ pub fn layout_block(bx: &mut LayoutBox) {
         // jeho intrinsic h=100 nafouklo parent content height.
         if matches!(bx.children[i].position, Position::Absolute | Position::Fixed) {
             if !inline_buffer.is_empty() {
-                cursor_y = flush_inline(bx, &inline_buffer, inner_x, cursor_y, inner_w);
+                cursor_y = flush_inline(bx, &inline_buffer, inner_x, cursor_y, inner_w, &floats);
                 inline_buffer.clear();
             }
             // Fixed: CB = viewport, ne parent.
@@ -5031,7 +5031,7 @@ pub fn layout_block(bx: &mut LayoutBox) {
         // Float left/right: pozicovani na inner edge, advance cursor_y NE.
         if (float_v == "left" || float_v == "right") && display != Display::None {
             if !inline_buffer.is_empty() {
-                cursor_y = flush_inline(bx, &inline_buffer, inner_x, cursor_y, inner_w);
+                cursor_y = flush_inline(bx, &inline_buffer, inner_x, cursor_y, inner_w, &floats);
                 inline_buffer.clear();
             }
             let child = &mut bx.children[i];
@@ -5070,7 +5070,7 @@ pub fn layout_block(bx: &mut LayoutBox) {
             | Display::TableCell | Display::TableHeaderCell | Display::TableCaption
             | Display::Subgrid => {
                 if !inline_buffer.is_empty() {
-                    cursor_y = flush_inline(bx, &inline_buffer, inner_x, cursor_y, inner_w);
+                    cursor_y = flush_inline(bx, &inline_buffer, inner_x, cursor_y, inner_w, &floats);
                     inline_buffer.clear();
                     had_prev_block = false;
                     prev_margin_bottom = 0.0;
@@ -5263,7 +5263,7 @@ pub fn layout_block(bx: &mut LayoutBox) {
         i += 1;
     }
     if !inline_buffer.is_empty() {
-        cursor_y = flush_inline(bx, &inline_buffer, inner_x, cursor_y, inner_w);
+        cursor_y = flush_inline(bx, &inline_buffer, inner_x, cursor_y, inner_w, &floats);
     }
 
     // Auto-vypocet vysky podle children. Asymmetric padding pres _top/_bottom
@@ -5322,8 +5322,29 @@ pub fn layout_block(bx: &mut LayoutBox) {
 
 /// Flush inline buffer: rozmista inline boxy s wrapem.
 /// Vraci new cursor_y po vsech radkach.
-fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f32, inner_w: f32) -> f32 {
-    let mut cursor_x = inner_x;
+fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f32, inner_w: f32,
+                floats: &[(f32, f32, f32, f32, char)]) -> f32 {
+    // Float-aware line bounds: aktivni float zuzuje radky v jeho Y rozsahu
+    // (CSS Float L1). Driv flush_inline floaty ignoroval -> text shape-outside
+    // dema TEKL PRES kruhovy float misto obtekani prvnich radku.
+    let line_lx = move |y: f32, lh: f32| -> f32 {
+        let mut lx = inner_x;
+        for &(fx, fy, fw, fh, side) in floats {
+            if side == 'l' && y + lh > fy && y < fy + fh {
+                lx = lx.max(fx + fw);
+            }
+        }
+        lx
+    };
+    let line_rx = move |y: f32, lh: f32| -> f32 {
+        let mut rx = inner_x + inner_w;
+        for &(fx, fy, _fw, fh, side) in floats {
+            if side == 'r' && y + lh > fy && y < fy + fh {
+                rx = rx.min(fx);
+            }
+        }
+        rx
+    };
     let mut cursor_y = start_y;
     let parent_font_size = bx.font_size;
     let parent_bold = bx.bold;
@@ -5340,6 +5361,7 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
     let parent_line_height = bx.line_height;
     let line_height_default = parent_font_size * 1.2;
     let mut line_height = line_height_default;
+    let mut cursor_x = line_lx(start_y, line_height_default);
     // Tracking whitespace boundary mezi sousednimi inline siblings.
     let mut prev_had_trailing_space = false;
 
@@ -5445,7 +5467,7 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
             bx.children[idx].rect.width = 0.0;
             bx.children[idx].rect.height = advance_h;
             cursor_y += line_height;
-            cursor_x = inner_x;
+            cursor_x = line_lx(cursor_y, line_height_default);
             line_height = line_height_default;
             prev_had_trailing_space = false;
             continue;
@@ -5504,13 +5526,13 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
                 let nowrap = bx_clone.white_space_nowrap || bx.white_space_nowrap;
                 let needs_wrap = !nowrap
                     && inner_w > 0.0
-                    && cursor_x + inter_word_space + w > inner_x + inner_w + 0.5
-                    && cursor_x > inner_x;
+                    && cursor_x + inter_word_space + w > line_rx(cursor_y, line_height) + 0.5
+                    && cursor_x > line_lx(cursor_y, line_height);
                 if needs_wrap {
                     // Pre-wrap zaznam soucasne line end (cursor_x na konci predchozi line).
                     max_line_end_x = max_line_end_x.max(cursor_x);
                     cursor_y += line_height;
-                    cursor_x = inner_x;
+                    cursor_x = line_lx(cursor_y, line_height);
                     if !wrapped_text.is_empty() && !wrapped_text.ends_with('\n') {
                         wrapped_text.push('\n');
                     }
@@ -5519,14 +5541,15 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
                 }
                 // Single-word overflow: break_word/anywhere -> rozseka slovo na chars.
                 // Pri inner_w <= 0 (pre-pass) NE break - dochazi single line.
-                if break_word && inner_w > 0.0 && w > (inner_x + inner_w - cursor_x) && w > 0.0 {
+                if break_word && inner_w > 0.0 && w > (line_rx(cursor_y, line_height) - cursor_x) && w > 0.0 {
                     let mut acc_w = 0.0;
                     let chars: Vec<char> = word.chars().collect();
                     for ch in chars {
                         let ch_w = measure_text_width_full(&ch.to_string(), font_size, bx_clone.effective_weight(), bx_clone.italic, &bx_clone.font_family, bx_clone.letter_spacing);
-                        if cursor_x + acc_w + ch_w > inner_x + inner_w && cursor_x > inner_x {
+                        if cursor_x + acc_w + ch_w > line_rx(cursor_y, line_height)
+                            && cursor_x > line_lx(cursor_y, line_height) {
                             cursor_y += line_height;
-                            cursor_x = inner_x;
+                            cursor_x = line_lx(cursor_y, line_height);
                             acc_w = 0.0;
                             wrapped_text.push('\n');
                         }
@@ -5565,10 +5588,15 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
             max_line_end_x = max_line_end_x.max(cursor_x);
             let multi_line = lines >= 2.0;
             if multi_line {
-                // Snap rect.x na inner_x (lines 2+ zacinaji odsud); width
-                // = max line end - inner_x (= sirka nejsiriho radku).
-                bx.children[idx].rect.x = inner_x;
-                bx.children[idx].rect.width = (max_line_end_x - inner_x).max(0.0);
+                // Snap rect.x na line start prvni radky; width = max line end
+                // - start (= sirka nejsiriho radku). S aktivnim floatem je
+                // line start ODSAZENY za float (line_lx) - render kresli
+                // kazdou \n radku od rect.x, takze text vedle floatu zacina
+                // za nim (shape-outside demo). Aproximace: radky POD floatem
+                // zustanou na stejnem odsazeni (per-line x by chtel fragmenty).
+                let first_lx = line_lx(final_y, line_height);
+                bx.children[idx].rect.x = first_lx;
+                bx.children[idx].rect.width = (max_line_end_x - first_lx).max(0.0);
             } else {
                 let final_x = bx.children[idx].rect.x;
                 bx.children[idx].rect.width = (cursor_x - final_x).max(bx.children[idx].rect.width);
@@ -5648,9 +5676,10 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
             // +0.5 epsilon (parita s text-word wrap vyse): intrinsic max-content
             // width parenta muze byt o zlomek px mensi nez soucet runu (rounding)
             // -> exact-fit obsah by jinak zalomil ("0" v MutationObserver demo).
-            if !nowrap_ib && cursor_x + estimated_w > inner_x + inner_w + 0.5 && cursor_x > inner_x {
+            if !nowrap_ib && cursor_x + estimated_w > line_rx(cursor_y, line_height) + 0.5
+                && cursor_x > line_lx(cursor_y, line_height) {
                 cursor_y += line_height;
-                cursor_x = inner_x;
+                cursor_x = line_lx(cursor_y, line_height);
             }
             // Baseline alignment: pri smaller inline font (<small>, <sub>, <sup>)
             // posun rect.y dolu o rozdil parent_font_size - element_font_size.
@@ -5825,9 +5854,10 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
             // +0.5 epsilon: exact-fit nested span (intrinsic width parenta =
             // presny soucet runu) nesmi zalomit kvuli float roundingu.
             let nowrap_el = bx.white_space_nowrap || bx.children[idx].white_space_nowrap;
-            if !nowrap_el && cursor_x + w > inner_x + inner_w + 0.5 && cursor_x > inner_x {
+            if !nowrap_el && cursor_x + w > line_rx(cursor_y, line_height) + 0.5
+                && cursor_x > line_lx(cursor_y, line_height) {
                 cursor_y += line_height;
-                cursor_x = inner_x;
+                cursor_x = line_lx(cursor_y, line_height);
             }
             bx.children[idx].rect.x = cursor_x;
             bx.children[idx].rect.y = cursor_y;
@@ -5912,7 +5942,7 @@ pub fn measure_text_width_weight(text: &str, font_size: f32, weight: u32, italic
     measure_text_width_full(text, font_size, weight, italic, family, 0.0)
 }
 
-/// S letter-spacing prispevkem (CSS Text L3 §10). Pripocita ls k advance
+/// S letter-spacing prispevkem (CSS Text L3 Â§10). Pripocita ls k advance
 /// kazdeho char vc. trailing (Chrome chovani). Volajte z paint/layout pres
 /// box.letter_spacing.
 pub fn measure_text_width_full(text: &str, font_size: f32, weight: u32, italic: bool, family: &str, letter_spacing: f32) -> f32 {
