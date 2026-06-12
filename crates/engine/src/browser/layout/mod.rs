@@ -472,6 +472,20 @@ fn apply_tag_html_attrs(bx: &mut LayoutBox, node: &Rc<Node>) {
                     node.attr("value"), bx.control_text);
             }
         }
+        // <input type=submit/button/reset>: popisek tlacitka = value attr
+        // (HTML default: "Submit" / "Reset"). Bez tohoto Google "Hledat
+        // Googlem" tlacitka byly prazdne sede boxy.
+        if matches!(typ.as_str(), "submit" | "button" | "reset") {
+            let label = node.attr("value").filter(|v| !v.is_empty())
+                .or_else(|| match typ.as_str() {
+                    "submit" => Some("Submit".to_string()),
+                    "reset" => Some("Reset".to_string()),
+                    _ => None,
+                });
+            bx.control_text = label;
+            // Button text je centrovany (UA stylesheet).
+            bx.text_align = TextAlign::Center;
+        }
     }
     // <textarea>: multi-line input. Default 200x50. Value/DOM text content
     // do control_text (paint-only; DOM text children se v build skipuji).
@@ -3398,7 +3412,20 @@ fn build_box_inner_impl(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &supe
             _ => {
                 let parts: Vec<&str> = v.split_whitespace().collect();
                 if let Some(p0) = parts.first() {
-                    if let Ok(g) = p0.parse::<f32>() { bx.flex_grow = g; }
+                    if let Ok(g) = p0.parse::<f32>() {
+                        bx.flex_grow = g;
+                        // flex: <number> = <number> 1 0% (spec); shrink/basis
+                        // prepsany nize pri 2-3 hodnotach.
+                        bx.flex_shrink = 1.0;
+                    } else {
+                        // flex: <basis> (napr. "100%" - Google .gLFyf) =
+                        // 1 1 <basis>. Drive se IGNOROVALO cele (parse f32
+                        // fail -> nic) -> search textarea drzela default
+                        // 200px misto roztazeni.
+                        bx.flex_grow = 1.0;
+                        bx.flex_shrink = 1.0;
+                        bx.flex_basis = p0.to_string();
+                    }
                 }
                 if let Some(p1) = parts.get(1) {
                     if let Ok(sh) = p1.parse::<f32>() { bx.flex_shrink = sh; }
@@ -4108,6 +4135,32 @@ fn build_box_inner_impl(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &supe
             && bx.explicit_height.is_none()
         {
             bx.explicit_height = Some(bx.rect.height.max(14.0));
+        }
+        // <input type=submit/button/reset>: intrinsic sirka/vyska z popisku
+        // (control_text) + padding + border, jako Chrome shrink-to-fit button.
+        // Bez tohoto mela Google tlacitka "Hledat Googlem" 54px (jen padding).
+        if bx.tag.as_deref() == Some("input")
+            && matches!(typ.as_str(), "submit" | "button" | "reset")
+        {
+            let pad_l = bx.padding_left.unwrap_or(bx.padding);
+            let pad_r = bx.padding_right.unwrap_or(bx.padding);
+            let pad_t = bx.padding_top.unwrap_or(bx.padding);
+            let pad_b = bx.padding_bottom.unwrap_or(bx.padding);
+            let bw = bx.border_width.max(0.0);
+            if bx.explicit_width.is_none() && bx.width_pct.is_none() {
+                let label_w = bx.control_text.as_deref()
+                    .map(|t| measure_text_width_weight(t, bx.font_size,
+                        bx.effective_weight(), bx.italic, &bx.font_family))
+                    .unwrap_or(0.0);
+                let w = label_w + pad_l + pad_r + 2.0 * bw + 12.0; // 6px UA gutter po stranach
+                bx.rect.width = bx.rect.width.max(w);
+                bx.explicit_width = Some(bx.rect.width);
+            }
+            if bx.explicit_height.is_none() && bx.height_pct.is_none() {
+                let line_h = bx.font_size * if bx.line_height > 0.0 { bx.line_height } else { 1.2 };
+                bx.rect.height = bx.rect.height.max(line_h + pad_t + pad_b + 2.0 * bw + 4.0);
+                bx.explicit_height = Some(bx.rect.height);
+            }
         }
     }
 
