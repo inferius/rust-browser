@@ -4008,8 +4008,12 @@ impl WebView {
         // apply_paint_animations (anim_baseline = rect - layout_offset) sticky
         // shift undoval -> layer tree mel puvodni rect.y -> sticky nedrzel.
 
-        // 2c. Paint-side animations apply (transform overlay, opacity tween).
-        crate::browser::render::apply_paint_animations(&mut layout_root, &style_map);
+        // 2c. Paint-side animations apply - PRESUNUTO az ZA clean save (nize).
+        // Drive bezel TADY -> save ukladal strom S baked anim posuny -> layout
+        // cache HIT (take) ho vracel a apply_paint bezel ZNOVA na nem ->
+        // sticky/top offset baseline se pres take-cyklus AKUMULOVAL (nav menu
+        // linky v hit-test stromu po par framech +470px vs kresleny obsah =
+        // "klikani v menu netrefuje"). Clean save = layout-truth strom.
 
         // 2c2. Per-element scroll - 2-pass:
         // Pass A: nastavit bx.scroll_offset_y/x z mapy NA layout_root (bez
@@ -4059,9 +4063,13 @@ impl WebView {
             }
         }
         pass_a_set_offsets(&mut layout_root, &mut self.element_scroll);
-        // Save clean (offsets set, children un-shifted) - hit_test pres
-        // pak respektuje scroll_offset pro coord adjustment.
+        // Save clean (offsets set, children un-shifted, BEZ anim bake) -
+        // hit_test pres nej respektuje scroll_offset; anim posuny se bakuji
+        // az do PAINT kopie nize (hit na animovanych elementech = layout
+        // pozice, Chrome-ish kompromis).
         self.last_layout_root = Some(layout_root.clone());
+        // 2c (presunuto): paint-side animations apply na PAINT kopii.
+        crate::browser::render::apply_paint_animations(&mut layout_root, &style_map);
         // @container konvergence: cascade tohoto framu pouzila container_sizes z
         // PREDCHOZIHO layoutu. Ted (po novem layoutu) prepocti aktualni container
         // velikosti; pokud se lisi od pouzitych -> force dirty (dalsi frame

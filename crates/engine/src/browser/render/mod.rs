@@ -1081,8 +1081,15 @@ fn apply_paint_animations_inner(box_: &mut crate::browser::layout::LayoutBox,
         //    Pozn: parent_delta_x (= parent's our_delta po apply_paint) je BEZ uziti
         //    pro nase baseline init, protoze nase rect.x neni jeste shifted o
         //    parent's current animated delta - jen o parent's layout_dx.
-        let layout_dx = box_.offset_left.unwrap_or(0.0);
-        let layout_dy = box_.offset_top.unwrap_or(0.0);
+        // offset_left/top odecitat JEN kdyz je layout skutecne aplikoval do
+        // rect (Relative: shift_subtree; Absolute/Fixed: pozice z left/top).
+        // STICKY je vyjimka: layout ho umistil v normal flow BEZ top offsetu
+        // (top aplikuje az apply_sticky pri scrollu). Odecteni by dalo
+        // baseline = rect - 48 -> our_delta_y = +48 -> VSECHNY deti sidebaru
+        // se kreslily +48px pod hit-test stromem (klik v menu netrefoval).
+        let sticky_self = matches!(box_.position, super::layout::Position::Sticky);
+        let layout_dx = if sticky_self { 0.0 } else { box_.offset_left.unwrap_or(0.0) };
+        let layout_dy = if sticky_self { 0.0 } else { box_.offset_top.unwrap_or(0.0) };
         let mut base = box_.rect;
         base.x -= layout_dx + parent_layout_dx;
         base.y -= layout_dy + parent_layout_dy;
@@ -1193,7 +1200,12 @@ fn apply_paint_animations_inner(box_: &mut crate::browser::layout::LayoutBox,
         // frame, ted jen pricte rect.width upravu.
         let oh_x = box_.overflow_x.hides();
         let oh_y = box_.overflow_y.hides();
-        let is_oof = !matches!(box_.position, super::layout::Position::Static);
+        // Sticky NENI oof pro left/top apply: layout ho umistil v normal flow
+        // a top: offset aplikuje apply_sticky AZ pri scrollu. Drive Sticky tady
+        // dostal top JESTE JEDNOU (rect = baseline + top) -> sidebar menu se
+        // KRESLILO +48px pod hit-test stromem = "klikani v menu netrefuje".
+        let is_oof = !matches!(box_.position,
+            super::layout::Position::Static | super::layout::Position::Sticky);
         // Position-only animace (left/top/right/bottom): aplikuj jako offset
         // od baseline. Bez tohoto by slide-anim (left 0->400) trigeroval
         // hard layout kazdy frame (~12 ms na test.html).
