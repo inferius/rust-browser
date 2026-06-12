@@ -676,6 +676,169 @@ fn capitalize_words(s: &str) -> String {
 }
 
 /// Serializace LayoutBox SVG subtree na SVG markup string. Pres resvg parse.
+/// html5ever normalizuje tag names na lowercase, ale SVG je case-sensitive
+/// - resvg "lineargradient" nezna -> fill="url(#grad)" tise selhal (prazdny
+/// box v mask/gradient demu). Mapovani zpet na kanonicke SVG nazvy.
+fn svg_canonical_tag(t: &str) -> &str {
+    match t {
+        "lineargradient" => "linearGradient",
+        "radialgradient" => "radialGradient",
+        "clippath" => "clipPath",
+        "foreignobject" => "foreignObject",
+        "textpath" => "textPath",
+        "animatetransform" => "animateTransform",
+        "animatemotion" => "animateMotion",
+        "fegaussianblur" => "feGaussianBlur",
+        "feoffset" => "feOffset",
+        "feblend" => "feBlend",
+        "fecolormatrix" => "feColorMatrix",
+        "femerge" => "feMerge",
+        "femergenode" => "feMergeNode",
+        "feflood" => "feFlood",
+        "fecomposite" => "feComposite",
+        "fedropshadow" => "feDropShadow",
+        "feturbulence" => "feTurbulence",
+        "fedisplacementmap" => "feDisplacementMap",
+        "feimage" => "feImage",
+        "fetile" => "feTile",
+        "femorphology" => "feMorphology",
+        "feconvolvematrix" => "feConvolveMatrix",
+        "fespecularlighting" => "feSpecularLighting",
+        "fediffuselighting" => "feDiffuseLighting",
+        "fedistantlight" => "feDistantLight",
+        "fepointlight" => "fePointLight",
+        "fespotlight" => "feSpotLight",
+        "fefunca" => "feFuncA",
+        "fefuncr" => "feFuncR",
+        "fefuncg" => "feFuncG",
+        "fefuncb" => "feFuncB",
+        "fecomponenttransfer" => "feComponentTransfer",
+        _ => t,
+    }
+}
+
+/// Pozicni lerp cisel ve dvou strukturalne shodnych stringech (SVG path d:
+/// "M10,50 C10,20 ..." -> "M10,50 C10,80 ..."). interpolate_css_value je
+/// whitespace-token based a "M10,50" neumi - tohle splituje cisla KDEKOLI.
+/// Non-numeric kostra obou stringu musi byt identicka, jinak None.
+fn lerp_numbers_positional(a: &str, b: &str, t: f32) -> Option<String> {
+    fn split(s: &str) -> (Vec<String>, Vec<f32>) {
+        let mut texts = vec![String::new()];
+        let mut nums = Vec::new();
+        let mut it = s.chars().peekable();
+        while let Some(&c) = it.peek() {
+            let num_start = c.is_ascii_digit() || c == '.'
+                || ((c == '-' || c == '+') && {
+                    let mut it2 = it.clone();
+                    it2.next();
+                    matches!(it2.peek(), Some(d) if d.is_ascii_digit() || *d == '.')
+                });
+            if num_start {
+                let mut buf = String::new();
+                if c == '-' || c == '+' { buf.push(c); it.next(); }
+                while let Some(&c2) = it.peek() {
+                    if c2.is_ascii_digit() || c2 == '.' { buf.push(c2); it.next(); }
+                    else { break; }
+                }
+                match buf.parse::<f32>() {
+                    Ok(v) => { nums.push(v); texts.push(String::new()); }
+                    Err(_) => texts.last_mut().unwrap().push_str(&buf),
+                }
+            } else {
+                texts.last_mut().unwrap().push(c);
+                it.next();
+            }
+        }
+        (texts, nums)
+    }
+    let (ta, na) = split(a);
+    let (tb, nb) = split(b);
+    if na.is_empty() || na.len() != nb.len() || ta != tb { return None; }
+    let mut out = String::new();
+    for i in 0..na.len() {
+        out.push_str(&ta[i]);
+        let v = na[i] + (nb[i] - na[i]) * t;
+        out.push_str(&format!("{:.3}", v));
+    }
+    out.push_str(&ta[na.len()]);
+    Some(out)
+}
+
+/// Sekundy od prvniho SMIL dotazu - spolecna epocha vsech <animate>.
+fn smil_elapsed_s() -> f32 {
+    thread_local! {
+        static EPOCH: std::time::Instant = std::time::Instant::now();
+    }
+    EPOCH.with(|e| e.elapsed().as_secs_f32())
+}
+
+/// SMIL aproximace: z <animate>/<animateTransform> deti nodu spocita
+/// (attributeName, aktualni hodnota) overrides pro serializaci. resvg SMIL
+/// neumi (statický snapshot) - bez tohoto stroke-dashoffset demo (kruh 75%)
+/// zustal na from hodnote = neviditelny, path morph demo prazdne.
+/// Interpolace: from/to nebo values="a;b;c" po segmentech, per-token numeric
+/// lerp (interpolate_css_value). repeatCount=indefinite loopuje.
+fn smil_overrides(node: &std::rc::Rc<crate::browser::dom::Node>) -> Vec<(String, String)> {
+    let mut overrides: Vec<(String, String)> = Vec::new();
+    let children = node.children.borrow();
+    for ch in children.iter() {
+        let ctag = ch.tag_name().unwrap_or_default();
+        if ctag != "animate" && ctag != "animatetransform" { continue; }
+        let dur_s = ch.attr("dur").and_then(|d|
+            d.trim().trim_end_matches("ms").trim_end_matches('s')
+                .parse::<f32>().ok()
+                .map(|v| if d.trim().ends_with("ms") { v / 1000.0 } else { v }))
+            .unwrap_or(0.0);
+        if dur_s <= 0.0 { continue; }
+        let attr_name = match ch.attr("attributeName") {
+            Some(a) => a,
+            None => continue,
+        };
+        let elapsed = smil_elapsed_s();
+        let cycles = elapsed / dur_s;
+        let indefinite = ch.attr("repeatCount")
+            .map(|r| r.trim() == "indefinite").unwrap_or(false);
+        let t = if indefinite {
+            cycles.fract()
+        } else {
+            let max = ch.attr("repeatCount").and_then(|r| r.trim().parse::<f32>().ok()).unwrap_or(1.0);
+            if cycles >= max { 1.0 } else { cycles.fract() }
+        }.clamp(0.0, 1.0);
+        let val = if let Some(vals) = ch.attr("values") {
+            let parts: Vec<&str> = vals.split(';').map(|s| s.trim())
+                .filter(|s| !s.is_empty()).collect();
+            if parts.len() >= 2 {
+                let seg_f = t * (parts.len() - 1) as f32;
+                let i = (seg_f.floor() as usize).min(parts.len() - 2);
+                let lt = seg_f - i as f32;
+                crate::browser::layout::interpolate_css_value(&attr_name, parts[i], parts[i + 1], lt)
+                    .or_else(|| lerp_numbers_positional(parts[i], parts[i + 1], lt))
+            } else { None }
+        } else if let (Some(f), Some(to)) = (ch.attr("from"), ch.attr("to")) {
+            crate::browser::layout::interpolate_css_value(&attr_name, &f, &to, t)
+                .or_else(|| lerp_numbers_positional(&f, &to, t))
+        } else { None };
+        if let Some(v) = val {
+            if ctag == "animatetransform" {
+                let ttype = ch.attr("type").unwrap_or_else(|| "rotate".to_string());
+                let anim_t = format!("{}({})", ttype, v);
+                // Base transform (<g transform="translate(50,50)">) se SKLADA
+                // s animaci (post-concat) - cisty replace by gear tocil kolem
+                // (0,0) = levy horni roh misto stredu (Chrome parity).
+                let final_t = match node.attr("transform") {
+                    Some(orig) if !orig.trim().is_empty() =>
+                        format!("{} {}", orig, anim_t),
+                    _ => anim_t,
+                };
+                overrides.push((attr_name, final_t));
+            } else {
+                overrides.push((attr_name, v));
+            }
+        }
+    }
+    overrides
+}
+
 fn serialize_svg(bx: &LayoutBox) -> Option<String> {
     let node = bx.node.as_ref()?;
     if node.tag_name().as_deref() != Some("svg") { return None; }
@@ -684,7 +847,7 @@ fn serialize_svg(bx: &LayoutBox) -> Option<String> {
     let cc_str = format!("rgb({},{},{})", cc[0], cc[1], cc[2]);
     fn walk(node: &std::rc::Rc<crate::browser::dom::Node>, out: &mut String, current_color: &str) {
         let tag = match node.tag_name() {
-            Some(t) => t,
+            Some(t) => svg_canonical_tag(&t).to_string(),
             None => {
                 // Text node (napr. obsah uvnitr <text>...</text>) - serializuj
                 // jeho text. Drive tady byl `return` -> obsah <text> se ztratil
@@ -701,10 +864,17 @@ fn serialize_svg(bx: &LayoutBox) -> Option<String> {
                 return;
             }
         };
+        // SMIL: <animate> deti = override hodnot atributu aktualnim stavem.
+        let overrides = smil_overrides(node);
+        let mut overrides_used: Vec<bool> = vec![false; overrides.len()];
         out.push('<');
         out.push_str(&tag);
         for (k, v) in node.attributes.borrow().iter() {
-            let v_resolved = if v.eq_ignore_ascii_case("currentcolor") {
+            let ov = overrides.iter().position(|(name, _)| name == k);
+            let v_resolved = if let Some(oi) = ov {
+                overrides_used[oi] = true;
+                overrides[oi].1.clone()
+            } else if v.eq_ignore_ascii_case("currentcolor") {
                 current_color.to_string()
             } else if v.contains("var(") {
                 // SVG presentation attr stroke="var(--a)" - resvg neumi CSS vars,
@@ -726,12 +896,36 @@ fn serialize_svg(bx: &LayoutBox) -> Option<String> {
             }
             out.push('"');
         }
+        // Override atributu ktery na nodu vubec neni (path morph: <path> bez
+        // d, hodnotu dodava jen <animate values>) - append.
+        for (oi, (name, val)) in overrides.iter().enumerate() {
+            if overrides_used[oi] { continue; }
+            out.push(' ');
+            out.push_str(name);
+            out.push_str("=\"");
+            for c in val.chars() {
+                match c {
+                    '"' => out.push_str("&quot;"),
+                    '<' => out.push_str("&lt;"),
+                    '>' => out.push_str("&gt;"),
+                    '&' => out.push_str("&amp;"),
+                    _ => out.push(c),
+                }
+            }
+            out.push('"');
+        }
         let children = node.children.borrow();
         if children.is_empty() {
             out.push_str("/>");
         } else {
             out.push('>');
             for child in children.iter() {
+                // <animate>/<animateTransform> uz zpracovane do overrides -
+                // neserializovat (resvg by je stejne ignoroval).
+                let ct = child.tag_name().unwrap_or_default();
+                if ct == "animate" || ct == "animatetransform" || ct == "animatemotion" {
+                    continue;
+                }
                 walk(child, out, current_color);
             }
             out.push_str("</");
@@ -864,6 +1058,15 @@ fn emit_svg_children(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
                     src: key,
                     radius: 0.0,
                 });
+                // foreignObject: HTML obsah kresli normalni box cestou PRES
+                // bitmapu (resvg foreignObject preskakuje = cerny box).
+                for ch in &bx.children {
+                    if ch.tag.as_deref() == Some("foreignobject") {
+                        for inner in &ch.children {
+                            paint_box(inner, cmds, None);
+                        }
+                    }
+                }
                 return;
             }
         }

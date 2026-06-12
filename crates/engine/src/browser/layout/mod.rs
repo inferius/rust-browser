@@ -402,12 +402,22 @@ fn apply_tag_html_attrs(bx: &mut LayoutBox, node: &Rc<Node>) {
                     let fs = attr_f("font-size", 14.0);
                     (x, y - fs, fs * 8.0, fs)  // Approx text rect.
                 }
+                // HTML obsah v SVG: rect z attrs, deti layoutujeme nize
+                // normalnim block flow (paint je kresli pres SVG bitmapu,
+                // resvg foreignObject neumi = cerny box).
+                "foreignobject" => (
+                    attr_f("x", 0.0), attr_f("y", 0.0),
+                    attr_f("width", 0.0), attr_f("height", 0.0),
+                ),
                 _ => continue,
             };
             child.rect.x = bx.rect.x + cx_off;
             child.rect.y = bx.rect.y + cy_off;
             child.rect.width = cw;
             child.rect.height = ch;
+            if tag == "foreignobject" {
+                layout_dispatch(child);
+            }
         }
     }
     // Video tag: replaced element (zatim bez decode - jen layout box + placeholder).
