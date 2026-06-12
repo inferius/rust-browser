@@ -1,4 +1,4 @@
-//! `WebView` - per-stranka (per-tab) embeddable view.
+﻿//! `WebView` - per-stranka (per-tab) embeddable view.
 //!
 //! Drzi DOM, CSS stylesheets, JS interpreter, layout tree, scroll state +
 //! offscreen render target. Hostujici aplikace dostane handle na texturu po
@@ -1469,7 +1469,7 @@ impl WebView {
             .map(|v| v != "1" && !v.eq_ignore_ascii_case("true"))
             .unwrap_or(true);
 
-        // Phase 1: collect scripts (fetch external) - krátký interp borrow.
+        // Phase 1: collect scripts (fetch external) - krĂˇtkĂ˝ interp borrow.
         let mut scripts: Vec<(String, String)> = Vec::new();
         {
             let interp = self.interpreter.as_mut().unwrap();
@@ -2119,7 +2119,7 @@ impl WebView {
                     }
                     if let Some((node_id, grab_y, max_y, bar_y, bar_h)) = self.inner_v_drag {
                         // Thumb size invariant: vyresit z bar_h + max_scroll/vh - ale
-                        // jednodusší: thumb_h dynamic, recompute. Pouzij stored max_y
+                        // jednodusĹˇĂ­: thumb_h dynamic, recompute. Pouzij stored max_y
                         // jako auth source; thumb_h = bar_h * (bar_h / (bar_h + max_y))
                         // (= viewport / content)... ale potreba viewport_h boxu.
                         // bar_h = rect.height (= visible viewport per element).
@@ -3343,7 +3343,7 @@ impl WebView {
         }
         // Sync element_scroll_overrides z interp -> self.element_scroll. JS
         // assign `el.scrollTop = N` populates overrides. Bez tohoto JS-driven
-        // scroll per element nedosáhne layout/render.
+        // scroll per element nedosĂˇhne layout/render.
         if let Some(interp) = self.interpreter.as_ref() {
             let mut overrides = interp.element_scroll_overrides.borrow_mut();
             if !overrides.is_empty() {
@@ -4132,13 +4132,19 @@ impl WebView {
         // PERF: cely blok (collect_rects walk + rect_map.clone alokace) bezi jen
         // kdyz jsou nejake observery registrovane. Vetsina stranek zadne nema ->
         // skip = usetreny O(N) walk + 2 HashMap alokace per frame.
+        // ox/oy = kumulativni inner scroll offset predku. Bez nej se pozice
+        // targetu v inner scroll containeru (io-row demo) NEmenila pri
+        // scrollovani -> IO crossing nenastal -> "intersect fire jen jednou".
         fn collect_rects(bx: &crate::browser::layout::LayoutBox,
+                         ox: f32, oy: f32,
                          out: &mut std::collections::HashMap<usize, (f32, f32, f32, f32)>) {
             if let Some(n) = &bx.node {
                 let id = std::rc::Rc::as_ptr(n) as usize;
-                out.insert(id, (bx.rect.x, bx.rect.y, bx.rect.width, bx.rect.height));
+                out.insert(id, (bx.rect.x - ox, bx.rect.y - oy, bx.rect.width, bx.rect.height));
             }
-            for ch in &bx.children { collect_rects(ch, out); }
+            let cox = ox + bx.scroll_offset_x;
+            let coy = oy + bx.scroll_offset_y;
+            for ch in &bx.children { collect_rects(ch, cox, coy, out); }
         }
         let has_observers = self.interpreter.as_ref().map(|i|
             !i.resize_observers.borrow().is_empty()
@@ -4149,7 +4155,7 @@ impl WebView {
         if has_observers {
             let mut rect_map: std::collections::HashMap<usize, (f32, f32, f32, f32)> =
                 std::collections::HashMap::new();
-            collect_rects(&layout_root, &mut rect_map);
+            collect_rects(&layout_root, 0.0, 0.0, &mut rect_map);
             let viewport_rect = (self.scroll_x, self.scroll_y, viewport_w, viewport_h);
             let rect_map_ro = rect_map.clone();
             if let Some(interp) = self.interpreter.as_mut() {
@@ -5058,7 +5064,7 @@ impl WebView {
             self.layout_cache_key = None;
             self.cascade_cache_key = None;
             // Invalidate prev_root + element scroll cache. Prev layout boxes
-            // drzí rect.width / explicit_width z prev zoom - pres cache hit
+            // drzĂ­ rect.width / explicit_width z prev zoom - pres cache hit
             // pres subtree by aplikoval STARY viewport-relative dims (= inner
             // elements ne-wrappuji pri novem zoom uziejsim viewportu).
             self.last_layout_root = None;
@@ -5347,7 +5353,7 @@ impl WebView {
         }
     }
 
-    /// Select all - anchor (0, 0), current (huge, huge) -> celá stránka.
+    /// Select all - anchor (0, 0), current (huge, huge) -> celĂˇ strĂˇnka.
     pub fn select_all(&mut self) {
         let Some(interp) = &self.interpreter else { return };
         let doc = interp.document.borrow();
