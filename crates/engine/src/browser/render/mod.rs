@@ -753,8 +753,11 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
                                 push_gradient(&mut verts, *x, *y, *w, *h, *angle_deg, c0, c1, *radius);
                             }
                         }
-                        GradientKind::Radial { cx, cy, radius: grad_r } => {
-                            if stops_f.len() > 2 {
+                        GradientKind::Radial { cx, cy, radius: grad_r, circle } => {
+                            // circle = px KRUH -> CPU annuli tesselace (stejny
+                            // radius obe osy) i pro 2 stopy. Mode 6 shader
+                            // skaluje na box (ellipse) - pro circle spatne.
+                            if stops_f.len() > 2 || *circle {
                                 push_multi_stop_radial_gradient(&mut verts, *x, *y, *w, *h, *cx, *cy, *grad_r, &stops_f, *radius);
                             } else {
                                 push_radial_gradient(&mut verts, *x, *y, *w, *h, *cx, *cy, *grad_r, c0, c1, *radius);
@@ -1169,6 +1172,19 @@ fn apply_paint_animations_inner(box_: &mut crate::browser::layout::LayoutBox,
             // % resi border_radius_pct blok vyse; tady jen px/em hodnoty.
             if !v.contains('%') {
                 box_.border_radius = crate::browser::layout::parse_length(v);
+            }
+        }
+        // background-position animace (animated gradient: keyframes posouvaji
+        // pozici pres background-size > 100%). Bake do bg layeru - paint pak
+        // remapuje gradient stopy na okno boxu.
+        if let Some(bp) = styles.get("background-position") {
+            let pos = crate::browser::layout::parse_bg_position(bp);
+            if std::env::var("RWE_GRAD_DBG").is_ok() {
+                eprintln!("[GRAD] bake bg-position '{}' -> {:?} (layers={})",
+                    bp, pos, box_.backgrounds.len());
+            }
+            for layer in box_.backgrounds.iter_mut() {
+                layer.position = pos.clone();
             }
         }
         // INCREMENTAL LAYOUT: aplikuj animovanou width/height na rect kdyz
@@ -2781,8 +2797,15 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         // NEscrolluj stranku - jinak se inner thumb nehybal +
                         // "scrolluju strankou misto sekce".
                         let dy_inner = -logical_scroll;
+                        // App.mouse_x/y jsou CONTENT coords (CursorMoved pricita
+                        // scroll); try_inner_wheel_scroll ocekava VIEWPORT coords
+                        // (pricita scroll sam). Dvojite pricteni = hit-test mimo
+                        // -> target None -> wheel scrolloval stranku misto
+                        // vnitrniho overflow containeru (sekce 11).
+                        let vx = self.mouse_x - self.scroll_x();
+                        let vy = self.mouse_y - self.scroll_y();
                         let inner = self.webview.as_mut()
-                            .map(|w| w.try_inner_wheel_scroll(self.mouse_x, self.mouse_y, dy_inner))
+                            .map(|w| w.try_inner_wheel_scroll(vx, vy, dy_inner))
                             .unwrap_or(false);
                         if std::env::var("RWE_SCROLL_DBG").is_ok() {
                             eprintln!("[WHEEL] mouse=({:.0},{:.0}) dy_inner={:.1} inner_scrolled={}",

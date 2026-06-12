@@ -253,6 +253,29 @@ fn compute_fingerprints_inner(
                     if let Some(v) = n.attr("value") { v.hash(&mut h_full); v.hash(&mut h_struct); }
                 }
             }
+            // background-position (animated gradient posouva pozici per frame)
+            // - meni OBSAH textury, takze patri do structural_fp (damage +
+            // tile raster), ne jen full. Bez toho anim layer texture cache
+            // drzela staticky obraz.
+            for l in &bx.backgrounds {
+                if l.gradient.is_some() {
+                    let mut hp = |v: u32| { v.hash(&mut h_full); v.hash(&mut h_struct); };
+                    match &l.position {
+                        crate::browser::layout::BgPosition::Px(px, py) => {
+                            hp(px.to_bits()); hp(py.to_bits());
+                        }
+                        crate::browser::layout::BgPosition::Pct(px, py) => {
+                            hp(px.to_bits()); hp(py.to_bits());
+                        }
+                        crate::browser::layout::BgPosition::Mixed { x_px, x_pct, y_px, y_pct } => {
+                            hp(x_px.map(|v| v.to_bits()).unwrap_or(u32::MAX));
+                            hp(x_pct.map(|v| v.to_bits()).unwrap_or(u32::MAX));
+                            hp(y_px.map(|v| v.to_bits()).unwrap_or(u32::MAX));
+                            hp(y_pct.map(|v| v.to_bits()).unwrap_or(u32::MAX));
+                        }
+                    }
+                }
+            }
         }
     }
     // Children layer fingerprints (rekursivni signal).

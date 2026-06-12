@@ -2251,6 +2251,35 @@ pub fn interpolate_css_value(prop: &str, from: &str, to: &str, t: f32) -> Option
                 lf(c0[3], c1[3]) as f32 / 255.0));
         }
     }
+    // Genericka multi-cislo interpolace: "0% 50%" -> "37.4% 50%", "10px 4px"
+    // -> lerp per token (shodny pocet tokenu + jednotky). KLIC pro animovany
+    // background-position (gradient-shift keyframes) - drive None => hodnota
+    // drzela diskretne keyframe => animace "stoji".
+    let ftoks: Vec<&str> = from.split_whitespace().collect();
+    let ttoks: Vec<&str> = to.split_whitespace().collect();
+    if !ftoks.is_empty() && ftoks.len() == ttoks.len() {
+        let split_num = |s: &str| -> Option<(f32, String)> {
+            let unit_start = s.char_indices()
+                .find(|(_, c)| !(c.is_ascii_digit() || *c == '.' || *c == '-' || *c == '+'))
+                .map(|(i, _)| i)
+                .unwrap_or(s.len());
+            let (num, unit) = s.split_at(unit_start);
+            num.parse::<f32>().ok().map(|v| (v, unit.to_string()))
+        };
+        let mut out_toks: Vec<String> = Vec::with_capacity(ftoks.len());
+        let mut ok = true;
+        for (f, tt) in ftoks.iter().zip(ttoks.iter()) {
+            match (split_num(f), split_num(tt)) {
+                (Some((fv, fu)), Some((tv, tu))) if fu == tu => {
+                    out_toks.push(format!("{}{}", fv + (tv - fv) * t, fu));
+                }
+                _ => { ok = false; break; }
+            }
+        }
+        if ok {
+            return Some(out_toks.join(" "));
+        }
+    }
     None
 }
 
@@ -2992,7 +3021,19 @@ fn build_box_inner_impl(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &supe
                 .filter(|l| l.contains("linear-gradient(") || l.contains("radial-gradient(") || l.contains("conic-gradient("))
                 .count();
             if gradient_layers <= 1 {
-                bx.bg_gradient = parse_any_gradient(&c);
+                // Gradient jde layer cestou (size/position pro remap). Pokud
+                // expand_shorthand uz vyrobil background-image (builder nize
+                // pushne layer sam), NEpushovat duplikat (2x emit pres sebe).
+                let builder_covers = s.get("background-image")
+                    .map(|v| v.contains("-gradient(")).unwrap_or(false);
+                if !builder_covers {
+                    if let Some(g) = parse_any_gradient(&c) {
+                        let mut layer = BgLayer { gradient: Some(g), ..BgLayer::default() };
+                        if let Some(sz) = s.get("background-size") { layer.size = parse_bg_size(sz); }
+                        if let Some(p) = s.get("background-position") { layer.position = parse_bg_position(p); }
+                        bx.backgrounds.push(layer);
+                    }
+                }
             }
         } else {
             bx.bg_color = parse_color(&c);

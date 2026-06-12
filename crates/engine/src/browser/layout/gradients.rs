@@ -5,24 +5,27 @@ use super::{parse_color, BgGradient, BgGradientKind, split_top_level_commas};
 /// Parsuje linear-gradient / radial-gradient / conic-gradient.
 pub fn parse_any_gradient(s: &str) -> Option<BgGradient> {
     let s = s.trim();
-    // repeating-linear/radial/conic-gradient: drive vracelo None (parser prefix
-    // neznal) -> 11,12 se nevykreslily vubec. Strip 'repeating-' a parsuj jako
-    // neopakovany (aspon prvni cyklus). Plne opakovani (fract v shaderu) = TODO.
+    // repeating-*: stopy = jedna perioda; flag + expanzi pres box dela paint
+    // (resolve_gradient_stops_for_box - zna gradient line length pro px stopy).
+    let repeating = s.starts_with("repeating-");
     let s = s.strip_prefix("repeating-").unwrap_or(s);
-    if s.starts_with("linear-gradient(") {
-        let (angle, stops) = parse_linear_gradient(s)?;
-        return Some(BgGradient {
+    let mut g = if s.starts_with("linear-gradient(") {
+        let (angle, stops, any_px) = parse_linear_gradient(s)?;
+        BgGradient {
             kind: BgGradientKind::Linear { angle_deg: angle },
             stops,
-        });
-    }
-    if s.starts_with("radial-gradient(") {
-        return parse_radial_gradient(s);
-    }
-    if s.starts_with("conic-gradient(") {
-        return parse_conic_gradient(s);
-    }
-    None
+            repeating: false,
+            px_offsets: any_px,
+        }
+    } else if s.starts_with("radial-gradient(") {
+        parse_radial_gradient(s)?
+    } else if s.starts_with("conic-gradient(") {
+        parse_conic_gradient(s)?
+    } else {
+        return None;
+    };
+    g.repeating = repeating;
+    Some(g)
 }
 
 /// Je prvni cast gradientu CONFIG (tvar/pozice/uhel), ne color stop?
@@ -58,7 +61,10 @@ pub fn parse_radial_gradient(s: &str) -> Option<BgGradient> {
     let radius_pct: f32 = 1.0; // farthest-corner default
 
     let first = parts[0].trim();
+    let mut circle = false;
     if is_gradient_config_part(first) {
+        // Tvar: "circle" = px kruh; "ellipse"/nic = box-skalovana elipsa.
+        circle = first.split_whitespace().any(|t| t == "circle");
         // Detekuj "at <pos>"
         if let Some(at_idx) = first.find("at ") {
             let pos = first[at_idx + 3..].trim();
@@ -83,11 +89,13 @@ pub fn parse_radial_gradient(s: &str) -> Option<BgGradient> {
         start_idx = 1;
     }
 
-    let stops = parse_gradient_stops(&parts[start_idx..]);
+    let (stops, any_px) = parse_gradient_stops_px(&parts[start_idx..]);
     if stops.is_empty() { return None; }
     Some(BgGradient {
-        kind: BgGradientKind::Radial { cx_pct, cy_pct, radius_pct },
+        kind: BgGradientKind::Radial { cx_pct, cy_pct, radius_pct, circle },
         stops,
+        repeating: false,
+        px_offsets: any_px,
     })
 }
 
@@ -134,11 +142,13 @@ pub fn parse_conic_gradient(s: &str) -> Option<BgGradient> {
         start_idx = 1;
     }
 
-    let stops = parse_gradient_stops(&parts[start_idx..]);
+    let (stops, any_px) = parse_gradient_stops_px(&parts[start_idx..]);
     if stops.is_empty() { return None; }
     Some(BgGradient {
         kind: BgGradientKind::Conic { cx_pct, cy_pct, start_angle_deg },
         stops,
+        repeating: false,
+        px_offsets: any_px,
     })
 }
 
@@ -149,7 +159,9 @@ pub fn parse_conic_gradient(s: &str) -> Option<BgGradient> {
 /// - "color 33% 66%"    -> 2 stopy (CSS hard stop / band) - color@33% + color@66%
 /// Bez double-position handlingu se "color P1 P2" parsoval jako color="color P1"
 /// (invalid) -> cely stop DROPNUT = chybejici barevny pas v gradientu.
-fn parse_stop_part(trimmed: &str, i: usize, n: usize) -> Vec<(f32, [u8; 4])> {
+/// Vraci stopy + flag is_px per stop (PX pozice resolvuje paint proti
+/// gradient line length).
+fn parse_stop_part(trimmed: &str, i: usize, n: usize) -> Vec<(f32, [u8; 4], bool)> {
     // Conic deg pozice (color 90deg / color 90deg 180deg) - drive jen %, deg stopy
     // se dropovaly (parse_color("color 90deg") selhal) -> conic-quadrant prazdny.
     // deg/360 = fraction (0..1).
@@ -163,7 +175,28 @@ fn parse_stop_part(trimmed: &str, i: usize, n: usize) -> Vec<(f32, [u8; 4])> {
             let color_str: String = toks.iter().take_while(|t| !t.ends_with("deg"))
                 .cloned().collect::<Vec<_>>().join(" ");
             if let Some(c) = parse_color(color_str.trim()) {
-                return degs.into_iter().map(|d| (d, c)).collect();
+                return degs.into_iter().map(|d| (d, c, false)).collect();
+            }
+        }
+    }
+    // Pixelove pozice ("color 8px" / "color 0 10px" / "color 0px 8px"):
+    // uloz PX hodnoty + is_px flag (resolve v paintu). Bez toho repeating
+    // gradienty s px perioudou nemely jak fungovat.
+    if trimmed.contains("px") || trimmed.split_whitespace().count() >= 2 {
+        let toks: Vec<&str> = trimmed.split_whitespace().collect();
+        let mut pxs: Vec<f32> = Vec::new();
+        let mut color_end = toks.len();
+        for (ti, t) in toks.iter().enumerate() {
+            let num = t.strip_suffix("px").unwrap_or(t);
+            if let Ok(v) = num.parse::<f32>() {
+                if color_end == toks.len() { color_end = ti; }
+                pxs.push(v);
+            }
+        }
+        if !pxs.is_empty() && trimmed.contains("px") && color_end > 0 {
+            let color_str = toks[..color_end].join(" ");
+            if let Some(c) = parse_color(color_str.trim()) {
+                return pxs.into_iter().map(|p| (p, c, true)).collect();
             }
         }
     }
@@ -177,7 +210,7 @@ fn parse_stop_part(trimmed: &str, i: usize, n: usize) -> Vec<(f32, [u8; 4])> {
         let p2: f32 = trimmed[p2_start..last].trim().parse().unwrap_or(0.0) / 100.0;
         let color_str = trimmed[..p1_start].trim();
         return match parse_color(color_str) {
-            Some(c) => vec![(p1, c), (p2, c)],
+            Some(c) => vec![(p1, c, false), (p2, c, false)],
             None => vec![],
         };
     }
@@ -187,39 +220,36 @@ fn parse_stop_part(trimmed: &str, i: usize, n: usize) -> Vec<(f32, [u8; 4])> {
         (trimmed[..space_idx].trim().to_string(), pct / 100.0)
     } else {
         let default_offset = if n <= 1 { 0.0 } else { i as f32 / (n - 1) as f32 };
-        // Pixelove pozice ("color px" / "color px1 px2"): nelze resolvnout na
-        // fraction bez velikosti boxu (gradient line length) -> extrahuj jen
-        // color (leading tokeny pred prvnim cislem/px) + default offset. Bez
-        // tohoto parse_color celeho "#000 0 10px" selhal -> stop dropnut ->
-        // repeating-linear/radial s px = blank box.
-        let toks: Vec<&str> = trimmed.split_whitespace().collect();
-        let color_end = toks.iter().position(|t| {
-            t.ends_with("px")
-                || t.chars().next().map(|c| c.is_ascii_digit() || c == '-' || c == '.').unwrap_or(false)
-        }).unwrap_or(toks.len());
-        if color_end == 0 {
-            (trimmed.to_string(), default_offset)
-        } else {
-            (toks[..color_end].join(" "), default_offset)
-        }
+        (trimmed.to_string(), default_offset)
     };
     match parse_color(&color_str) {
-        Some(c) => vec![(offset, c)],
+        Some(c) => vec![(offset, c, false)],
         None => vec![],
     }
 }
 
-fn parse_gradient_stops(parts: &[&str]) -> Vec<(f32, [u8; 4])> {
+/// Vraci (stops bez px flagu, any_px). Pri mixu px + frakce v jednom gradientu
+/// se frakcni stopy ponechaji (paint deli px stopy line length - mix je
+/// vzacny, aproximace OK).
+fn parse_gradient_stops_px(parts: &[&str]) -> (Vec<(f32, [u8; 4])>, bool) {
     let mut stops: Vec<(f32, [u8; 4])> = Vec::new();
+    let mut any_px = false;
     let n = parts.len();
     for (i, p) in parts.iter().enumerate() {
-        stops.extend(parse_stop_part(p.trim(), i, n));
+        for (o, c, is_px) in parse_stop_part(p.trim(), i, n) {
+            any_px |= is_px;
+            stops.push((o, c));
+        }
     }
-    stops
+    (stops, any_px)
 }
 
-/// Parse linear-gradient(angle, color, color, ...) -> (angle_deg, stops).
-pub fn parse_linear_gradient(s: &str) -> Option<(f32, Vec<(f32, [u8; 4])>)> {
+fn parse_gradient_stops(parts: &[&str]) -> Vec<(f32, [u8; 4])> {
+    parse_gradient_stops_px(parts).0
+}
+
+/// Parse linear-gradient(angle, color, color, ...) -> (angle_deg, stops, any_px).
+pub fn parse_linear_gradient(s: &str) -> Option<(f32, Vec<(f32, [u8; 4])>, bool)> {
     let s = s.trim();
     let inner = s.strip_prefix("linear-gradient(")?.strip_suffix(')')?;
     // Split na comma respektujici parentheses
@@ -249,14 +279,10 @@ pub fn parse_linear_gradient(s: &str) -> Option<(f32, Vec<(f32, [u8; 4])>)> {
         start_idx = 1;
     }
 
-    let mut stops: Vec<(f32, [u8; 4])> = Vec::new();
-    let n = parts.len() - start_idx;
-    for (i, p) in parts[start_idx..].iter().enumerate() {
-        // "red", "red 50%" nebo "red 33% 66%" (hard stop = 2 stopy) - sdileny parser.
-        stops.extend(parse_stop_part(p.trim(), i, n));
-    }
+    // "red", "red 50%", "red 33% 66%" (hard stop) i "red 8px" - sdileny parser.
+    let (stops, any_px) = parse_gradient_stops_px(&parts[start_idx..]);
     if stops.is_empty() { return None; }
-    Some((angle, stops))
+    Some((angle, stops, any_px))
 }
 
 #[cfg(test)]

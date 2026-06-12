@@ -8,13 +8,21 @@ use super::parse_length;
 pub struct BgGradient {
     pub kind: BgGradientKind,
     pub stops: Vec<(f32, [u8; 4])>,
+    /// repeating-*-gradient: stopy = jedna perioda; paint je expanduje pres
+    /// cely box (offset += k * perioda).
+    pub repeating: bool,
+    /// Offsety ve `stops` jsou v PX (ne frakce 0..1) - resolvuje paint proti
+    /// gradient line length / radiusu (parse box dims nezna).
+    pub px_offsets: bool,
 }
 
 #[derive(Debug, Clone)]
 pub enum BgGradientKind {
     Linear { angle_deg: f32 },
-    /// cx/cy/radius v procentech (0..1). radius_pct = polomer relativni k farthest-corner.
-    Radial { cx_pct: f32, cy_pct: f32, radius_pct: f32 },
+    /// cx/cy/radius v procentech (0..1). radius_pct = polomer relativni k
+    /// farthest-corner. `circle` = KRUH (stejny px radius obe osy);
+    /// false = ellipse (CSS default, skalovana na box).
+    Radial { cx_pct: f32, cy_pct: f32, radius_pct: f32, circle: bool },
     /// start_angle_deg: poradi od 12 hod. cx/cy v procentech.
     Conic { cx_pct: f32, cy_pct: f32, start_angle_deg: f32 },
 }

@@ -4,6 +4,54 @@
 use std::rc::Rc;
 use super::layout::{LayoutBox, TextAlign, BgPosition, BgSize};
 
+/// Resolvuje gradient stopy pro konkretni box: px offsety -> frakce
+/// (gradient line length per spec |W sin A| + |H cos A| pro linear,
+/// farthest-corner radius pro radial) + repeating expanze (stopy = perioda,
+/// opakuji se pres 0..1; cap 96 stop).
+pub(crate) fn resolve_gradient_stops_for_box(
+    g: &crate::browser::layout::BgGradient,
+    w: f32, h: f32,
+) -> Vec<(f32, [u8; 4])> {
+    use crate::browser::layout::BgGradientKind;
+    let mut stops = g.stops.clone();
+    if g.px_offsets {
+        let len = match &g.kind {
+            BgGradientKind::Linear { angle_deg } => {
+                let r = angle_deg.to_radians();
+                (w * r.sin()).abs() + (h * r.cos()).abs()
+            }
+            BgGradientKind::Radial { cx_pct, cy_pct, radius_pct, .. } => {
+                let cx = w * cx_pct;
+                let cy = h * cy_pct;
+                let dx = cx.abs().max((w - cx).abs());
+                let dy = cy.abs().max((h - cy).abs());
+                (dx * dx + dy * dy).sqrt() * radius_pct.max(0.0001)
+            }
+            // Conic px nedava smysl (uhlova osa) - nech 1:1.
+            BgGradientKind::Conic { .. } => 1.0,
+        }.max(1.0);
+        for s in stops.iter_mut() { s.0 /= len; }
+    }
+    if g.repeating && stops.len() >= 2 {
+        let first_o = stops.first().map(|s| s.0).unwrap_or(0.0);
+        let last_o = stops.last().map(|s| s.0).unwrap_or(0.0);
+        let period = last_o - first_o;
+        if period > 1e-4 && period < 1.0 {
+            let base = stops.clone();
+            let mut out: Vec<(f32, [u8; 4])> = Vec::new();
+            let mut k = 0usize;
+            while first_o + (k as f32) * period < 1.0 && out.len() < 96 {
+                for (o, c) in &base {
+                    out.push((o + (k as f32) * period, *c));
+                }
+                k += 1;
+            }
+            stops = out;
+        }
+    }
+    stops
+}
+
 /// Vypocti final rozmer background image podle bg-size.
 /// Pro `cover` / `contain` potrebujeme znat puvodni rozmer - default 100x100 jako placeholder
 /// (skutecny rozmer load-time z image cache, ale paint nevidi cache).
@@ -156,8 +204,10 @@ pub enum GradientKind {
     /// Linearni gradient. angle_deg: 0=nahoru, 90=doprava, 180=dolu, 270=doleva.
     Linear { angle_deg: f32 },
     /// Radialni gradient od stredu k okraji.
-    /// center_pct = (cx, cy) v procentech 0..1, radius = poloomer v px.
-    Radial { cx: f32, cy: f32, radius: f32 },
+    /// cx/cy = stred v px (abs), radius = polomer v px.
+    /// circle: KRUH (px annuli tesselace) - false = ellipse (mode 6 shader,
+    /// skalovana na box).
+    Radial { cx: f32, cy: f32, radius: f32, circle: bool },
     /// Conic gradient - barva podle uhlu od stredu.
     Conic { cx: f32, cy: f32, start_angle_deg: f32 },
 }
@@ -2035,7 +2085,7 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
             } else {
             let kind = match g.kind {
                 BgGradientKind::Linear { angle_deg } => GradientKind::Linear { angle_deg },
-                BgGradientKind::Radial { cx_pct, cy_pct, radius_pct } => {
+                BgGradientKind::Radial { cx_pct, cy_pct, radius_pct, circle } => {
                     let cx = bx.rect.x + bx.rect.width  * cx_pct;
                     let cy = bx.rect.y + bx.rect.height * cy_pct;
                     // Farthest-corner od gradient CENTRA (ne box-center half-diag) -
@@ -2043,7 +2093,7 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
                     let dx = (cx - bx.rect.x).abs().max((bx.rect.x + bx.rect.width - cx).abs());
                     let dy = (cy - bx.rect.y).abs().max((bx.rect.y + bx.rect.height - cy).abs());
                     let farthest = (dx * dx + dy * dy).sqrt();
-                    GradientKind::Radial { cx, cy, radius: farthest * radius_pct }
+                    GradientKind::Radial { cx, cy, radius: farthest * radius_pct, circle }
                 }
                 BgGradientKind::Conic { cx_pct, cy_pct, start_angle_deg } => {
                     let cx = bx.rect.x + bx.rect.width  * cx_pct;
@@ -2051,6 +2101,28 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
                     GradientKind::Conic { cx, cy, start_angle_deg }
                 }
             };
+            // Px stopy -> frakce + repeating expanze (resolve zna box dims).
+            let mut eff_stops = resolve_gradient_stops_for_box(g, bx.rect.width, bx.rect.height);
+            // background-size > box + background-position (animated gradient):
+            // remap stop offsetu na okno boxu v bg-image prostoru. Presne pro
+            // horizontalni/vertikalni gradienty (90/270deg - testovaci case),
+            // aproximace pro sikme.
+            if matches!(g.kind, BgGradientKind::Linear { .. }) {
+                let (img_w, _img_h) = compute_bg_size(&layer.size, bx.rect.width, bx.rect.height);
+                if std::env::var("RWE_GRAD_DBG").is_ok() && bx.backgrounds.len() == 1 {
+                    eprintln!("[GRAD-REMAP] img_w={:.0} box_w={:.0} size={:?} pos={:?}",
+                        img_w, bx.rect.width, layer.size, layer.position);
+                }
+                if img_w > bx.rect.width + 0.5 {
+                    let (img_x, _img_y) = compute_bg_position(&layer.position,
+                        bx.rect.width, bx.rect.height, img_w, _img_h, bx.rect.x, bx.rect.y);
+                    let sx = img_w / bx.rect.width.max(1.0);
+                    let shift = (img_x - bx.rect.x) / bx.rect.width.max(1.0);
+                    for s in eff_stops.iter_mut() {
+                        s.0 = s.0 * sx + shift;
+                    }
+                }
+            }
             // clip-path circle/ellipse/inset -> emit gradient do clip rectu +
             // clip_radius (rounded-rect SDF = kruh/elipsa/zmenseny rect).
             let is_poly = matches!(&bx.clip_path, Some(ClipPath::Polygon(_)));
@@ -2062,7 +2134,7 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
             cmds.push(DisplayCommand::Gradient {
                 x: gx, y: gy, w: gw, h: gh,
                 kind,
-                stops: g.stops.iter().map(|(o, c)| (*o, with_alpha(*c))).collect(),
+                stops: eff_stops.iter().map(|(o, c)| (*o, with_alpha(*c))).collect(),
                 radius: grad_radius,
             });
             }
@@ -2132,14 +2204,14 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         } else {
         let kind = match g.kind {
             BgGradientKind::Linear { angle_deg } => GradientKind::Linear { angle_deg },
-            BgGradientKind::Radial { cx_pct, cy_pct, radius_pct } => {
+            BgGradientKind::Radial { cx_pct, cy_pct, radius_pct, circle } => {
                 let cx = bx.rect.x + bx.rect.width  * cx_pct;
                 let cy = bx.rect.y + bx.rect.height * cy_pct;
                 // Farthest-corner od gradient CENTRA (ne box-center half-diag).
                 let dx = (cx - bx.rect.x).abs().max((bx.rect.x + bx.rect.width - cx).abs());
                 let dy = (cy - bx.rect.y).abs().max((bx.rect.y + bx.rect.height - cy).abs());
                 let radius = (dx * dx + dy * dy).sqrt() * radius_pct;
-                GradientKind::Radial { cx, cy, radius }
+                GradientKind::Radial { cx, cy, radius, circle }
             }
             BgGradientKind::Conic { cx_pct, cy_pct, start_angle_deg } => {
                 let cx = bx.rect.x + bx.rect.width  * cx_pct;
@@ -2147,6 +2219,7 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
                 GradientKind::Conic { cx, cy, start_angle_deg }
             }
         };
+        let eff_stops = resolve_gradient_stops_for_box(g, bx.rect.width, bx.rect.height);
         // clip-path circle/ellipse/inset -> emit do clip rectu + clip_radius.
         let is_poly = matches!(&bx.clip_path, Some(ClipPath::Polygon(_)));
         let (gx, gy, gw, gh, grad_radius) = if bx.clip_path.is_some() && !is_poly {
@@ -2157,7 +2230,7 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         cmds.push(DisplayCommand::Gradient {
             x: gx, y: gy, w: gw, h: gh,
             kind,
-            stops: g.stops.iter().map(|(o, c)| (*o, with_alpha(*c))).collect(),
+            stops: eff_stops.iter().map(|(o, c)| (*o, with_alpha(*c))).collect(),
             radius: grad_radius,
         });
         }
