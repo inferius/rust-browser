@@ -4236,8 +4236,10 @@ impl WebView {
             }
         }
         // Layout dump diag - per-WV 1x kdyz dom_version >= 100 (DOM populated).
+        let dump_force = std::env::var("RWE_LAYOUT_DUMP").map(|v| v == "force").unwrap_or(false);
         if std::env::var("RWE_LAYOUT_DUMP").is_ok() && !self.layout_dumped
-            && self.interpreter.as_ref().map(|i| i.dom_version()).unwrap_or(0) > 50
+            && (dump_force
+                || self.interpreter.as_ref().map(|i| i.dom_version()).unwrap_or(0) > 50)
         {
             self.layout_dumped = true;
             fn dump_box(bx: &crate::browser::layout::LayoutBox, depth: usize, max_depth: usize) {

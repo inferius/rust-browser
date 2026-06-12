@@ -1,4 +1,4 @@
-/// Grid layout - vlastni implementace.
+﻿/// Grid layout - vlastni implementace.
 ///
 /// Inspirovano `taffy` (MIT licence) + CSS Grid L1 spec
 /// (https://www.w3.org/TR/css-grid-1/).
@@ -9,7 +9,7 @@
 
 use super::super::layout::LayoutBox;
 
-// ─── Placement helpers (M3: dedupe 6 kopii) ─────────────────────────────
+// â”€â”€â”€ Placement helpers (M3: dedupe 6 kopii) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 //
 // Vsechny placement bloky vypocitavaly stejnou trojici (explicit_pos, span,
 // flow-fill) inline. Trojce extrahovana sem; auto-flow column varianta
@@ -79,7 +79,7 @@ fn grid_cells_free(occupied: &[bool], r: usize, c: usize, sr: usize, sc: usize, 
 }
 
 /// Auto-place do row-major occupied flat grid. cursor je sdileny mezi calls
-/// (CSS auto-cursor §8.5). Span-aware: cely span (span_row x span_col) musi
+/// (CSS auto-cursor Â§8.5). Span-aware: cely span (span_row x span_col) musi
 /// byt volny a nesmi pretect cols. dense=true -> hleda od zacatku (backfill
 /// der za vetsimi spany), cursor NEposouva; dense=false (sparse) -> hleda od
 /// cursoru, posune ho za umisteni. Driv: kontroloval jen top-left bunku (span
@@ -199,16 +199,16 @@ pub fn layout_grid(bx: &mut LayoutBox) {
     let pad_r = bx.padding_right.unwrap_or(bx.padding) + bw_r;
     let pad_t = bx.padding_top.unwrap_or(bx.padding) + bw_t;
     let pad_b = bx.padding_bottom.unwrap_or(bx.padding) + bw_b;
-    let inner_x = bx.rect.x + pad_l + bx.margin;
-    let inner_y = bx.rect.y + pad_t + bx.margin;
+    let inner_x = bx.rect.x + pad_l; // margin uz aplikoval parent do rect
+    let inner_y = bx.rect.y + pad_t;
     // Scrollbar takes space.
     let (scrollbar_w, scrollbar_h) = super::scrollbar_takes(bx);
-    let inner_w = (bx.rect.width - pad_l - pad_r - 2.0 * bx.margin - scrollbar_w).max(0.0);
-    let inner_h = (bx.rect.height - pad_t - pad_b - 2.0 * bx.margin - scrollbar_h).max(0.0);
+    let inner_w = (bx.rect.width - pad_l - pad_r - scrollbar_w).max(0.0);
+    let inner_h = (bx.rect.height - pad_t - pad_b - scrollbar_h).max(0.0);
 
     if bx.children.is_empty() { return; }
 
-    // CSS Grid §8.1: resolve NAMED grid areas (grid-area: header) proti parent
+    // CSS Grid Â§8.1: resolve NAMED grid areas (grid-area: header) proti parent
     // grid-template-areas -> nastav row/column line cisla childu. Driv se
     // template-areas jen ukladal jako string + named grid-area se ignorovala =
     // items auto-placed = rozbity layout (header/sidebar/footer spatne).
@@ -231,7 +231,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
     let (row_gap, col_gap) = super::resolve_gaps(bx, inner_w, inner_h);
 
     // grid-auto-flow detect early.
-    // dense varianta (CSS Grid §8.5): backfill der za vetsimi spany. Predava
+    // dense varianta (CSS Grid Â§8.5): backfill der za vetsimi spany. Predava
     // se do grid_flow_place + needed_from_placement (auto branch zacina od 0).
     let auto_flow_str = bx.grid_auto_flow.trim();
     let column_flow = auto_flow_str.contains("column");
@@ -853,7 +853,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
             };
             col_tracks[c_idx] = track_size;
         }
-        // Span items: distribute min/max content extra space (CSS Grid §11.5.5).
+        // Span items: distribute min/max content extra space (CSS Grid Â§11.5.5).
         // Spustit PRED redistribute leftover - jinak by se tracky uz inflated rovnomerne.
         for (i, &real_idx) in in_flow.iter().enumerate() {
             let (_, col, _, span_col) = item_placement[i];
@@ -1122,7 +1122,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                         }
                     }
                 }
-                // Maximize non-fr minmax tracks PRED fr distribute (CSS Grid §11.5).
+                // Maximize non-fr minmax tracks PRED fr distribute (CSS Grid Â§11.5).
                 // Grow minmax(min, max_finite) az do max, beraj z available_for_fr.
                 if available_for_fr > 0.0 {
                     for c_idx in 0..cols {
@@ -1365,7 +1365,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                 row_tracks = new_sizes;
             }
         }
-        // Span items rows distribute (CSS §11.5.5): pri item span_row > 1 expand row tracks.
+        // Span items rows distribute (CSS Â§11.5.5): pri item span_row > 1 expand row tracks.
         let mut occupied_d2: Vec<bool> = vec![false; rows.max(1) * cols.max(1)];
         let mut auto_cursor_d2 = 0usize;
         for &real_idx in in_flow.iter() {
@@ -1467,7 +1467,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         if i + 1 < rows { y_cursor += row_gap + ac_between; }
     }
 
-    // Place items - multi-pass podle CSS Grid §8.5 auto-placement algoritmu:
+    // Place items - multi-pass podle CSS Grid Â§8.5 auto-placement algoritmu:
     // Pass 1: items s definite row + col (oba explicitni)
     // Pass 2: items s definite row, auto col (row-locked)
     // Pass 3: items s definite col, auto row (col-locked)
@@ -1486,7 +1486,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
             ((end - start).max(1)) as usize
         } else { 1 }
     };
-    // Klasifikace items per CSS Grid §8.5:
+    // Klasifikace items per CSS Grid Â§8.5:
     //   pass 1: oba osy definite
     //   pass 2: row-locked (only row definite, doc order)
     //   pass 3: col-locked + auto (doc order combined)
@@ -2279,7 +2279,7 @@ enum Track {
     ///   0.0..f32::MAX  = px (resp. fr cislo pri max_je_fr=true)
     /// f32::INFINITY je v max smyslu "no upper bound" (max-content equivalent).
     ///
-    /// CSS Grid §7.2 - migrace na proper enum MinSizing/MaxSizing je TODO,
+    /// CSS Grid Â§7.2 - migrace na proper enum MinSizing/MaxSizing je TODO,
     /// pro ted helpers `sentinel_*` decoduji kazdy sentinel v jednom miste.
     Minmax(f32, f32, bool /* max je fr */),
     /// fit-content(<value>): clamp(min-content, max(min-content, arg), max-content).
@@ -2344,7 +2344,7 @@ fn parse_track_tokens_with_autofit(s: &str, container: f32, gap: f32) -> (Vec<Tr
                 let inner_tracks = inner[comma_idx+1..].trim();
                 let sub_tokens = parse_track_tokens(inner_tracks);
                 // Pro auto-fill/auto-fit: minmax(min_px, X) pouzije min_px jako
-                // intrinsic min (per CSS Grid §7.2.2.1). Bez toho by minmax(120,1fr)
+                // intrinsic min (per CSS Grid Â§7.2.2.1). Bez toho by minmax(120,1fr)
                 // pri auto-fill = sub_size 0 -> count=1 -> 1 sloupec, items
                 // collapse na ~0 px sirky misto N sloupcu po 120 px.
                 let sub_size: f32 = sub_tokens.iter().map(|t| match t {
@@ -2420,7 +2420,7 @@ fn parse_track_tokens_sized(s: &str, container: f32, gap: f32) -> Vec<Track> {
                 let inner_tracks = inner[comma_idx+1..].trim();
                 let sub_tokens = parse_track_tokens(inner_tracks);
                 // Pro auto-fill/auto-fit: minmax(min_px, X) pouzije min_px jako
-                // intrinsic min (per CSS Grid §7.2.2.1). Bez toho by minmax(120,1fr)
+                // intrinsic min (per CSS Grid Â§7.2.2.1). Bez toho by minmax(120,1fr)
                 // pri auto-fill = sub_size 0 -> count=1 -> 1 sloupec, items
                 // collapse na ~0 px sirky misto N sloupcu po 120 px.
                 let sub_size: f32 = sub_tokens.iter().map(|t| match t {

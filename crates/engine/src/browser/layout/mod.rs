@@ -5493,10 +5493,15 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
                     .sum::<f32>();
                 // Pri replaced inner (img/svg/picture) prefer real width. Pri text
                 // jen children pouzij text_w. Pri kombinaci max + sum text content.
+                // text_w > 0: POUZE text_w (zadny font_size floor) - nested span
+                // "0" miri 6.7px, floor 11.2 nafoukl run pres intrinsic sirku
+                // parenta -> exact-fit zalomil. Floor jen pro empty content.
                 let combined = if replaced_w > 0.0 {
                     replaced_w.max(text_w)
+                } else if text_w > 0.0 {
+                    text_w
                 } else {
-                    text_w.max(font_size)
+                    font_size
                 };
                 combined + pad_l + pad_r
             });
@@ -5506,7 +5511,10 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
             // content_h zahrnula pad bottom.
             line_height = line_height.max(element_h);
             let nowrap_ib = bx.white_space_nowrap || bx.children[idx].white_space_nowrap;
-            if !nowrap_ib && cursor_x + estimated_w > inner_x + inner_w && cursor_x > inner_x {
+            // +0.5 epsilon (parita s text-word wrap vyse): intrinsic max-content
+            // width parenta muze byt o zlomek px mensi nez soucet runu (rounding)
+            // -> exact-fit obsah by jinak zalomil ("0" v MutationObserver demo).
+            if !nowrap_ib && cursor_x + estimated_w > inner_x + inner_w + 0.5 && cursor_x > inner_x {
                 cursor_y += line_height;
                 cursor_x = inner_x;
             }
@@ -5623,6 +5631,18 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
                 }
             } else {
                 // Non-replaced / has explicit dim -> pouziva existing path.
+                // Content fallback: sum sirek text descendantu (nested inline
+                // span "0"). Drive fallback font_size (11.2 pro 0.7rem) misto
+                // zmerenych 6.7 -> soucet runu presahl intrinsic width parenta
+                // -> exact-fit nested span zalomil na novy radek.
+                fn inline_subtree_text_w(b: &LayoutBox) -> f32 {
+                    if let Some(t) = &b.text {
+                        return measure_text_width_full(t, b.font_size,
+                            b.effective_weight(), b.italic, &b.font_family,
+                            b.letter_spacing);
+                    }
+                    b.children.iter().map(inline_subtree_text_w).sum()
+                }
                 let w_calc = if let Some(px) = bx_clone.explicit_width {
                     px
                 } else if let Some(pct) = bx_clone.width_pct {
@@ -5630,7 +5650,11 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
                 } else if bx_clone.rect.width > 0.0 {
                     bx_clone.rect.width
                 } else {
-                    font_size
+                    let tw = inline_subtree_text_w(&bx_clone);
+                    if tw > 0.0 {
+                        tw + bx_clone.padding_left.unwrap_or(bx_clone.padding)
+                           + bx_clone.padding_right.unwrap_or(bx_clone.padding)
+                    } else { font_size }
                 };
                 let h_calc = if let Some(px) = bx_clone.explicit_height {
                     px
@@ -5664,8 +5688,10 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
             }
             // white-space: nowrap na rodici = inline elementy se nelamou
             // (marquee: spany + texty musi zustat na 1 radku).
+            // +0.5 epsilon: exact-fit nested span (intrinsic width parenta =
+            // presny soucet runu) nesmi zalomit kvuli float roundingu.
             let nowrap_el = bx.white_space_nowrap || bx.children[idx].white_space_nowrap;
-            if !nowrap_el && cursor_x + w > inner_x + inner_w && cursor_x > inner_x {
+            if !nowrap_el && cursor_x + w > inner_x + inner_w + 0.5 && cursor_x > inner_x {
                 cursor_y += line_height;
                 cursor_x = inner_x;
             }

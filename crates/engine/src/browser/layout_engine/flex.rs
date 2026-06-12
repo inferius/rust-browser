@@ -1,4 +1,4 @@
-/// Flex layout - vlastni implementace.
+﻿/// Flex layout - vlastni implementace.
 ///
 /// Inspirovano `taffy` (MIT licence, https://github.com/DioxusLabs/taffy/blob/main/src/compute/flexbox/mod.rs)
 /// + CSS Flexbox L1 spec (https://www.w3.org/TR/css-flexbox-1/).
@@ -36,8 +36,8 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     let pad_r = bx.padding_right.unwrap_or(bx.padding) + bw_r;
     let pad_t = bx.padding_top.unwrap_or(bx.padding) + bw_t;
     let pad_b = bx.padding_bottom.unwrap_or(bx.padding) + bw_b;
-    let inner_x = bx.rect.x + pad_l + bx.margin;
-    let inner_y = bx.rect.y + pad_t + bx.margin;
+    let inner_x = bx.rect.x + pad_l; // margin uz aplikoval parent do rect
+    let inner_y = bx.rect.y + pad_t;
     // Pri taffy_intrinsic_mode + rect.width=0 (pre-pass) pouzij min-width jako floor
     // pro container width - jinak by se items wrapovaly do nul-sirky.
     // ResolveCtx pro self: parent_size 0 (zatim neznamy - tyto values typicky px
@@ -50,7 +50,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     // Scrollbar takes space: overflow-y scroll/auto -> right scrollbar reduces inner_w.
     // overflow-x scroll/auto -> bottom scrollbar reduces inner_h.
     let (scrollbar_w, scrollbar_h) = super::scrollbar_takes(bx);
-    let inner_w = (effective_w - pad_l - pad_r - 2.0 * bx.margin - scrollbar_w).max(0.0);
+    let inner_w = (effective_w - pad_l - pad_r - scrollbar_w).max(0.0);
 
     // CSS flex props - uz typed v cascade. Per-frame parse zmizel.
     let direction = bx.flex_direction;
@@ -58,13 +58,13 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     let justify = bx.justify_content;
     let align = bx.align_items;
     // Re-resolve gap pct proti inner_w/inner_h (po vypoctu pad+border).
-    let inner_h_for_gap = (bx.rect.height - pad_t - pad_b - 2.0 * bx.margin - scrollbar_h).max(0.0);
+    let inner_h_for_gap = (bx.rect.height - pad_t - pad_b - scrollbar_h).max(0.0);
     let (row_gap, col_gap) = super::resolve_gaps(bx, inner_w, inner_h_for_gap);
 
     if bx.children.is_empty() { return; }
 
     // 0. Collect in-flow indices (abs/fixed jdou mimo flex flow, display:none vyradit zcela)
-    // CSS Flexbox L1 §5.4.1: items se sortuji dle `order` property pred line
+    // CSS Flexbox L1 Â§5.4.1: items se sortuji dle `order` property pred line
     // collection. Stable sort = stejny order zachovava DOM poradi.
     // Inspired by Chromium core/layout/flexible_box_algorithm.cc::OrderedItems.
     let mut in_flow: Vec<usize> = bx.children.iter().enumerate()
@@ -87,7 +87,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     // size pred flex algoritmem (container width uz znama -> % resolvitelne).
     // Pak flex bere jako definite (jinak intrinsic content override prepise width).
     if !bx.taffy_intrinsic_mode && bx.rect.width > 0.0 {
-        let inner_w = (bx.rect.width - pad_l - pad_r - 2.0 * bx.margin).max(0.0);
+        let inner_w = (bx.rect.width - pad_l - pad_r).max(0.0);
         let inner_h = (bx.rect.height - bx.padding_top.unwrap_or(bx.padding)
             - bx.padding_bottom.unwrap_or(bx.padding)).max(0.0);
         let (vw, vh) = crate::browser::layout::current_layout_viewport();
@@ -138,11 +138,11 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 // Pri content-box ch + width_pct: explicit_width uz inflated. Pouzij ho.
                 if !ch.box_sizing.is_border_box() {
                     ch.explicit_width.unwrap_or_else(|| {
-                        let inner_w_pct = (bx.rect.width - pad_l - pad_r - 2.0 * bx.margin).max(0.0);
+                        let inner_w_pct = (bx.rect.width - pad_l - pad_r).max(0.0);
                         inner_w_pct * p
                     })
                 } else {
-                    let inner_w_pct = (bx.rect.width - pad_l - pad_r - 2.0 * bx.margin).max(0.0);
+                    let inner_w_pct = (bx.rect.width - pad_l - pad_r).max(0.0);
                     inner_w_pct * p
                 }
             } else { 0.0 }
@@ -157,13 +157,13 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 let is_col = matches!(bx.flex_direction,
                     FlexDirection::Column | FlexDirection::ColumnReverse);
                 if is_col && bx.rect.width > 0.0 {
-                    (bx.rect.width - pad_l - pad_r - 2.0 * bx.margin).max(0.0)
+                    (bx.rect.width - pad_l - pad_r).max(0.0)
                 } else { 0.0 }
             })
         };
         ch.rect.height = if let Some(p) = ch.height_pct {
             if parent_intrinsic { 0.0 } else if bx.rect.height > 0.0 {
-                let inner_h_pct = (bx.rect.height - pad_t - pad_b - 2.0 * bx.margin).max(0.0);
+                let inner_h_pct = (bx.rect.height - pad_t - pad_b).max(0.0);
                 inner_h_pct * p
             } else { 0.0 }
         } else { ch.explicit_height.unwrap_or(0.0) };
@@ -330,17 +330,22 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             }
             0.0
         }
+        // est_h_is_content: hodnota je CONTENT vyska (line box) - border-box est
+        // pak musi pricist padding+border. Bez toho button (line 14 + pad 12 +
+        // border 2 = 28) dostal est 14 -> line cross 14 -> container height 14,
+        // items pretekaly pod container (MutationObserver demo).
+        let mut est_h_is_content = false;
         let mut est_h = if pct_h_skip || pct_h_indefinite {
             if ch.text.is_some() {
                 if ch.taffy_mode { 10.0 } else { ch.font_size * 1.4 }
             } else if ch.rect.height > 0.0 { ch.rect.height }
-            else { intrinsic_text_h(ch) }
-        } else { ch.explicit_height.unwrap_or_else(|| {
+            else { let v = intrinsic_text_h(ch); if v > 0.0 { est_h_is_content = true; } v }
+        } else if let Some(eh) = ch.explicit_height { eh } else {
             if ch.text.is_some() {
                 if ch.taffy_mode { 10.0 } else { ch.font_size * 1.4 }
             } else if ch.rect.height > 0.0 { ch.rect.height }
-            else { intrinsic_text_h(ch) }
-        }) };
+            else { let v = intrinsic_text_h(ch); if v > 0.0 { est_h_is_content = true; } v }
+        };
         // writing-mode: vertical-lr/rl - osy textu se prohodi.
         // Inline axis (delka textu) je vertikalni, block axis je horizontalni.
         // Pro intrinsic sizing text bloku to znamena swap est_w <-> est_h.
@@ -356,7 +361,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 num.parse::<f32>().ok()
             } else if let Some(num) = basis_v.strip_suffix('%') {
                 num.parse::<f32>().ok().map(|p| {
-                    let cont = if direction.is_row() { inner_w } else { (bx.rect.height - pad_t - pad_b - 2.0 * bx.margin).max(0.0) };
+                    let cont = if direction.is_row() { inner_w } else { (bx.rect.height - pad_t - pad_b).max(0.0) };
                     cont * p / 100.0
                 })
             } else { basis_v.parse::<f32>().ok() };
@@ -409,6 +414,8 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         let ch_pb_r = ch.padding_right.unwrap_or(ch.padding) + ch.border_right_width.unwrap_or(ch.border_width);
         let ch_pb_t = ch.padding_top.unwrap_or(ch.padding) + ch.border_top_width.unwrap_or(ch.border_width);
         let ch_pb_b = ch.padding_bottom.unwrap_or(ch.padding) + ch.border_bottom_width.unwrap_or(ch.border_width);
+        // Content-vyska (intrinsic_text_h) -> border-box: + padding + border.
+        if est_h_is_content { est_h += ch_pb_t + ch_pb_b; }
         est_w = est_w.max(ch_pb_l + ch_pb_r);
         est_h = est_h.max(ch_pb_t + ch_pb_b);
         // Aspect-ratio dopocet
@@ -463,10 +470,10 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     }
 
     // 2. Container main size
-    let inner_h = (effective_h - pad_t - pad_b - 2.0 * bx.margin - scrollbar_h).max(0.0);
+    let inner_h = (effective_h - pad_t - pad_b - scrollbar_h).max(0.0);
     let container_main = if direction.is_row() { inner_w } else { inner_h };
     // Indefinite main: column + bez explicit_height + bx.rect.height=0 = no
-    // shrink (CSS Flex L1 §9.2: indefinite main constraint -> use max-content
+    // shrink (CSS Flex L1 Â§9.2: indefinite main constraint -> use max-content
     // basis). Bez teto fixy items s flex_shrink:1 (default) collapse na pb_h
     // pri parent.rect.height=0 (typicke pri block parent volajicim flex child
     // bez prep-size). Spravne: items zachova flex-basis (= explicit_height).
@@ -527,7 +534,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             }
             max_dc_w
         } else { 0.0 };
-        // CSS Flex L1 §4.5: pri overflow != visible v main axis je auto-min-content = 0.
+        // CSS Flex L1 Â§4.5: pri overflow != visible v main axis je auto-min-content = 0.
         // Pri flex-basis = 0 (definite) + min-height set: auto-min jen padding+min-h, ne content.
         let main_overflow = if direction.is_row() { ch.overflow_x } else { ch.overflow_y };
         let main_overflow_blocks = main_overflow.clips();
@@ -574,7 +581,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         // Re-apply min po max - min wins.
         if min_c_total > 0.0 { items[i].cross_size = items[i].cross_size.max(min_c_total); }
         items[i].main_size = items[i].main_size.min(max_m);
-        // Pri specified min > basis a wrap container: hypothetical = min (CSS Flex L1 §9.3.4).
+        // Pri specified min > basis a wrap container: hypothetical = min (CSS Flex L1 Â§9.3.4).
         // V wrap mode min wins (forces wrap), v nowrap zachovat shrink kompatibilitu.
         let specified_min = if direction.is_row() {
             ch.min_width.resolve(&cw_ctx)
@@ -593,7 +600,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     // PERF: pre-alloc capacity (typicky 1 line nowrap, vetsinou < 10 pri wrap).
     // Indefinite main: column + bez explicit_height = bx.rect.height pochazi z
     // parent layout placeholderu (typicky 20px nebo content-based 0). Use max-
-    // content basis = no shrink. CSS Flex L1 §9.2 "definite size" check.
+    // content basis = no shrink. CSS Flex L1 Â§9.2 "definite size" check.
     // Definite main: explicit/pct height OR preset rect.height (parent flex/grid uz
     // set jako cross-stretch). Bez tohoto stretch-from-parent height (styles-pane
     // dostane 810 z parent row stretch) by se brala jako indefinite -> flex grow
@@ -618,7 +625,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
 
     // 5. Compute total cross size
     let line_gap = if direction.is_row() { row_gap } else { col_gap };
-    let container_cross = if direction.is_row() { (bx.rect.height - pad_t - pad_b - 2.0 * bx.margin - scrollbar_h).max(0.0) } else { inner_w };
+    let container_cross = if direction.is_row() { (bx.rect.height - pad_t - pad_b - scrollbar_h).max(0.0) } else { inner_w };
     let nline = resolved_lines.len();
     let total_gap_cross = line_gap * nline.saturating_sub(1) as f32;
     let lines_natural_total: f32 = resolved_lines.iter().map(|l| l.cross_size).sum::<f32>() + total_gap_cross;
@@ -973,7 +980,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             let real_idx_for_align = in_flow[item_idx];
             let item_align = bx.children[real_idx_for_align].align_self.resolve(align);
             // Baseline alignment v column direction = fallback na start (CSS Flex L1
-            // §8.3: "baseline alignment is supported only in row containers; in
+            // Â§8.3: "baseline alignment is supported only in row containers; in
             // columns, treat as start").
             let item_align = if matches!(item_align, AlignItems::Baseline) && !direction.is_row() {
                 AlignItems::FlexStart
@@ -1522,7 +1529,7 @@ fn resolve_flexible_lengths(items: &[FlexItem], indices: &[usize], container_mai
     let mut frozen: Vec<bool> = vec![false; count];
     let growing = total_free > 0.0;
 
-    // Iterativne distribuovat free a freeze min/max violators per CSS Flexbox §9.7.4
+    // Iterativne distribuovat free a freeze min/max violators per CSS Flexbox Â§9.7.4
     for _ in 0..count + 1 {
         let frozen_sum: f32 = indices.iter().enumerate()
             .filter(|(k, _)| frozen[*k])
