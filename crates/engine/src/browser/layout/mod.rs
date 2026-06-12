@@ -3565,19 +3565,21 @@ fn build_box_inner_impl(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &supe
     if let Some(cis) = s.get("contain-intrinsic-size") {
         bx.contain_intrinsic_size = parse_length(cis);
     }
-    let parse_counter = |v: &str| -> Vec<(String, i32)> {
+    // CSS spec: counter-reset default hodnota 0, counter-increment default 1.
+    // Driv sdileny default 1 -> reset dal 1 + increment 1 = pocitadlo od "02".
+    let parse_counter = |v: &str, default: i32| -> Vec<(String, i32)> {
         let mut out = Vec::new();
         for entry in v.split(',') {
             let parts: Vec<&str> = entry.split_whitespace().collect();
             if let Some(name) = parts.first() {
-                let n: i32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(1);
+                let n: i32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(default);
                 out.push((name.to_string(), n));
             }
         }
         out
     };
-    if let Some(v) = s.get("counter-reset") { bx.counter_reset = parse_counter(v); }
-    if let Some(v) = s.get("counter-increment") { bx.counter_increment = parse_counter(v); }
+    if let Some(v) = s.get("counter-reset") { bx.counter_reset = parse_counter(v, 0); }
+    if let Some(v) = s.get("counter-increment") { bx.counter_increment = parse_counter(v, 1); }
     if let Some(v) = s.get("perspective") {
         if v.trim() != "none" { bx.perspective = Some(parse_length(v)); }
     }
@@ -3607,7 +3609,7 @@ fn build_box_inner_impl(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &supe
     if let Some(v) = s.get("inset-area") { bx.inset_area = v.trim().to_string(); }
     if let Some(v) = s.get("orphans") { bx.orphans = v.trim().parse().unwrap_or(2); }
     if let Some(v) = s.get("widows") { bx.widows = v.trim().parse().unwrap_or(2); }
-    if let Some(v) = s.get("counter-set") { bx.counter_set = parse_counter(v); }
+    if let Some(v) = s.get("counter-set") { bx.counter_set = parse_counter(v, 0); }
     if let Some(v) = s.get("line-height-step") { bx.line_height_step = parse_length(v); }
     if let Some(v) = s.get("speak") { bx.speak = v.trim().to_string(); }
     if let Some(v) = s.get("float") { bx.float_value = v.trim().to_string(); }
@@ -4497,43 +4499,103 @@ fn parse_content_value(raw: &str, parent: &Rc<Node>, counters: &HashMap<String, 
     let s = raw.trim();
     if s.is_empty() || s == "none" || s == "normal" { return None; }
 
-    // String literal - unescape \X sequences (\\, \", \', \n, etc).
-    if let Some(stripped) = s.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
-        return Some(unescape_css_string(stripped));
+    // CSS content je SEKVENCE komponent: "str" counter(x, style) attr(y)
+    // open-quote ... - concat vsech. Drive se matchla jen JEDINA komponenta
+    // na cely string, takze `counter(my-counter, decimal-leading-zero) ' '`
+    // propadl na doslovny vypis syntaxe (Obskurni CSS counter demo).
+    let chars: Vec<char> = s.chars().collect();
+    let n = chars.len();
+    let mut i = 0usize;
+    let mut out = String::new();
+    let mut matched_any = false;
+    // Precte obsah zavorky od pozice za '(' po matching ')' (bez nested).
+    let read_paren = |i: &mut usize| -> Option<String> {
+        let start = *i;
+        while *i < n && chars[*i] != ')' { *i += 1; }
+        if *i >= n { return None; }
+        let inner: String = chars[start..*i].iter().collect();
+        *i += 1;
+        Some(inner)
+    };
+    while i < n {
+        if chars[i].is_whitespace() { i += 1; continue; }
+        // String literal (escapes zachovat a unescape_css_string na konci).
+        if chars[i] == '"' || chars[i] == '\'' {
+            let q = chars[i];
+            i += 1;
+            let mut lit_raw = String::new();
+            while i < n {
+                if chars[i] == '\\' && i + 1 < n {
+                    lit_raw.push('\\');
+                    lit_raw.push(chars[i + 1]);
+                    i += 2;
+                    continue;
+                }
+                if chars[i] == q { i += 1; break; }
+                lit_raw.push(chars[i]);
+                i += 1;
+            }
+            out.push_str(&unescape_css_string(&lit_raw));
+            matched_any = true;
+            continue;
+        }
+        let rest: String = chars[i..].iter().collect();
+        if rest.starts_with("counter(") {
+            i += "counter(".len();
+            if let Some(inner) = read_paren(&mut i) {
+                let parts: Vec<&str> = inner.split(',').map(|p| p.trim()).collect();
+                let val = counters.get(parts[0]).copied().unwrap_or(0);
+                let style = parts.get(1).copied().unwrap_or("decimal");
+                out.push_str(&format_counter_value(val, style));
+                matched_any = true;
+            }
+            continue;
+        }
+        if rest.starts_with("counters(") {
+            i += "counters(".len();
+            if let Some(inner) = read_paren(&mut i) {
+                let parts: Vec<&str> = inner.split(',').map(|p| p.trim()).collect();
+                let val = counters.get(parts[0]).copied().unwrap_or(0);
+                let style = parts.get(2).copied().unwrap_or("decimal");
+                out.push_str(&format_counter_value(val, style));
+                matched_any = true;
+            }
+            continue;
+        }
+        if rest.starts_with("attr(") {
+            i += "attr(".len();
+            if let Some(inner) = read_paren(&mut i) {
+                if let Some(v) = parent.attr(inner.trim()) {
+                    out.push_str(&v);
+                }
+                matched_any = true;
+            }
+            continue;
+        }
+        if rest.starts_with("url(") {
+            i += "url(".len();
+            let _ = read_paren(&mut i);
+            matched_any = true;
+            continue;
+        }
+        if rest.starts_with("open-quote") {
+            out.push('\u{201C}');
+            i += "open-quote".len();
+            matched_any = true;
+            continue;
+        }
+        if rest.starts_with("close-quote") {
+            out.push('\u{201D}');
+            i += "close-quote".len();
+            matched_any = true;
+            continue;
+        }
+        // Neznamy token - preskocit po whitespace.
+        while i < n && !chars[i].is_whitespace() { i += 1; }
     }
-    if let Some(stripped) = s.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')) {
-        return Some(unescape_css_string(stripped));
+    if matched_any {
+        return Some(out);
     }
-
-    // attr(name)
-    if let Some(inner) = s.strip_prefix("attr(").and_then(|s| s.strip_suffix(')')) {
-        let name = inner.trim();
-        return parent.attr(name).or(Some(String::new()));
-    }
-
-    // counter(name [, style]) - vrati hodnotu z counter state. Style (2. arg):
-    // decimal-leading-zero/lower-roman/.../ - drive ignorovan = "1" misto "01".
-    if let Some(inner) = s.strip_prefix("counter(").and_then(|s| s.strip_suffix(')')) {
-        let parts: Vec<&str> = inner.split(',').map(|p| p.trim()).collect();
-        let name = parts[0];
-        let val = counters.get(name).copied().unwrap_or(0);
-        let style = parts.get(1).copied().unwrap_or("decimal");
-        return Some(format_counter_value(val, style));
-    }
-    // counters(name, separator [, style]) - hierarchicky concat (jen aktualni).
-    if let Some(inner) = s.strip_prefix("counters(").and_then(|s| s.strip_suffix(')')) {
-        let parts: Vec<&str> = inner.split(',').map(|p| p.trim()).collect();
-        let name = parts[0];
-        let val = counters.get(name).copied().unwrap_or(0);
-        let style = parts.get(2).copied().unwrap_or("decimal");
-        return Some(format_counter_value(val, style));
-    }
-
-    // url(...) - placeholder
-    if s.starts_with("url(") {
-        return Some(String::new());
-    }
-
     Some(raw.to_string())
 }
 

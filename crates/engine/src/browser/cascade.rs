@@ -465,6 +465,21 @@ pub fn expand_shorthand(prop: &str, value: &str, out: &mut HashMap<String, Strin
             }
             out.insert("font".into(), value.into());
         }
+        "list-style" => {
+            // Shorthand: <type> || <position> || <image>. Bez expanze
+            // `list-style: none` nepotlacil marker (layout cte jen longhandy).
+            for p in value.split_whitespace() {
+                if p.starts_with("url(") {
+                    out.insert("list-style-image".into(), p.into());
+                } else if matches!(p, "inside" | "outside") {
+                    out.insert("list-style-position".into(), p.into());
+                } else {
+                    // none/disc/decimal/lower-roman/... = type.
+                    out.insert("list-style-type".into(), p.into());
+                }
+            }
+            out.insert("list-style".into(), value.into());
+        }
         _ => {
             out.insert(prop.into(), value.into());
         }
