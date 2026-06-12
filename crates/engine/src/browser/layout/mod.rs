@@ -5401,6 +5401,12 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
         if !bx.children[idx].text_overline && parent_overline {
             bx.children[idx].text_overline = true;
         }
+        // text-shadow INHERIT (CSS spec: inherited) - text se kresli z TEXT
+        // NODE boxu, shadow je na elementu -> bez dedeni glow/3D shadow demo
+        // nemelo zadny stin.
+        if bx.children[idx].text_shadow.is_empty() && !bx.text_shadow.is_empty() {
+            bx.children[idx].text_shadow = bx.text_shadow.clone();
+        }
         if bx.children[idx].text_decoration_thickness <= 1.0 && parent_decor_thickness > 1.0 {
             bx.children[idx].text_decoration_thickness = parent_decor_thickness;
         }

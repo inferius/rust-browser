@@ -253,6 +253,20 @@ fn compute_fingerprints_inner(
                     if let Some(v) = n.attr("value") { v.hash(&mut h_full); v.hash(&mut h_struct); }
                 }
             }
+            // Outline (:focus-visible ring) - paint prop mimo border. Bez
+            // hashe focus zmena NEdamagovala layer/tile -> outline se kreslil
+            // jen castecne (jen v nahodou-dirty tiles) a "rozprostrel se" az
+            // po mouse-leave full repaintu.
+            if let Some(c) = bx.outline_color { c.hash(&mut h_full); c.hash(&mut h_struct); }
+            bx.outline_width.to_bits().hash(&mut h_full);
+            bx.outline_width.to_bits().hash(&mut h_struct);
+            // Box-shadow (hover/focus shadow zmeny).
+            for &(sx, sy, sb, ss, sc, inset) in &bx.box_shadow {
+                let mut hp = |v: u32| { v.hash(&mut h_full); v.hash(&mut h_struct); };
+                hp(sx.to_bits()); hp(sy.to_bits()); hp(sb.to_bits()); hp(ss.to_bits());
+                sc.hash(&mut h_full); sc.hash(&mut h_struct);
+                inset.hash(&mut h_full); inset.hash(&mut h_struct);
+            }
             // background-position (animated gradient posouva pozici per frame)
             // - meni OBSAH textury, takze patri do structural_fp (damage +
             // tile raster), ne jen full. Bez toho anim layer texture cache
@@ -321,11 +335,23 @@ fn compute_layer_tiles(
             (tile_rect.height.to_bits()).hash(&mut h);
             for id in &layer.content_box_ids {
                 if let Some(bx) = box_map.get(id) {
-                    // Bx rect intersect tile?
-                    let bx_x0 = bx.rect.x;
-                    let bx_y0 = bx.rect.y;
-                    let bx_x1 = bx.rect.x + bx.rect.width;
-                    let bx_y1 = bx.rect.y + bx.rect.height;
+                    // Paint extent presahujici rect: outline (kresli se VNE
+                    // boxu) + box-shadow reach. Bez expanze se sousedni tile
+                    // (kam outline/stiny pretekaji) neoznacil dirty -> pulka
+                    // focus ringu chybela do dalsiho full repaintu.
+                    let mut ext = if bx.outline_width > 0.0 {
+                        bx.outline_width + bx.outline_offset.max(0.0)
+                    } else { 0.0 };
+                    for &(sx, sy, sb, ss, _, inset) in &bx.box_shadow {
+                        if !inset {
+                            ext = ext.max(sx.abs().max(sy.abs()) + sb + ss);
+                        }
+                    }
+                    // Bx rect (+ext) intersect tile?
+                    let bx_x0 = bx.rect.x - ext;
+                    let bx_y0 = bx.rect.y - ext;
+                    let bx_x1 = bx.rect.x + bx.rect.width + ext;
+                    let bx_y1 = bx.rect.y + bx.rect.height + ext;
                     let ix = bx_x1 > tile_rect.x && bx_x0 < tile_rect.x + tile_rect.width
                           && bx_y1 > tile_rect.y && bx_y0 < tile_rect.y + tile_rect.height;
                     if !ix { continue; }
@@ -342,6 +368,14 @@ fn compute_layer_tiles(
                     // konci" animace (layer structural_fp se menil ale tile ne).
                     if let Some(c) = bx.border_color { c.hash(&mut h); }
                     bx.border_width.to_bits().hash(&mut h);
+                    // Outline + box-shadow: focus ring / hover stin (viz layer fp).
+                    if let Some(c) = bx.outline_color { c.hash(&mut h); }
+                    bx.outline_width.to_bits().hash(&mut h);
+                    for &(sx, sy, sb, ss, sc, inset) in &bx.box_shadow {
+                        sx.to_bits().hash(&mut h); sy.to_bits().hash(&mut h);
+                        sb.to_bits().hash(&mut h); ss.to_bits().hash(&mut h);
+                        sc.hash(&mut h); inset.hash(&mut h);
+                    }
                     if let Some(t) = &bx.text { t.hash(&mut h); }
                     // Form control obsah - stejny duvod jako v layer fp (psani
                     // do inputu jinak nedirti tile -> stary obraz).

@@ -2630,6 +2630,9 @@ impl WebView {
                     // posledni MouseDown wins. Multi-WebView problem: posledni
                     // klik prepise styling pro vsechny - akceptace pri F12.
                     crate::browser::cascade::set_focused_node(new_id);
+                    // Focus z MYSI -> :focus-visible NEmatchuje (Chrome parity;
+                    // ring jen pri Tab navigaci).
+                    crate::browser::cascade::set_focus_from_keyboard(false);
                     // Dispatch blur(stary) + focus(novy) JS event - bez toho se
                     // onfocus/onblur inline handlery (napr. border highlight)
                     // nikdy nezavolaji.

@@ -198,6 +198,13 @@ pub fn set_active_node(id: Option<usize>) { ACTIVE_NODE.with(|c| *c.borrow_mut()
 pub fn get_active_node() -> Option<usize> { ACTIVE_NODE.with(|c| *c.borrow()) }
 pub fn set_focused_node(id: Option<usize>) { FOCUSED_NODE.with(|c| *c.borrow_mut() = id); }
 pub fn get_focused_node() -> Option<usize> { FOCUSED_NODE.with(|c| *c.borrow()) }
+thread_local! {
+    // :focus-visible heuristika (Chrome parity): ring jen pri KEYBOARD focusu
+    // (Tab), ne po mysim kliku. Input handler nastavuje pri zmene focusu.
+    static FOCUS_FROM_KEYBOARD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+pub fn set_focus_from_keyboard(v: bool) { FOCUS_FROM_KEYBOARD.with(|c| c.set(v)); }
+pub fn get_focus_from_keyboard() -> bool { FOCUS_FROM_KEYBOARD.with(|c| c.get()) }
 
 /// Precompute ancestor-or-self chain pro hovered/active/focused element.
 /// Vola se 1x na zacatku cascade (root dostupny). Jeden DFS O(N) trackuje
@@ -3734,8 +3741,14 @@ pub fn matches_simple(node: &Rc<Node>, sel: &SimpleSelector) -> bool {
             "active" => {
                 if !is_in_state_chain(node, &ACTIVE_CHAIN) { return false; }
             }
-            "focus" | "focus-visible" => {
+            "focus" => {
                 if !is_node_match(node, &FOCUSED_NODE) { return false; }
+            }
+            "focus-visible" => {
+                // Chrome heuristika: ring jen pri keyboard focusu (Tab),
+                // mysi klik focus-visible NEmatchuje (docx: "v Chrome neni").
+                if !is_node_match(node, &FOCUSED_NODE) { return false; }
+                if !get_focus_from_keyboard() { return false; }
             }
             "focus-within" => {
                 if !is_in_state_chain(node, &FOCUSED_CHAIN) { return false; }

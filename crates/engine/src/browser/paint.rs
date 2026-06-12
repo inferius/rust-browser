@@ -2810,16 +2810,25 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         for &(ox, oy, blur, color) in bx.text_shadow.iter().rev() {
             let base = with_alpha(color);
             if blur > 1.5 {
-                let r = blur * 0.5;
+                // Glow: 2 soustredne rings (r*0.45 + r*0.22) s alpha klesajici
+                // s polomerem - kopie se prekryvaji do mekke aury misto 8
+                // CITELNYCH duchu (drive r=blur*0.5 + alpha/3: pri blur 32 byly
+                // videt samostatne kopie textu kolem originalu).
                 let ring = [(1.0_f32, 0.0_f32), (0.7, 0.7), (0.0, 1.0), (-0.7, 0.7),
                             (-1.0, 0.0), (-0.7, -0.7), (0.0, -1.0), (0.7, -0.7)];
-                let a = ((base[3] as f32 / 3.0) as u8).max(1);
-                let col = [base[0], base[1], base[2], a];
-                for (dx, dy) in ring {
-                    mk_shadow(cmds, text_x + ox + dx * r, text_y + oy + dy * r, col);
+                let r_outer = (blur * 0.45).min(10.0);
+                let r_inner = (blur * 0.22).min(5.0);
+                let a_outer = ((base[3] as f32 / 9.0) as u8).max(1);
+                let a_inner = ((base[3] as f32 / 6.0) as u8).max(1);
+                for (r, a) in [(r_outer, a_outer), (r_inner, a_inner)] {
+                    let col = [base[0], base[1], base[2], a];
+                    for (dx, dy) in ring {
+                        mk_shadow(cmds, text_x + ox + dx * r, text_y + oy + dy * r, col);
+                    }
                 }
-                // Stredni jasnejsi jadro.
-                mk_shadow(cmds, text_x + ox, text_y + oy, base);
+                // Stredni jadro - polovicni alpha (rings uz pridavaji density).
+                let core = [base[0], base[1], base[2], ((base[3] as f32 / 2.0) as u8).max(1)];
+                mk_shadow(cmds, text_x + ox, text_y + oy, core);
             } else {
                 mk_shadow(cmds, text_x + ox, text_y + oy, base);
             }
