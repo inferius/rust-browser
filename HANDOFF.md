@@ -2,6 +2,60 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`, `debug_utils.md`.
 
+## Session N+40: docx v6 - SCROLLBAR vyresen, text-shadow, focus ring, IO offsety
+
+Docx v6 (44 polozek; rada formularovych se NEREPRODUKUJE na aktualnim
+buildu - psani/validace/number filter/range drag/textarea Enter vse
+funguje, uzivatel mel patrne starsi build). 4 commity, 4201 testu pass.
+
+### 1. SCROLLBAR konecne vyresen (3. opakovani stiznosti)
+- paint_box mel LEGACY "Stage 1" staticky indikator (thumb VZDY na 0)
+  kresleny do page/layer contentu - zapekal se do tile textur a
+  PREKRYVAL zivy overlay thumb. ODSTRANEN.
+- emit_inner_scrollbars ignoroval scroll parametry (content coords v
+  viewport-relative overlay pasmu = mimo viewport). Ted bx.rect-scroll.
+- Diagnoza trvala dlouho: dva systemy pres sebe; bisect pres magenta
+  debug barvu + pixel mereni (GetPixel). Thumb overeno 364->400 po wheel.
+
+### 2. text-shadow (sekce 12 "nefunguje vubec")
+- flush_inline nededil text_shadow na text node deti (text se kresli z
+  TEXT boxu, shadow byl na elementu). + glow tuning: 2 rings nizsi alpha.
+
+### 3. Focus ring (sekce 6 "pulka modreho borderu")
+- Compositor fp (layer+tile) nehashoval outline/box_shadow a tile
+  intersect nepocital s presahem MIMO box rect -> focus ring se kreslil
+  jen v nahodou-dirty tiles. Fix: hash + extent expanze.
+- :focus-visible: jen keyboard focus (Chrome heuristika) - po mysim
+  kliku ring NENI. Tab navigace TODO (set_focus_from_keyboard(true)).
+
+### 4. IntersectionObserver (fire jen jednou)
+- collect_rects nerespektoval inner scroll offsety predku -> targety
+  v io-row (H-scroll container) mely konstantni rect = zadny crossing.
+
+### Overeno bez reprodukce (pixel mereni)
+- Tabulka hover: hranice IDENTICKE pred/po hoveru (1px presnost).
+- Formulare: psani okamzite, :valid/:invalid, number filter, range
+  drag + hodnota, textarea Enter - vse OK na cerstvem buildu.
+
+### Docx v6 ZBYVA (dalsi session)
+- Vykon: scroll FPS dipy, hover sekce 1 (240->40), particles canvas,
+  resize 14 FPS (@container), IO/resize demo perf.
+- Canvas kresleni: cary z leveho rohu (lastX/lastY se nedrzi mezi tahy).
+- Selection: vybira i menu pri tazeni pres stranku (sjednotit per-block).
+- Topbar backdrop-filter + pruhlednost (#10), blur(4px) zesilit,
+  drop-shadow doladit, mix-blend pruh dole.
+- writing-mode: glyfy nerotovane; column-count: sloupec navic vs Chrome;
+  typewriter border pozice; marquee jede MIMO box (overflow clip na
+  transform animaci nefunguje).
+- Sekce 13 position/z-index: texty rozhazene; sekce 9 circle maly,
+  ellipse jinak; sekce 18 aspect-ratio vyska.
+- Forms detaily: select option styling + sirka, progress styl, label
+  click->focus, range accent-color (zluty thumb), input text selection.
+- DnD: ghost element, dragover styl, kurzor; :has() label klik +
+  odsazeni; scrollbar sipky (custom styling podpora); JS Events mouse
+  move sekce + desetinna mista; "text mensi/divny vs Chrome" (font
+  rendering kvalita).
+
 ## Session N+39: docx v5 sweep - menu klik, flex, SVG/SMIL, counter, float, marquee, columns
 
 Direktiva: "udelej vsechen dokument, pracuj na tom a zbytecne se neprerusuj".
