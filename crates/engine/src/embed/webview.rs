@@ -757,8 +757,12 @@ pub(crate) fn compose_layer_tree_into(
             // Layer texture obsahuje UNTRANSFORMED content. Compose pres
             // transform pipeline rotuje quad na GPU. PLNY CHAIN
             // (layer.transforms) - singular by rozbil multi-op 3D.
+            // resolve_translate_pct: % translate proti VLASTNI velikosti boxu
+            // (marquee translateX(100%) - matrix path jinak % zahodi).
+            let resolved_ops = crate::browser::layout::resolve_translate_pct(
+                &layer.transforms, layer.root_rect.width, layer.root_rect.height);
             let m = crate::browser::layout::compute_transform_matrix(
-                &layer.transforms, None);
+                &resolved_ops, None);
             renderer.compose_view_to_view_transform_into_encoder(
                 &mut compose_encoder,
                 target_view, &view,
@@ -2736,6 +2740,13 @@ impl WebView {
             InputEvent::MouseUp { x, y, button, .. } => {
                 if matches!(button, crate::embed::MouseButton::Left) {
                     // Clear :active pseudo-class (set na MouseDown).
+                    // DIRTY hned: bez toho se release stav (:active scale zpet
+                    // na 1.0) vykreslil az pri dalsim mouse-move = "button se
+                    // odmackne az kdyz mys opusti button".
+                    if crate::browser::cascade::get_active_node().is_some() {
+                        response.dirty = true;
+                        self.dirty = true;
+                    }
                     crate::browser::cascade::set_active_node(None);
                     // End element resize drag.
                     if self.resize_drag.take().is_some() {

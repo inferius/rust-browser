@@ -1685,7 +1685,10 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         && bx.transform.is_some();
     let emit_inner_transform = needs_3d && !transform_by_layer_compose;
     if emit_inner_transform {
-        let m = crate::browser::layout::compute_transform_matrix(&bx.transforms, parent_perspective);
+        // % translate resolve proti vlastnimu boxu (matrix path % nezna).
+        let resolved_ops = crate::browser::layout::resolve_translate_pct(
+            &bx.transforms, bx.rect.width, bx.rect.height);
+        let m = crate::browser::layout::compute_transform_matrix(&resolved_ops, parent_perspective);
         cmds.push(DisplayCommand::TransformBegin {
             x: bx.rect.x,
             y: bx.rect.y,

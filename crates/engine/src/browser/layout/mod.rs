@@ -6157,7 +6157,7 @@ pub use shape_fn::{ShapeFunction, parse_shape_function};
 
 mod transform;
 #[allow(unused_imports)]
-pub use transform::{compute_transform_matrix, needs_3d_pipeline, transformed_aabb};
+pub use transform::{compute_transform_matrix, needs_3d_pipeline, transformed_aabb, resolve_translate_pct};
 
 mod filter;
 #[allow(unused_imports)]

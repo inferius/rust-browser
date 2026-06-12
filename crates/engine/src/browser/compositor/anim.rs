@@ -164,6 +164,10 @@ impl CompositorAnimStore {
                     }
                     CompositorAnim::Transform { current, .. } => {
                         root.transform = Some(current.clone());
+                        // Compose pouziva PLURAL chain (layer.transforms) -
+                        // bez sync by gate fast path kreslil stale/prazdny
+                        // chain a anim stala (single-op anim = vec o 1).
+                        root.transforms = vec![current.clone()];
                     }
                 }
             }
@@ -252,6 +256,14 @@ fn lerp_transform(from: &TransformOp, to: &TransformOp, t: f32) -> TransformOp {
         (Scale(fx, fy), Scale(tx, ty)) => {
             Scale(fx + (tx - fx) * t, fy + (ty - fy) * t)
         }
+        // translateX(100%) -> translateX(-100%) (marquee): % i px slozky lerp.
+        (TranslateMixed { x_px: fxp, x_pct: fxc, y_px: fyp, y_pct: fyc },
+         TranslateMixed { x_px: txp, x_pct: txc, y_px: typ, y_pct: tyc }) => TranslateMixed {
+            x_px: fxp + (txp - fxp) * t,
+            x_pct: fxc + (txc - fxc) * t,
+            y_px: fyp + (typ - fyp) * t,
+            y_pct: fyc + (tyc - fyc) * t,
+        },
         (Rotate(fr), Rotate(tr)) => Rotate(fr + (tr - fr) * t),
         (Translate3D { x: fx, y: fy, z: fz },
          Translate3D { x: tx, y: ty, z: tz }) => Translate3D {

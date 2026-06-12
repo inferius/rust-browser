@@ -156,6 +156,21 @@ pub fn transformed_aabb(rect: (f32, f32, f32, f32), m: &[f32; 16]) -> (f32, f32,
     (min_x, min_y, max_x - min_x, max_y - min_y)
 }
 
+/// Resolvuje % slozky TranslateMixed proti rozmerum boxu (CSS: translate %
+/// = % VLASTNI velikosti). Matrix path jinak % ignoruje (transform_op_matrix
+/// pouzije jen px) -> marquee translateX(100%->-100%) stal na miste pri
+/// layer compose. Volat pred compute_transform_matrix kdyz znas box w/h.
+pub fn resolve_translate_pct(ops: &[TransformOp], w: f32, h: f32) -> Vec<TransformOp> {
+    ops.iter().map(|op| match op {
+        TransformOp::TranslateMixed { x_px, x_pct, y_px, y_pct } =>
+            TransformOp::Translate(
+                x_px + x_pct / 100.0 * w,
+                y_px + y_pct / 100.0 * h,
+            ),
+        other => other.clone(),
+    }).collect()
+}
+
 pub fn compute_transform_matrix(ops: &[TransformOp], parent_perspective: Option<f32>) -> [f32; 16] {
     let mut m = mat4_identity();
     // Apply ops in order (left-multiply each)
