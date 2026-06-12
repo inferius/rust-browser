@@ -4265,7 +4265,8 @@ impl WebView {
                 }
             }
             eprintln!("=== LAYOUT DUMP (WV addr={:p}) ===", self);
-            dump_box(&layout_root, 0, 8);
+            let max_d = if dump_force { 12 } else { 8 };
+            dump_box(&layout_root, 0, max_d);
         }
         let prof_t2 = std::time::Instant::now();
         self.prof_layout_ms = prof_t2.duration_since(prof_t1).as_secs_f32() * 1000.0;

@@ -4673,6 +4673,68 @@ fn layout_block_multicol(bx: &mut LayoutBox) {
         }
         return;
     }
+    // Fragmentace pure-text obsahu (lorem ipsum demo): text se word-wrapne
+    // na col_w a radky se rozdeli do sloupcu (column-fill: balance). Bez
+    // tohoto multicol distribuoval jen ELEMENTY - text node zustal 1 kus
+    // pres celou sirku (column-count na textu nefungoval).
+    // IDEMPOTENCE: layout muze bezet vickrat (flex pre-pass + final s jinou
+    // sirkou) - vsechny pure-text children se SLOUCI zpet (join) a wrapnou
+    // znovu na aktualni col_w. split_whitespace srovna \n z minuleho wrapu.
+    let only_text_child = bx.column_count > 1 && n_children >= 1
+        && bx.children.iter().all(|c| c.text.is_some() && c.children.is_empty());
+    if only_text_child {
+        let tb = &bx.children[0];
+        let fs = tb.font_size;
+        let lh = if tb.line_height > 0.0 { tb.line_height } else { 1.2 };
+        let advance = fs * lh;
+        let text = bx.children.iter()
+            .filter_map(|c| c.text.as_deref())
+            .collect::<Vec<_>>().join(" ");
+        let weight = tb.effective_weight();
+        let italic = tb.italic;
+        let family = tb.font_family.clone();
+        let lsp = tb.letter_spacing;
+        // Word wrap na sirku sloupce.
+        let mut lines: Vec<String> = Vec::new();
+        let mut cur = String::new();
+        for word in text.split_whitespace() {
+            let cand = if cur.is_empty() { word.to_string() }
+                       else { format!("{} {}", cur, word) };
+            let w = measure_text_width_full(&cand, fs, weight, italic, &family, lsp);
+            if w > col_w && !cur.is_empty() {
+                lines.push(std::mem::take(&mut cur));
+                cur = word.to_string();
+            } else {
+                cur = cand;
+            }
+        }
+        if !cur.is_empty() { lines.push(cur); }
+        if lines.len() > 1 {
+            let n = bx.column_count as usize;
+            let per = lines.len().div_ceil(n);
+            let template = bx.children[0].clone();
+            let mut new_children: Vec<LayoutBox> = Vec::with_capacity(n);
+            for ci in 0..n {
+                let chunk: Vec<&str> = lines.iter().skip(ci * per).take(per)
+                    .map(|s| s.as_str()).collect();
+                if chunk.is_empty() { break; }
+                let mut c = template.clone();
+                c.text = Some(chunk.join("\n"));
+                c.rect.x = inner_x + ci as f32 * (col_w + gap);
+                c.rect.y = inner_y;
+                c.rect.width = col_w;
+                c.rect.height = advance * chunk.len() as f32;
+                new_children.push(c);
+            }
+            let max_h = new_children.iter().map(|c| c.rect.height)
+                .fold(0.0_f32, f32::max);
+            bx.children = new_children;
+            if !bx.taffy_mode || bx.rect.height == 0.0 {
+                bx.rect.height = pad_t + max_h + pad_b + 2.0 * bx.border_width;
+            }
+            return;
+        }
+    }
     // Pre-pass: layout kazdy child as standalone (rect.x/y bude prepocitano)
     // pro znalost child.rect.height (potrebuju pri balance).
     for child in bx.children.iter_mut() {
