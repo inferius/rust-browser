@@ -69,7 +69,33 @@ anonymni). ZBYVAJICI Google blockery (priorita pro dalsi session):
 - Dump rezim nespousti skripty - pro Google debugging pridat
   `dump --run-js` nebo runtime layout dump hotkey.
 
-### TODO z docx v5 NEZPRACOVANE (task #19) - DALSI SESSION ZACIT TADY
+### Session N+38b: testovaci stranka "od podlahy" - SYSTEMOVY overflow fix
+- **Layout overflow-clip placeholder bug (78eddb5)**: block child bez
+  vysky dostaval placeholder 20px; layout_block s overflow clips() ho
+  vzal jako parent-preset a na konci NATVRDO vratil (content spocitany
+  66px -> box 20px, obsah oriznuty). Fix: overflow-clip boxy placeholder
+  nedostavaji (0 = auto). OPRAVILO: .resize-demo (Observers) + obecne
+  vsechny overflow:hidden/auto boxy bez explicit vysky. POZOR: zmenil
+  se layout cele test stranky (menu pozice ve scriptech posunute).
+- ResizeObserver demo KOMPLET funkcni: styl + obsah ("sirka: 951 px")
+  + resize grip drag (951->548 px) + observer updaty.
+- JS Events sekce OVERENA FUNKCNI (mouse zone x/y updaty, keyboard
+  zone focus + keydown/keyup do logu) - docx stav byl zastaraly.
+  offsetX/Y round na int (Chrome parity).
+- Google compat (a6e6e72): flex:<basis> shorthand (drive cely ignorovan
+  -> search pole 200px) + input submit/button label (control_text) +
+  intrinsic sirka tlacitek.
+
+DALSI KROKY (overene stopy):
+- WHEEL nad overflow containerem scrolluje STRANKU (sekce 11
+  "overscroll-behavior: contain" box): find_scroll_target vraci None.
+  Debug: RWE_SCROLL_DBG=1 vypise [SCROLL] target. Zkontrolovat
+  needs_scrollbar_y (inner_content_h vs rect po overflow fixu) +
+  collect_path zasah boxu.
+- MutationObserver demo: "Pocet mutaci:" cislo (#mutation-count span
+  "0") se nezobrazuje; tlacitka bg pretahuje nad label radek.
+- IO demo boxy: vsech 6 zlutych (vsechny visible) - container bez
+  overflow-x => mozna spravne; srovnat s Chrome (io-row sirka).
 - JS Events sekce: keyboard area neklikatelna/no focus border/keys;
   mousemove "jen nekdy".
 - Observers: IO demo boxy mozna obracene (overit proti Chrome jako
