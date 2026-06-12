@@ -4977,6 +4977,14 @@ pub fn layout_block(bx: &mut LayoutBox) {
                         // flex-shrink shrinkne items POD jejich explicit vysku (napr.
                         // calc-bary height:28px scvrkly na ~text). Necht 0 = auto.
                         0.0
+                    } else if child.overflow_y.clips() {
+                        // Overflow hidden/scroll/auto bez explicit height: 0 =
+                        // auto (z obsahu). Placeholder 20 by child layout_block
+                        // vzal jako parent-preset constraint
+                        // (preset_height_overflow) a USEKNUL content na 20px
+                        // (.resize-demo v Observers sekci - 20px prouzek,
+                        // text pretekal ven a overflow:hidden ho oriznul).
+                        0.0
                     } else {
                         20.0
                     };

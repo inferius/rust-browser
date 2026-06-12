@@ -5108,7 +5108,10 @@ impl WebView {
         let nid = std::rc::Rc::as_ptr(node) as usize;
         if let Some(root) = self.last_layout_root.as_ref() {
             if let Some(bx) = crate::browser::paint::find_box_by_node_id(root, nid) {
-                return ((content_x - bx.rect.x) as f64, (content_y - bx.rect.y) as f64);
+                // Round na cele px (Chrome offsetX/Y jsou int; float scroll
+                // lerp jinak prosakoval do JS jako y:6.6796875).
+                return (((content_x - bx.rect.x) as f64).round(),
+                        ((content_y - bx.rect.y) as f64).round());
             }
         }
         (x as f64, y as f64)
