@@ -2,6 +2,87 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`, `debug_utils.md`.
 
+## Session N+39: docx v5 sweep - menu klik, flex, SVG/SMIL, counter, float, marquee, columns
+
+Direktiva: "udelej vsechen dokument, pracuj na tom a zbytecne se neprerusuj".
+7 commitu, 4201 testu pass. Vsechno overovano pmclick/cap3 screenshoty.
+
+### 1. Sticky hit-test/paint sync (38aa683) - MENU KLIK ZASE FUNGUJE
+- Clean save last_layout_root PRED apply_paint_animations (driv se pres
+  layout-HIT take-cyklus akumuloval sticky/top baseline, +470px po par framech).
+- anim_baseline init NEodecita offset_top/left pro Sticky - layout sticky
+  top NEaplikoval (dela az apply_sticky pri scrollu). Odecteni delalo
+  our_delta_y=+48 -> VSECHNY deti sidebaru kreslene +48px pod hit-test
+  stromem = klik trefoval o polozku niz. Sticky tez vyrazen z is_oof.
+- Overeno: klik 07 Gradienty -> scroll na gradienty + active highlight.
+
+### 2. FLEX fixy (daa42eb) - MutationObserver demo
+- layout_flex/grid inner_x/y NEpricitaji bx.margin (parent margin uz
+  aplikoval do rect) - flex container s marginem mel deti 2x posunute.
+- est_h z intrinsic_text_h je content vyska -> + padding+border
+  (button est 14 -> 28, container height spravne, items nepretekaji).
+- Inline span sirka: text_w bez font_size flooru + content-sum fallback
+  (nested span "0" 6.7px misto 11.2) + 0.5px epsilon wrap podminky.
+  Pocitadlo "Pocet mutaci: N" inline a live.
+
+### 3. MARQUEE translateX(%) (b0f9dc3)
+- resolve_translate_pct(ops,w,h): % proti VLASTNI velikosti boxu pred
+  compute_transform_matrix (matrix path % zahazoval) - webview compose
+  i paint 3D cesta.
+- CompositorAnimStore: lerp_transform TranslateMixed arm (driv fallback
+  to.clone() = stalo); apply_to_layer_tree syncuje i layer.transforms
+  (PLURAL - compose cte chain, ne singular).
+
+### 4. COLUMN-COUNT fragmentace textu (d02e761)
+- layout_block_multicol: pure-text children -> word-wrap na col_w,
+  radky do sloupcu (balance pres div_ceil). IDEMPOTENTNI: fragmenty
+  z minuleho behu se join-nou a wrapnou znovu (layout bezi vickrat
+  s ruznou sirkou - pre-pass/final).
+
+### 5. SVG: case tagy + SMIL + foreignObject (868aa02)
+- svg_canonical_tag: html5ever lowercasuje, SVG case-sensitive (resvg
+  "lineargradient" nezna -> MASK/gradient demo prazdne).
+- SMIL aproximace v serialize_svg: <animate>/<animateTransform> ->
+  override atributu aktualni interpolovanou hodnotou (from/to, values
+  seznam, repeatCount=indefinite; lerp_numbers_positional pro path d).
+  animateTransform se SKLADA s base transform (gear stred). POZN:
+  animace bezi jen kdyz neco generuje framy (na test strance FPS
+  counter) - invalidation scheduler pro ciste staticke stranky TODO.
+- foreignObject: layout rect z attrs + block layout deti; paint je
+  kresli normalni cestou pres SVG bitmapu (resvg FO preskakuje).
+
+### 6. COUNTER + list-style (885f4e5)
+- parse_content_value: content je SEKVENCE komponent (string counter()
+  attr() open-quote...) - tokenizer + concat (driv jedina komponenta
+  na cely string -> doslovny vypis syntaxe).
+- counter-reset default 0 per spec (increment 1).
+- list-style shorthand expanze (none/type/position/image).
+
+### 7. FLOAT obtekani (08bbf40) - shape-outside demo
+- flush_inline: floats param + line_lx/line_rx per-line bounds.
+  Vsechna wrap mista pres ne. Multi-line text rect.x = line start
+  prvni radky (render kresli \n radky od rect.x). Aproximace: radky
+  pod floatem zustanou odsazene - plna per-line x = text fragmentace TODO.
+
+### Dalsi drobnosti
+- MouseUp :active clear nastavuje dirty hned (button release animace
+  driv cekala na mouse-leave).
+- RWE_LAYOUT_DUMP=force: dump i bez JS (dom_version gate skip) +
+  hloubka 12.
+- Tabulka hover jump: OVERENO OK (vyreseno drivejsimi hover fixy).
+- Sekce 11 scrollbary OK; sekce 18 aspect-ratio/contain/env OK.
+
+### Docx v5 ZBYVA (vetsi render projekty)
+- filter: blur() slabsi nez Chrome + lehce oriznuty nahore; drop-shadow.
+- backdrop-filter top bar (#10).
+- writing-mode: glyfy se NErotuji (sloupce ok, plna compliance chce
+  rotovany glyph run v renderu).
+- Float: per-line x pro radky pod floatem (text fragmentace).
+- Scroll perf next: tile prefetch, compose-only fast path.
+- "Pocet mutaci:" mezera za dvojteckou mizi po content-only patchi
+  (trailing space pred nested spanem - kosmeticke).
+- Chrome-srovnani jednotlivych sekci po tehle davce (novy docx?).
+
 ## Session N+38: hover/typing perf, value pseudos, kompositor GATE
 
 User feedback po N+37: hover 240->30 FPS, typing porad lagoval, border
