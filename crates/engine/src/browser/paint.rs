@@ -473,8 +473,6 @@ fn emit_inner_scrollbars(
     thumb_col: [u8; 4],
     scroll_x: f32, scroll_y: f32,
 ) {
-    let _ = scroll_x;
-    let _ = scroll_y;
     use crate::browser::scroll::Scrollable;
     // CSS scrollbar-color: (thumb, track) - override default barev. Driv se
     // ignorovalo = custom scrollbary vsude sede.
@@ -484,10 +482,16 @@ fn emit_inner_scrollbars(
     };
     let needs_y = bx.needs_scrollbar_y();
     let needs_x = bx.needs_scrollbar_x();
+    // Overlay je VIEWPORT-relative pasmo (kresli se po scroll shiftu page
+    // contentu) -> box content coords prepocist o -scroll. Driv se scroll
+    // ignoroval = inner scrollbar po odscrollovani stranky kresleny MIMO
+    // viewport (a viditelny byval jen legacy staticky duplikat v paint_box).
+    let vx = bx.rect.x - scroll_x;
+    let vy = bx.rect.y - scroll_y;
     if needs_y {
         let bar_w = bx.scrollbar_size.max(8.0).min(14.0);
-        let bar_x = bx.rect.x + bx.rect.width - bar_w;
-        let bar_y = bx.rect.y;
+        let bar_x = vx + bx.rect.width - bar_w;
+        let bar_y = vy;
         let bar_h = bx.rect.height;
         display_list.push(DisplayCommand::Rect {
             x: bar_x, y: bar_y, w: bar_w, h: bar_h,
@@ -503,8 +507,8 @@ fn emit_inner_scrollbars(
     }
     if needs_x {
         let bar_h = bx.scrollbar_size.max(8.0).min(14.0);
-        let bar_x = bx.rect.x;
-        let bar_y = bx.rect.y + bx.rect.height - bar_h;
+        let bar_x = vx;
+        let bar_y = vy + bx.rect.height - bar_h;
         let bar_w = bx.rect.width - if needs_y { 12.0 } else { 0.0 };
         display_list.push(DisplayCommand::Rect {
             x: bar_x, y: bar_y, w: bar_w, h: bar_h,
@@ -3111,49 +3115,11 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         }
     }
 
-    // Inner scrollbar overlay - pro elementy s overflow_y/x: auto/scroll
-    // kdyz inner content presahuje rect bounds. Stage 1: pouze visual indicator
-    // (no scroll position tracking). Track + thumb rect pres self bounds.
-    // Real interaktivni scroll dela WV (Stage 2 TODO).
-    if bx.overflow_y.scrollable() && bx.inner_content_h > bx.rect.height + 1.0
-        && bx.rect.width > 12.0 && bx.rect.height > 30.0 {
-        let bar_w = 10.0_f32;
-        let bar_x = bx.rect.x + bx.rect.width - bar_w;
-        let bar_y = bx.rect.y;
-        let bar_h = bx.rect.height;
-        // Track pozadi (semi-transparent)
-        cmds.push(DisplayCommand::Rect {
-            x: bar_x, y: bar_y, w: bar_w, h: bar_h,
-            color: [60, 60, 70, 100], radius: 0.0,
-        });
-        // Thumb - proporcionalni k content_h
-        let ratio = bx.rect.height / bx.inner_content_h;
-        let thumb_h = (bar_h * ratio).max(20.0).min(bar_h);
-        // Stage 1: thumb position 0 (no scroll yet). Stage 2 vlozi scroll_y / max * (bar_h - thumb_h)
-        cmds.push(DisplayCommand::Rect {
-            x: bar_x + 1.0, y: bar_y + 1.0,
-            w: bar_w - 2.0, h: thumb_h - 2.0,
-            color: [140, 140, 150, 220], radius: (bar_w - 2.0) * 0.5,
-        });
-    }
-    if bx.overflow_x.scrollable() && bx.inner_content_w > bx.rect.width + 1.0
-        && bx.rect.height > 12.0 && bx.rect.width > 30.0 {
-        let bar_h = 10.0_f32;
-        let bar_x = bx.rect.x;
-        let bar_y = bx.rect.y + bx.rect.height - bar_h;
-        let bar_w = bx.rect.width;
-        cmds.push(DisplayCommand::Rect {
-            x: bar_x, y: bar_y, w: bar_w, h: bar_h,
-            color: [60, 60, 70, 100], radius: 0.0,
-        });
-        let ratio = bx.rect.width / bx.inner_content_w;
-        let thumb_w = (bar_w * ratio).max(20.0).min(bar_w);
-        cmds.push(DisplayCommand::Rect {
-            x: bar_x + 1.0, y: bar_y + 1.0,
-            w: thumb_w - 2.0, h: bar_h - 2.0,
-            color: [140, 140, 150, 220], radius: (bar_h - 2.0) * 0.5,
-        });
-    }
+    // Inner scrollbary kresli VYHRADNE emit_inner_scrollbars (overlay pass,
+    // viewport coords, zivy thumb z scroll_offset). Drive tady byl legacy
+    // "Stage 1" statický indikator (thumb vzdy na 0) zapeceny do page/layer
+    // contentu - PREKRYVAL zivy overlay thumb = "scrollbar se nehybe"
+    // (docx v4-v6 opakovane). Odstranen.
 
     // mask-image end marker
     if has_mask {
