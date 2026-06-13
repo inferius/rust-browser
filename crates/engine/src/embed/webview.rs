@@ -1210,6 +1210,15 @@ impl WebView {
             .unwrap_or(false)
     }
 
+    /// Pending setTimeout tasky. Bez tohoto by delayed setTimeout (nove
+    /// respektuji delay) na klidne strance bez animaci nikdy nefire (event
+    /// loop usnul) - render_via se vola jen pri dirty/anim/raf/interval.
+    pub fn has_pending_timeouts(&self) -> bool {
+        self.interpreter.as_ref()
+            .map(|i| i.has_pending_tasks())
+            .unwrap_or(false)
+    }
+
     /// Pending requestAnimationFrame callbacky. Bez tohoto check by RAF-driven
     /// canvas animace (particles/wave) provedly max 1 frame a zamrzly (event
     /// loop usnul, callbacky se nedrainovaly).
@@ -5250,6 +5259,8 @@ impl WebView {
             || (self.scroll_target_y - self.scroll_y).abs() > 0.5
             || (self.scroll_target_x - self.scroll_x).abs() > 0.5
             || self.focused_is_input()
+            // Pending setTimeout (s delay) musi probudit event loop az dozraje.
+            || self.has_pending_timeouts()
     }
 
     /// Animace MIMO viewport netickaji render (Chrome compositor throttling).

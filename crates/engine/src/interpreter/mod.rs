@@ -2097,6 +2097,12 @@ impl Interpreter {
     /// Typicky: Promise.resolve native fn schedule cb pres task_queue,
     /// pollEvents drain pres interval_queue volat resolve, ale dokud
     /// drain_timers nepokracuje nikdo callback nezavola.
+    /// Ma frontu pending setTimeout/microtask/promise tasku? Frame scheduling
+    /// to kontroluje aby delayed setTimeout dozrál (event loop probuzen).
+    pub fn has_pending_tasks(&self) -> bool {
+        !self.task_queue.borrow().is_empty()
+    }
+
     pub fn drain_timers(&mut self) -> Result<(), JsError> {
         // Fast path - prazdne queue, zadny borrow needed.
         if self.task_queue.borrow().is_empty() { return Ok(()); }

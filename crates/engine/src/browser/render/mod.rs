@@ -1790,7 +1790,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             let scroll_anim = (self.scroll_y() - self.scroll_target_y()).abs() > 0.5
                 || (self.scroll_x() - self.scroll_target_x()).abs() > 0.5;
             let page_anim = self.webview.as_ref()
-                .map(|w| w.has_active_animations() || w.has_pending_intervals() || w.has_pending_raf())
+                .map(|w| w.has_active_animations() || w.has_pending_intervals()
+                    || w.has_pending_raf() || w.has_pending_timeouts())
                 .unwrap_or(false);
             if scroll_anim || page_anim {
                 // Kontinualni redraw pri aktivni animaci. Pacing resi Fifo present
