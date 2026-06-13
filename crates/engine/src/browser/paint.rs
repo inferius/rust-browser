@@ -645,8 +645,11 @@ fn compute_clip_rect(bx: &LayoutBox) -> (f32, f32, f32, f32, f32) {
         Some(ClipPath::Circle { cx_pct, cy_pct, radius_pct }) => {
             let cx = bx.rect.x + bx.rect.width  * cx_pct;
             let cy = bx.rect.y + bx.rect.height * cy_pct;
-            let half_diag = ((bx.rect.width / 2.0).powi(2) + (bx.rect.height / 2.0).powi(2)).sqrt();
-            let r = half_diag * radius_pct;
+            // CSS spec: % radius reference = sqrt(w^2 + h^2)/sqrt(2). Drive
+            // sqrt((w/2)^2+(h/2)^2) = ten samy /sqrt(2) -> kruh o sqrt(2) MENSI
+            // ("circle ma malou velikost"). circle(40%) na 120px boxu = r 48px.
+            let ref_dist = ((bx.rect.width.powi(2) + bx.rect.height.powi(2)) / 2.0).sqrt();
+            let r = ref_dist * radius_pct;
             (cx - r, cy - r, 2.0 * r, 2.0 * r, r)
         }
         Some(ClipPath::Ellipse { cx_pct, cy_pct, rx_pct, ry_pct }) => {
