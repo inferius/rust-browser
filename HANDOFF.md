@@ -2,6 +2,41 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`, `debug_utils.md`.
 
+## Session N+44: docx v6 triage + JS Events + IntersectionObserver
+
+### KLICOVE ZJISTENI: docx v6 je z velke casti ZASTARALY
+Empiricky overeno proti aktualnimu buildu (pmclick/cap3) - HODNE polozek
+z docx v6 uz FUNGUJE (docx psan proti starsi verzi):
+- Forms typing: "Hello" se objevi HNED (ne az po focus change). OK.
+- Range input: thumb ZLUTY + drag funguje (RANGE: 50->68). OK.
+- Canvas kresleni: souvisla cara s gradientem (zadne cary z rohu). OK.
+- Inner scrollbar (sekce 11 radek list): thumb se HYBE pri scrollu. OK.
+- JS Events mousemove: funguje (x:216 y:7).
+-> Uzivateli doporucit RE-TEST + novy docx jen s tim co fakt zbyva.
+
+### Opraveno tento session
+- **JS Events event.button**: click/mousedown/mouseup mely btn:undefined
+  -> pridan button (0/1/2). + **contextmenu** dispatch na pravy klik
+  (else vetev MouseDown pro Right/Middle + render/mod.rs route page-area
+  RMB do webview). Overeno: click btn:0, contextmenu, keydown/keyup.
+- **JS Events decimals**: mousemove offsetX/Y se nezaokrouhloval (inline,
+  ne pres event_offset) -> y:52.479... Pridan .round().
+- **IntersectionObserver un-intersect**: fire jen pri threshold crossingu;
+  prechod (0<ratio<threshold)->0 nezkrizil nic => element zustal visible.
+  Pridana isIntersecting-change podminka. Overeno RWE_IO_DBG.
+
+### ZBYVA (potvrzeno ze fakt nefunguje)
+- **io-box text color**: .visible da zluty BORDER ale text "IO 1.." zustane
+  sedy (dedicna `color: var(--a)` se neaplikuje na text node child -
+  pravdepodobne layout cache drzi stary ch.text_color; line 4250 mod.rs
+  inheritance bezi jen pri is_none()). Docx: "spatne se obarvi vnitrni text".
+- **Particles perf**: 26 FPS (z 230). O(n^2)=3160 iteraci/frame v tree-walk
+  interpretu + canvas ops. Canvas ops se CISTI per-frame (ne leak). =
+  fundamentalni interpreter hot-path (member access/array index/Math.sqrt).
+- Marquee mimo box (GPU scissor), writing-mode glyf rotace, column-count +1,
+  mix-blend pruh dole (re-overit), DnD ghost element, backdrop topbar,
+  scrollbar arrows + ::-webkit-scrollbar full styling (feature request).
+
 ## Session N+43: setTimeout delay (OBECNY) + DnD drop
 
 ### setTimeout respektuje delay (OBECNY BUG)
