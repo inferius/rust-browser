@@ -1210,21 +1210,28 @@ fn apply_paint_animations_inner(box_: &mut crate::browser::layout::LayoutBox,
         // od baseline. Bez tohoto by slide-anim (left 0->400) trigeroval
         // hard layout kazdy frame (~12 ms na test.html).
         if is_oof {
+            // % offset (left:50% u centered abs) resolve proti parent dimenzi -
+            // parse_length(%)=0 jinak resetoval rect.x na baseline (cb origin)
+            // -> centered abs element (top:50% left:50% + translate) skocil do
+            // leveho horniho rohu (box bez offsetu, text s offsetem).
+            let resolve_off = |v: &str, parent: f32| -> f32 {
+                let t = v.trim();
+                if let Some(pct) = t.strip_suffix('%') {
+                    if let Ok(p) = pct.parse::<f32>() { return p / 100.0 * parent; }
+                }
+                crate::browser::layout::parse_length(t)
+            };
             if let Some(l) = styles.get("left") {
-                let px = crate::browser::layout::parse_length(l.trim());
-                box_.rect.x = baseline.x + px;
+                box_.rect.x = baseline.x + resolve_off(l, parent_width);
             } else if let Some(r) = styles.get("right") {
-                let px = crate::browser::layout::parse_length(r.trim());
-                box_.rect.x = baseline.x - px;
+                box_.rect.x = baseline.x - resolve_off(r, parent_width);
             } else {
                 box_.rect.x = baseline.x;
             }
             if let Some(t) = styles.get("top") {
-                let px = crate::browser::layout::parse_length(t.trim());
-                box_.rect.y = baseline.y + px;
+                box_.rect.y = baseline.y + resolve_off(t, parent_height);
             } else if let Some(b) = styles.get("bottom") {
-                let px = crate::browser::layout::parse_length(b.trim());
-                box_.rect.y = baseline.y - px;
+                box_.rect.y = baseline.y - resolve_off(b, parent_height);
             } else {
                 box_.rect.y = baseline.y;
             }
@@ -1279,15 +1286,21 @@ fn apply_paint_animations_inner(box_: &mut crate::browser::layout::LayoutBox,
     // aby static children shifted spolu se self.
     let our_delta_x = box_.rect.x - baseline.x;
     let our_delta_y = box_.rect.y - baseline.y;
-    // Akumulator layout_dx pro descendants. Shift_subtree pri Relative se
-    // propaguje cascade-style cely subtree. Static box NE pridava shift; out-
-    // of-flow (Absolute/Fixed) je out-of-flow, ne participuje v parent shift.
+    // Akumulator layout_dx pro descendants. Layout umistil deti na pozici
+    // PARENTA vc. jeho left/top offsetu (Relative shift_subtree; Absolute/Fixed
+    // rect = cb + offset primo). Dite tedy ma v layoutu uz offset zapocteny ->
+    // jeho baseline ho musi odecist, jinak apply_paint left/top re-aplikuje
+    // parent offset DRUHE (centered abs: text vyletel o +offset mimo box).
     let our_layout_dx = parent_layout_dx + match box_.position {
-        super::layout::Position::Relative => box_.offset_left.unwrap_or(0.0),
+        super::layout::Position::Relative
+        | super::layout::Position::Absolute
+        | super::layout::Position::Fixed => box_.offset_left.unwrap_or(0.0),
         _ => 0.0,
     };
     let our_layout_dy = parent_layout_dy + match box_.position {
-        super::layout::Position::Relative => box_.offset_top.unwrap_or(0.0),
+        super::layout::Position::Relative
+        | super::layout::Position::Absolute
+        | super::layout::Position::Fixed => box_.offset_top.unwrap_or(0.0),
         _ => 0.0,
     };
     for ch in &mut box_.children {
