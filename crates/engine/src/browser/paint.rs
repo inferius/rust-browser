@@ -2635,7 +2635,11 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
                 let tw = 16.0_f32;
                 let tx = bx.rect.x + (bx.rect.width - tw).max(0.0) * frac;
                 let ty = bx.rect.y + bx.rect.height * 0.5 - tw * 0.5;
-                let thumb = bx.accent_color.or(bx.text_color).unwrap_or(accent);
+                // ::-webkit-slider-thumb background (CSS) ma prioritu - jinak
+                // default seda/modra misto autorovy barvy (var(--a) zluta).
+                let thumb = bx.accent_color
+                    .or_else(crate::browser::cascade::slider_thumb_color)
+                    .or(bx.text_color).unwrap_or(accent);
                 cmds.push(DisplayCommand::Rect { x: tx, y: ty, w: tw, h: tw, color: thumb, radius: 0.0 });
             }
             "range" => {

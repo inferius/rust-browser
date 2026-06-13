@@ -745,6 +745,48 @@ pub(crate) fn set_root_vars_snapshot(vars: &HashMap<String, String>) {
     ROOT_VARS_SNAPSHOT.with(|c| *c.borrow_mut() = vars.clone());
 }
 
+thread_local! {
+    /// Barva range thumbu z ::-webkit-slider-thumb / ::-moz-range-thumb
+    /// background. Tyto webkit pseudo-elementy nematchuji zadny realny box
+    /// (nemame slider-thumb pseudo box), takze paint je jinak ignoroval ->
+    /// range thumb byl default (seda/modra) misto CSS barvy (var(--a) zluta).
+    /// Naplneno scanem stylesheetu pri cascade; paint cte pri kresleni thumbu.
+    static SLIDER_THUMB_COLOR: std::cell::Cell<Option<[u8; 4]>> = const { std::cell::Cell::new(None) };
+}
+
+/// Scan stylesheetu pro ::-webkit-slider-thumb / ::-moz-range-thumb background.
+/// Posledni nalezene wins (typicky 1 styl na stranku). Volano z cascade.
+fn scan_slider_thumb_color(stylesheets: &[Stylesheet]) {
+    let mut found: Option<[u8; 4]> = None;
+    for sheet in stylesheets {
+        for rule in &sheet.rules {
+            let is_thumb = rule.selectors.iter().any(|s| s.parts.iter().any(|p|
+                p.pseudo_element.as_deref().map(|pe| {
+                    let pe = pe.trim_start_matches('-');
+                    pe.contains("slider-thumb") || pe.contains("range-thumb")
+                }).unwrap_or(false)));
+            if !is_thumb { continue; }
+            for d in &rule.declarations {
+                if d.property == "background" || d.property == "background-color" {
+                    // var(--a) resolve pres :root snapshot (z minuleho cascade);
+                    // bez toho parse_color("var(--a)")=None -> thumb default.
+                    let val = resolve_root_var(d.value.trim());
+                    if let Some(c) = super::layout::parse_color(val.trim()) {
+                        found = Some(c);
+                    }
+                }
+            }
+        }
+    }
+    SLIDER_THUMB_COLOR.with(|c| c.set(found));
+}
+
+/// Barva range thumbu z CSS (::-webkit-slider-thumb background). None = pouzij
+/// default (accent/text). Paint cte pri kresleni input[type=range] thumbu.
+pub fn slider_thumb_color() -> Option<[u8; 4]> {
+    SLIDER_THUMB_COLOR.with(|c| c.get())
+}
+
 /// Resolvuje var() v hodnote pres :root snapshot (pouziti z paint pro SVG attr).
 pub fn resolve_root_var(value: &str) -> String {
     if !value.contains("var(") { return value.to_string(); }
@@ -1342,6 +1384,7 @@ pub fn cascade_with_viewport(root: &Rc<Node>, stylesheets: &[Stylesheet],
     cascade_prof_reset();
     // Precompute hover/active/focus ancestor-or-self chainy (1x, root tady).
     rebuild_state_chains(root);
+    scan_slider_thumb_color(stylesheets);
     let prof_t_vp = std::time::Instant::now();
     // Set viewport pro thread-local pouzity v eval_math_func k konverzi
     // vw/vh argumentu min()/max()/clamp() na px.
@@ -2685,6 +2728,7 @@ mod rule_buckets_tests {
 pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
     // Precompute hover/active/focus ancestor-or-self chainy (1x, root tady).
     rebuild_state_chains(root);
+    scan_slider_thumb_color(stylesheets);
     let mut style_map: StyleMap = HashMap::new();
     // Globalni :root variables - resolved jednou
     let mut variables: HashMap<String, String> = HashMap::new();

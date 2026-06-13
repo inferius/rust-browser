@@ -1779,8 +1779,13 @@ impl Interpreter {
                     let typ = target.attr("type").unwrap_or_default().to_lowercase();
                     let mut changed = false;
                     if typ == "checkbox" {
-                        if target.has_attr("checked") { target.remove_attr("checked"); }
+                        let was = target.has_attr("checked");
+                        if was { target.remove_attr("checked"); }
                         else { target.set_attr("checked", ""); }
+                        if std::env::var("RWE_INPUT_DBG").is_ok() {
+                            eprintln!("[CHECKBOX] toggle was_checked={} -> now={}",
+                                was, target.has_attr("checked"));
+                        }
                         changed = true;
                     } else if typ == "radio" {
                         // Uncheck ostatni radia stejneho name (radio group).
