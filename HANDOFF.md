@@ -4,8 +4,33 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`, `debug_ut
 
 ## Session N+41: VYKON (scroll fast-path + off-screen layout-anim) + canvas
 
-User: "vykon extreme tragicky, kresleny canvas jde pres top bar". 4 commity,
-4201 testu pass. Vse profilovano (RWE_PROF) + overeno screenshoty.
+User: "vykon extreme tragicky, kresleny canvas jde pres top bar", pak
+follow-up: "canvas pozadi ma byt barevne, sine wave nefunguje, canvas
+mizi pri scrollu". 6 commitu, 4201 testu pass. Profilovano + screenshoty.
+
+### 5. CANVAS width=0 -> sine wave/draw barva/particles (follow-up)
+- Scripty bezi v load_html PRED prvnim layoutem -> getBoundingClientRect=0
+  -> resizeCanvas() nastavil canvas.width=0 -> sine wave smycka (for x=0
+  to width) 0x = prazdno, hsl(offsetX/0)=seda draw, particles na x=0.
+- Fix: po PRVNIM layoutu dispatch window 'load'+'resize' (first_layout_done
+  flag) -> resizeCanvas prepocita s validnim rectem. Sine wave 3 barevne
+  vlny, draw cary barevne.
+
+### 6. CANVAS mizi pri scrollu (scroll fast-path regrese) (follow-up)
+- Scroll fast-path re-emitoval jen scrollbar overlay, ne canvas ops ->
+  canvas behem compose-only framu zmizel (blikani). Fast-path ted
+  re-emituje canvas ops (clip + scroll shift).
+
+### Nereprodukovano (follow-up)
+- mix-blend "pruh dole pri scrollu": na aktualnim buildu mix-blend boxy
+  ciste (full paint i fast-path frame, FPS 220). User screenshot byl
+  pred dnesnimi zmenami; scroll fast-path / canvas overlay zmenil
+  compose poradi. Sledovat jestli se vrati.
+- Hover sekce 1: user "70 FPS, moc velky propad, ale lepsi". Na mem HW
+  ~100 FPS (10ms). Paint 6.4ms dominuje (damage-driven) - dalsi optim
+  by chtela tile prefetch / non-visible anim layer skip.
+
+### Puvodni 4 fixy:
 
 ### 1. SCROLL FAST PATH (10ms -> 1ms compose-only frame)
 - Scroll byl tragicky: KAZDY frame full pipeline (10ms, dipy 22ms). Layer
