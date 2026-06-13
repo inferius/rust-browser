@@ -1,4 +1,4 @@
-/// CSS cascade - aplikace stylesheets na DOM strom.
+﻿/// CSS cascade - aplikace stylesheets na DOM strom.
 ///
 /// Vrati StyleMap: pro kazdy element computed styles (HashMap<String, String>).
 /// Specificita rozhoduje pri kolizi.
@@ -21,7 +21,7 @@ type MatchedKey = (u64, u64, usize, u8, u8, u64);  // host_id, dom_ver, node_ptr
 /// Cascade sort key: (important, layer_priority, spec_id, spec_class, spec_type, order).
 /// Tuple compare lex - higher takes precedence. Drive bylo packed spec_packed = id*1000 +
 /// class + type, ktere prelilo pri >1000 class/type selectoru (audit #1). Nyni tuple
-/// separate per CSS Selectors L4 §17 ("Calculating a selector's specificity").
+/// separate per CSS Selectors L4 Â§17 ("Calculating a selector's specificity").
 pub type CascadeKey = (u32, u32, u32, u32, u32, usize);
 type MatchedVal = Rc<Vec<(CascadeKey, Declaration)>>;
 type WalkOutputKey = (u64, u64, usize, u8, u8, u64, u64);  // host_id, dom_ver, node_ptr, hover, focus, sheets_sig, inline_hash
@@ -1060,7 +1060,7 @@ fn resolve_math_func(s: &str) -> String {
                         j += 1;
                     }
                     if j >= bytes.len() { break 'outer; }
-                    // Zkontroluj ze argumenty NEobsahuji dalsi math func (kromě calc)
+                    // Zkontroluj ze argumenty NEobsahuji dalsi math func (kromÄ› calc)
                     let inner = &out[idx + nb.len()..j];
                     let has_inner = names.iter().any(|n| inner.contains(*n));
                     if !has_inner {
@@ -1194,7 +1194,7 @@ fn replace_var_once(s: &str, variables: &HashMap<String, String>) -> String {
 
 /// var() resolve s cycle detection. `seen` = stack aktualne resolving var
 /// names. Pri name v seen = empty fallback (cycle) misto recurze.
-/// Inspired by CSS Custom Properties L1 §3.1 "Guarded references".
+/// Inspired by CSS Custom Properties L1 Â§3.1 "Guarded references".
 fn replace_var_with_seen(
     s: &str,
     variables: &HashMap<String, String>,
@@ -2259,7 +2259,7 @@ pub fn cascade_with_viewport_typed(
     CascadeOutput { style_map, computed, declarations }
 }
 
-// ─── L5 batch 3 helpers ─────────────────────────────────────────────
+// â”€â”€â”€ L5 batch 3 helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// Parse `font-weight`: keyword (normal/bold/bolder/lighter) nebo cislo
 /// 1..1000. Invalid -> default 400.
@@ -3314,7 +3314,7 @@ pub fn cascade_pseudo(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> PseudoStyl
         for sheet in stylesheets {
             for rule in &sheet.rules {
                 for sel in &rule.selectors {
-                    // Najdi pseudo_element v poslední casti selectoru
+                    // Najdi pseudo_element v poslednĂ­ casti selectoru
                     let pe = sel.parts.last().and_then(|p| p.pseudo_element.clone());
                     let pe = match pe { Some(p) => p, None => continue };
                     if !matches_selector(node, sel) { continue; }
@@ -3982,7 +3982,7 @@ impl TransitionSpec {
     /// transitions oddelenych carkou, kazda pro jine property).
     pub fn from_styles(styles: &HashMap<String, String>) -> Vec<TransitionSpec> {
         // PERF fast-path: vetsina elementu transition NEMA. Bail bez parse / Vec alloc.
-        // Pri 5000 elements × 60 fps = 300k volani per sec. Drive vsech 5000
+        // Pri 5000 elements Ă— 60 fps = 300k volani per sec. Drive vsech 5000
         // procit a parsovat string per frame. Ted O(1) check.
         if !styles.contains_key("transition")
             && !styles.contains_key("transition-property") {
@@ -4387,6 +4387,21 @@ pub fn apply_animations_tracked(
     stylesheets: &[Stylesheet],
     elapsed_secs: f32,
 ) -> (bool, u64) {
+    apply_animations_tracked_vis(style_map, stylesheets, elapsed_secs, None)
+}
+
+/// Jako apply_animations_tracked, ale layout-prop hash zapocita JEN pro nody
+/// ve `visible` setu. Off-screen layout-anim (typewriter width v sekci mimo
+/// view) jinak invalidovala layout_fp CELEHO stromu kazdy frame -> full
+/// re-layout 12ms i pri hoveru jinde ("sekce 1 zpomaluje na 40 FPS"). Hodnoty
+/// se stale aplikuji (po scrollu k anim je element v cull -> hash -> MISS ->
+/// re-layout s aktualni hodnotou). visible=None => vse hashovat (legacy/test).
+pub fn apply_animations_tracked_vis(
+    style_map: &mut StyleMap,
+    stylesheets: &[Stylesheet],
+    elapsed_secs: f32,
+    visible: Option<&std::collections::HashSet<usize>>,
+) -> (bool, u64) {
     use super::layout::interpolate_keyframes;
     use std::hash::{Hash, Hasher};
     let mut any_active = false;
@@ -4426,7 +4441,7 @@ pub fn apply_animations_tracked(
                     let interp_vals = interpolate_keyframes(frames, initial);
                     let styles = Rc::make_mut(styles_rc);
                     for (k, v) in interp_vals {
-                    if is_layout_prop(&k) {
+                    if is_layout_prop(&k) && visible.map(|s| s.contains(&node_ptr_for_hash)).unwrap_or(true) {
                         let mut h = std::collections::hash_map::DefaultHasher::new();
                         node_ptr_for_hash.hash(&mut h); k.hash(&mut h); v.hash(&mut h);
                         layout_hash ^= h.finish();
@@ -4444,7 +4459,7 @@ pub fn apply_animations_tracked(
                 let interp_vals = interpolate_keyframes(frames, 0.0);
                 let styles = Rc::make_mut(styles_rc);
                 for (k, v) in interp_vals {
-                    if is_layout_prop(&k) {
+                    if is_layout_prop(&k) && visible.map(|s| s.contains(&node_ptr_for_hash)).unwrap_or(true) {
                         let mut h = std::collections::hash_map::DefaultHasher::new();
                         node_ptr_for_hash.hash(&mut h); k.hash(&mut h); v.hash(&mut h);
                         layout_hash ^= h.finish();
@@ -4470,7 +4485,7 @@ pub fn apply_animations_tracked(
                     let interp_vals = interpolate_keyframes(frames, final_progress);
                     let styles = Rc::make_mut(styles_rc);
                     for (k, v) in interp_vals {
-                    if is_layout_prop(&k) {
+                    if is_layout_prop(&k) && visible.map(|s| s.contains(&node_ptr_for_hash)).unwrap_or(true) {
                         let mut h = std::collections::hash_map::DefaultHasher::new();
                         node_ptr_for_hash.hash(&mut h); k.hash(&mut h); v.hash(&mut h);
                         layout_hash ^= h.finish();
@@ -4501,7 +4516,7 @@ pub fn apply_animations_tracked(
                 frames, local, &spec.timing_function);
             let styles = Rc::make_mut(styles_rc);
             for (k, v) in interp_vals {
-                    if is_layout_prop(&k) {
+                    if is_layout_prop(&k) && visible.map(|s| s.contains(&node_ptr_for_hash)).unwrap_or(true) {
                         let mut h = std::collections::hash_map::DefaultHasher::new();
                         node_ptr_for_hash.hash(&mut h); k.hash(&mut h); v.hash(&mut h);
                         layout_hash ^= h.finish();

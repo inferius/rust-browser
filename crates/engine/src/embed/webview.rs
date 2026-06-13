@@ -3831,8 +3831,29 @@ impl WebView {
         // overlay s animated property values (transform, opacity, left, ...).
         let has_keyframes = self.stylesheets.iter().any(|s| !s.keyframes.is_empty());
         if has_keyframes {
-            let (_animating, kf_layout_hash) = crate::browser::cascade::apply_animations_tracked(
-                std::rc::Rc::make_mut(&mut style_map), &self.stylesheets, elapsed);
+            // Visible set: node_ids ve viewportu (+buffer) z minuleho layoutu.
+            // Layout-prop anim hash jen pro VIDITELNE nody - off-screen
+            // typewriter width anim jinak invalidovala layout_fp celeho stromu
+            // kazdy frame -> 12ms full re-layout i pri hoveru jinde.
+            let vis: Option<std::collections::HashSet<usize>> =
+                self.last_layout_root.as_ref().map(|root| {
+                    let top = self.scroll_y - 400.0;
+                    let bot = self.scroll_y + self.viewport_h / self.zoom.max(0.01) + 400.0;
+                    let mut set = std::collections::HashSet::new();
+                    fn walk(bx: &crate::browser::layout::LayoutBox, top: f32, bot: f32,
+                            set: &mut std::collections::HashSet<usize>) {
+                        if bx.rect.y + bx.rect.height >= top && bx.rect.y <= bot {
+                            if let Some(n) = &bx.node {
+                                set.insert(std::rc::Rc::as_ptr(n) as usize);
+                            }
+                        }
+                        for ch in &bx.children { walk(ch, top, bot, set); }
+                    }
+                    walk(root, top, bot, &mut set);
+                    set
+                });
+            let (_animating, kf_layout_hash) = crate::browser::cascade::apply_animations_tracked_vis(
+                std::rc::Rc::make_mut(&mut style_map), &self.stylesheets, elapsed, vis.as_ref());
             anim_layout_hash ^= kf_layout_hash;
             let max_scroll = (style_map.len() as f32).max(1.0);
             let scroll_progress = if max_scroll > 1.0 { self.scroll_y / max_scroll.max(1.0) } else { 0.0 };
