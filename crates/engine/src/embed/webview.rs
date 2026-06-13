@@ -2353,9 +2353,12 @@ impl WebView {
                     let mm = self.last_layout_root.as_ref().and_then(|root| {
                         hovered_id.and_then(|n|
                             crate::browser::paint::find_box_by_node_id(root, n).map(|bx| {
+                                // Round na cele px (Chrome offsetX/Y jsou int -
+                                // float scroll lerp jinak prosakoval do JS jako
+                                // y:52.479...).
                                 (bx.node.clone(),
-                                 (x + sxp - bx.rect.x) as f64,
-                                 (y + syp - bx.rect.y) as f64)
+                                 ((x + sxp - bx.rect.x) as f64).round(),
+                                 ((y + syp - bx.rect.y) as f64).round())
                             }))
                     });
                     if let Some((Some(t), ox, oy)) = mm {
