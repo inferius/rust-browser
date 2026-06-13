@@ -2,6 +2,37 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`, `debug_utils.md`.
 
+## Session N+42: docx v6 forms/sekce - abs position, clip circle, range thumb
+
+Navazuje na N+41. Dalsi davka docx v6 bugu. Vse overeno screenshoty.
+
+### Sekce 13 (Position+z-index) "texty rozhozeny" KOMPLETNE
+- Abs element bez width dostal cb_w (cela sirka) misto shrink-to-fit ->
+  pos-tl/tr/bl/br se roztahly + prekryvaly. Fix: abs_intrinsic_max_content.
+- Text deti abs elementu nesledovaly box pri right/bottom (offset po
+  dispatch) -> bot:left/right text byl nahore. Fix: shift_subtree po dispatch.
+- Centered abs (top:50% left:50% + translate -50%): (a) apply_paint_animations
+  is_oof resolve % proti parent dim (parse_length(%)=0 resetoval na cb origin);
+  (b) our_layout_dx pro Absolute/Fixed zahrnout offset_left (text double-shift
+  vyletel mimo). VSECH 5 pozic + z-index + center text spravne.
+
+### Sekce 9 clip-path circle "mala velikost"
+- circle(%) radius reference byl sqrt((w/2)^2+(h/2)^2) = o sqrt(2) mensi
+  nez CSS spec sqrt((w^2+h^2)/2). circle(40%) na 120px: r 34->48 (vyplni box).
+
+### Forms range thumb + webkit policy
+- Range thumb seda->zluta: ::-webkit-slider-thumb scan (cascade) + paint.
+  Test stranka prepsana na standardni accent-color (webkit-prefix-policy:
+  engine nemusi vendor prefix hloubkove, test HTML = standard/nas prefix).
+
+### ZBYVA (overflow clip transformed content)
+- Marquee text projizdi spravne ale overflow:hidden NEclipuje translated
+  content (vychazi za levy okraj). Overflow clip je CPU bbox PRED transform;
+  transform je GPU compose PO -> mismatch. Potreba GPU scissor pro
+  overflow:hidden + transform/anim content (vetsi prace). Plus: writing-mode
+  glyf rotace, column-count sloupec navic vs Chrome, DnD ghost, JS Events
+  mouse move sekce, mix-blend pruh (nereprod), particles JS perf.
+
 ## Session N+41: VYKON (scroll fast-path + off-screen layout-anim) + canvas
 
 User: "vykon extreme tragicky, kresleny canvas jde pres top bar", pak
