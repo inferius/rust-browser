@@ -2746,6 +2746,7 @@ impl WebView {
                     if let (Some(target), Some(interp)) = (target_node.clone(), self.interpreter.as_mut()) {
                         let mut event = crate::interpreter::JsObject::new();
                         event.set("type".into(), crate::interpreter::JsValue::Str("mousedown".into()));
+                        event.set("button".into(), crate::interpreter::JsValue::Number(0.0));
                         event.set("clientX".into(), crate::interpreter::JsValue::Number(x as f64));
                         event.set("clientY".into(), crate::interpreter::JsValue::Number(y as f64));
                         if let Some((ox, oy)) = md_off {
@@ -2781,6 +2782,46 @@ impl WebView {
                     }
                     response.dirty = true;
                     self.dirty = true;
+                } else {
+                    // Right/Middle button: dispatch mousedown (+ contextmenu pro
+                    // Right). Bez tohoto pravy klik na stranku nedelal NIC ->
+                    // oncontextmenu handlery (engine-test JS Events) byly mrtve a
+                    // event.button na mousedown chybel.
+                    let btn_num = match button {
+                        crate::embed::MouseButton::Middle => 1.0,
+                        crate::embed::MouseButton::Right => 2.0,
+                        _ => 0.0,
+                    };
+                    let content_x = x + self.scroll_x;
+                    let content_y = y + self.scroll_y;
+                    let (ssx, ssy) = (self.scroll_x, self.scroll_y);
+                    let target = self.last_layout_root.as_ref()
+                        .and_then(|root| root.hit_test_scrolled(content_x, content_y, ssx, ssy))
+                        .and_then(|bx| bx.node.clone());
+                    if let Some(target) = target {
+                        let (ox, oy) = self.event_offset(&target, x, y);
+                        let make = |ty: &str| {
+                            let mut event = crate::interpreter::JsObject::new();
+                            event.set("type".into(), crate::interpreter::JsValue::Str(ty.into()));
+                            event.set("button".into(), crate::interpreter::JsValue::Number(btn_num));
+                            event.set("clientX".into(), crate::interpreter::JsValue::Number(x as f64));
+                            event.set("clientY".into(), crate::interpreter::JsValue::Number(y as f64));
+                            event.set("offsetX".into(), crate::interpreter::JsValue::Number(ox));
+                            event.set("offsetY".into(), crate::interpreter::JsValue::Number(oy));
+                            event.set("target".into(), crate::interpreter::JsValue::DomNode(
+                                std::rc::Rc::clone(&target)));
+                            crate::interpreter::JsValue::Object(
+                                std::rc::Rc::new(std::cell::RefCell::new(event)))
+                        };
+                        if let Some(interp) = self.interpreter.as_mut() {
+                            let _ = interp.dispatch_event(&target, "mousedown", make("mousedown"));
+                            if matches!(button, crate::embed::MouseButton::Right) {
+                                let _ = interp.dispatch_event(&target, "contextmenu", make("contextmenu"));
+                            }
+                        }
+                        response.dirty = true;
+                        self.dirty = true;
+                    }
                 }
             }
             InputEvent::MouseUp { x, y, button, .. } => {
@@ -2864,6 +2905,7 @@ impl WebView {
                     if let (Some(target), Some(interp)) = (up_target.as_ref(), self.interpreter.as_mut()) {
                         let mut event = crate::interpreter::JsObject::new();
                         event.set("type".into(), crate::interpreter::JsValue::Str("mouseup".into()));
+                        event.set("button".into(), crate::interpreter::JsValue::Number(0.0));
                         event.set("clientX".into(), crate::interpreter::JsValue::Number(x as f64));
                         event.set("clientY".into(), crate::interpreter::JsValue::Number(y as f64));
                         if let Some((ox, oy)) = mu_off {
@@ -2886,6 +2928,7 @@ impl WebView {
                             let event_obj_rc = std::rc::Rc::new(std::cell::RefCell::new({
                                 let mut event = crate::interpreter::JsObject::new();
                                 event.set("type".into(), crate::interpreter::JsValue::Str("click".into()));
+                                event.set("button".into(), crate::interpreter::JsValue::Number(0.0));
                                 event.set("clientX".into(), crate::interpreter::JsValue::Number(x as f64));
                                 event.set("clientY".into(), crate::interpreter::JsValue::Number(y as f64));
                                 event.set("offsetX".into(), crate::interpreter::JsValue::Number(cox));

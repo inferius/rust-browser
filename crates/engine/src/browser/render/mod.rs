@@ -2751,6 +2751,23 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             self.devtools.context_menu = Some(ContextMenuState::new(self.mouse_x, raw_y, items));
                         }
                         self.render();
+                    } else {
+                        // Page area RMB: deleguj do webview -> dispatch mousedown
+                        // (button 2) + contextmenu na element pod kurzorem. Drive
+                        // pravy klik na stranku nedelal NIC (jen devtools menu v
+                        // panelu) -> oncontextmenu handlery byly mrtve.
+                        let vp_x = self.mouse_x - self.scroll_x();
+                        let vp_y = self.mouse_y - self.scroll_y();
+                        if let Some(wv) = self.webview.as_mut() {
+                            let r = wv.handle_input(crate::embed::InputEvent::MouseDown {
+                                x: vp_x, y: vp_y,
+                                button: crate::embed::MouseButton::Right,
+                                modifiers: Default::default(),
+                            });
+                            if r.dirty {
+                                if let Some(w) = &self.window { w.request_redraw(); }
+                            }
+                        }
                     }
                 }
                 WindowEvent::MouseWheel { delta, .. } => {
