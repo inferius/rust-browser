@@ -30,6 +30,17 @@ mizi pri scrollu". 6 commitu, 4201 testu pass. Profilovano + screenshoty.
   ~100 FPS (10ms). Paint 6.4ms dominuje (damage-driven) - dalsi optim
   by chtela tile prefetch / non-visible anim layer skip.
 
+### 7. FORMS: range thumb barva + checkbox toggle (follow-up 2)
+- Range thumb byl seda misto zlute (CSS ::-webkit-slider-thumb
+  background:var(--a)). Webkit pseudo-elementy nematchuji realny box ->
+  ignorovany. scan_slider_thumb_color projde stylesheety pri cascade,
+  ulozi thumb bg (var() resolve pres :root snapshot) do thread-local;
+  paint range thumb cte. Ted zluty dle CSS.
+- Checkbox "nejde odskrtnout": NEREPRODUKOVANO. Toggle overen funkcni
+  (RWE_INPUT_DBG log: false->true->false, glyf+text+initial-checked+
+  :has border vizual OK, 4 screenshoty). dirty bypass paint cache,
+  checked v structural_fp. Mozna user mel starsi build. Sledovat.
+
 ### Puvodni 4 fixy:
 
 ### 1. SCROLL FAST PATH (10ms -> 1ms compose-only frame)
