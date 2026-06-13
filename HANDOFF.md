@@ -2,6 +2,62 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`, `debug_utils.md`.
 
+## Session N+41: VYKON (scroll fast-path + off-screen layout-anim) + canvas
+
+User: "vykon extreme tragicky, kresleny canvas jde pres top bar". 4 commity,
+4201 testu pass. Vse profilovano (RWE_PROF) + overeno screenshoty.
+
+### 1. SCROLL FAST PATH (10ms -> 1ms compose-only frame)
+- Scroll byl tragicky: KAZDY frame full pipeline (10ms, dipy 22ms). Layer
+  textury jsou v LAYOUT coords - pri scrollu se nemeni, staci posun v compose.
+- Novy gate (po compositor anim gate ve render_via): !dirty + scroll se meni
+  + |scroll - last_full_paint| < 450px (CULL buffer) + zadna VIDITELNA
+  paint-only animace (has_visible_noncompositor_anim) + zadne transitions/
+  sel/focus. Akce: re-compose last_layer_tree s novym offsetem, sticky
+  re-pozice (sticky_layers vec), overlay re-emit, compositor anims tick.
+- Klic: engine-test ma 19 CSS @keyframes anims i bez JS -> is_empty() nikdy.
+  Fast-path bezi kdyz zadna VIDITELNA paint-only anim (off-screen culled).
+- RWE_SCROLL_FASTPATH_OFF opt-out. Smooth scroll = 20 compose frames @ 1ms.
+
+### 2. OFF-SCREEN layout-anim neinvaliduje layout_fp (12ms -> 2ms)
+- "hover sekce 1 zpomaluje 240->40". Pricina: OFF-SCREEN typewriter width
+  anim (sekce 12) hashovala animovanou width do layout_fp CELEHO stromu
+  kazdy frame -> layout cache MISS -> 12-15ms full re-layout kazdy frame.
+- apply_animations_tracked_vis(visible): layout-prop hash JEN pro nody ve
+  viewportu (+400px). Off-screen anim hodnota se stale aplikuje (po scrollu
+  k ni v cull -> hash -> MISS -> re-layout s aktualni hodnotou).
+- Hover box: 22ms -> 10ms (45 -> 90+ FPS), layout 12-15 -> 2ms.
+
+### 3. CANVAS clip pres topbar (docx v6)
+- Canvas2D ops jsou overlay (nad vsim vc. sticky headeru) -> kresleni
+  pretekalo pres topbar. paint_canvas_ops clipuje na canvas box ∩
+  {y >= pod-sticky-header} (push_clipped: Rect intersect, ostatni bbox).
+
+### 4. CANVAS cara z rohu = destructuring ASSIGNMENT
+- "kresli cary z leveho rohu do kurzoru". JS `[lastX,lastY]=[e.offsetX,
+  e.offsetY]` (destructuring assignment do EXISTUJICICH lvalues) spadl v
+  assign_to do catch-all Error (tise spolknuto) -> lastX/lastY zustaly 0.
+- assign_to: Expr::Array + Expr::Object arms (rekurzivni). Obecny JS fix.
+
+### Perf stav po session
+- Idle (top): ~10ms/90 FPS po startup warm (initial frame 357ms = atlas warm).
+- Scroll: full paint frame (10ms) na wheel event, mezi nimi 1ms compose.
+- Hover sekce 1: 10ms (bylo 22). Paint 6.4ms dominuje (19 anim damage).
+
+### Docx v6 ZBYVA (dalsi session)
+- Particles canvas: 3200 JS iteraci/frame (spojnice O(n^2)) = interpreter
+  zatez; trail efekt nefunguje (op-replay model, chce bitmapu).
+- Selection vybira i menu pri tazeni pres stranku (sjednotit per-block).
+- mix-blend pruh dole; writing-mode glyf rotace; column-count sloupec navic;
+  marquee jede mimo box (overflow clip na transform anim); typewriter border.
+- Sekce 13 position texty rozhozene; sekce 9 circle maly/ellipse.
+- Forms: select option styling+sirka, progress styl, label->focus, range
+  accent-color zluty thumb, input text selection.
+- DnD ghost element + dragover styl + kurzor; :has() label klik.
+- Scrollbar sipky (custom styling); JS Events mouse move sekce + desetinna.
+- Paint 6.4ms baseline (damage-driven, 19 anim) - dalsi optimalizace = tile
+  prefetch / nez-viditelne anim layery neraster.
+
 ## Session N+40: docx v6 - SCROLLBAR vyresen, text-shadow, focus ring, IO offsety
 
 Docx v6 (44 polozek; rada formularovych se NEREPRODUKUJE na aktualnim
