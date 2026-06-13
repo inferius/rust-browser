@@ -754,6 +754,37 @@ impl Interpreter {
                     _ => Err(JsError::Runtime(format!("Nelze priradit do vlastnosti '{key}'")))
                 }
             }
+            // Destructuring ASSIGNMENT do existujicich lvalues (ne deklarace):
+            // `[a, b] = [x, y]`, `[lastX, lastY] = [e.offsetX, e.offsetY]`,
+            // `({a, b} = obj)`. Drive spadlo do catch-all Error a tise se
+            // spolklo -> canvas freehand lastX/lastY zustaly 0 = "cary z rohu".
+            Expr::Array(elems) => {
+                let items: Vec<JsValue> = match &val {
+                    JsValue::Array(a) => a.borrow().clone(),
+                    JsValue::Str(s) => s.chars().map(|c| JsValue::Str(c.to_string())).collect(),
+                    _ => vec![],
+                };
+                for (i, elem) in elems.iter().enumerate() {
+                    if let Some(t) = elem {
+                        let item = items.get(i).cloned().unwrap_or(JsValue::Undefined);
+                        self.assign_to(t, item, env)?;
+                    }
+                }
+                Ok(())
+            }
+            Expr::Object(props) => {
+                for p in props {
+                    let key = match &p.key {
+                        crate::ast::PropKey::Ident(s) | crate::ast::PropKey::Str(s) => s.clone(),
+                        crate::ast::PropKey::Num(n) => n.to_string(),
+                        crate::ast::PropKey::Computed(e) => self.eval(e, env)?.to_string(),
+                        crate::ast::PropKey::Spread => continue,
+                    };
+                    let item = self.get_prop(&val, &key)?;
+                    self.assign_to(&p.value, item, env)?;
+                }
+                Ok(())
+            }
             _ => Err(JsError::Runtime("Neplatny cil prirazeni".into())),
         }
     }

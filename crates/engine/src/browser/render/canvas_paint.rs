@@ -3,16 +3,59 @@
 use crate::browser::layout::LayoutBox;
 use crate::browser::paint::{CanvasOp, DisplayCommand};
 
-/// Emituje DisplayCommands pro canvas tag z canvas_ops storage.
+/// Ořízne DisplayCommand na clip rect (x0,y0,x1,y1). Rect intersectne,
+/// ostatni (Border/Text/Image) keep pokud bbox protina clip, jinak drop.
+/// Canvas kresleni je hlavne Rect (cary/fill) -> presny clip; ostatni approx.
+fn push_clipped(cmds: &mut Vec<DisplayCommand>, cmd: DisplayCommand,
+                cx0: f32, cy0: f32, cx1: f32, cy1: f32) {
+    match cmd {
+        DisplayCommand::Rect { x, y, w, h, color, radius } => {
+            let nx0 = x.max(cx0); let ny0 = y.max(cy0);
+            let nx1 = (x + w).min(cx1); let ny1 = (y + h).min(cy1);
+            if nx1 > nx0 && ny1 > ny0 {
+                cmds.push(DisplayCommand::Rect {
+                    x: nx0, y: ny0, w: nx1 - nx0, h: ny1 - ny0, color, radius,
+                });
+            }
+        }
+        other => {
+            // Bbox protina clip? Hruba aproximace pres rect-like souradnice.
+            let bb = match &other {
+                DisplayCommand::Border { x, y, w, h, .. } => Some((*x, *y, *w, *h)),
+                DisplayCommand::Image { x, y, w, h, .. } => Some((*x, *y, *w, *h)),
+                DisplayCommand::Text { x, y, font_size, .. } => Some((*x, *y - *font_size, 400.0, *font_size * 1.4)),
+                _ => None,
+            };
+            let keep = match bb {
+                Some((x, y, w, h)) => x + w > cx0 && x < cx1 && y + h > cy0 && y < cy1,
+                None => true,
+            };
+            if keep { cmds.push(other); }
+        }
+    }
+}
+
+/// Emituje DisplayCommands pro canvas tag z canvas_ops storage. clip_top =
+/// content-y pod sticky headerem (canvas ops jsou overlay = nad vsim vc.
+/// headeru; bez clipu kresleni pretekalo PRES topbar - docx v6 stiznost).
 pub fn paint_canvas_ops(
     bx: &LayoutBox,
     ops_storage: &std::collections::HashMap<usize, Vec<CanvasOp>>,
     cmds: &mut Vec<DisplayCommand>,
+    clip_top: f32,
 ) {
     if bx.tag.as_deref() == Some("canvas") {
         if let Some(node) = &bx.node {
             let ptr = std::rc::Rc::as_ptr(node) as usize;
             if let Some(ops) = ops_storage.get(&ptr) {
+                // Clip rect = canvas box ∩ {y >= clip_top}. Emit do tmp, pak clip.
+                let cx0 = bx.rect.x;
+                let cy0 = bx.rect.y.max(clip_top);
+                let cx1 = bx.rect.x + bx.rect.width;
+                let cy1 = bx.rect.y + bx.rect.height;
+                let mut tmp: Vec<DisplayCommand> = Vec::new();
+                {
+                let cmds = &mut tmp;
                 let mut current_fill: [u8; 4] = [0, 0, 0, 255];
                 let mut current_stroke: [u8; 4] = [0, 0, 0, 255];
                 let mut current_lw: f32 = 1.0;
@@ -219,10 +262,15 @@ pub fn paint_canvas_ops(
                         | CanvasOp::FillStyleRadialGradient { .. } => {}
                     }
                 }
+                }
+                // Flush tmp -> real cmds pres clip (canvas box ∩ pod-header).
+                for c in tmp.drain(..) {
+                    push_clipped(cmds, c, cx0, cy0, cx1, cy1);
+                }
             }
         }
     }
     for child in &bx.children {
-        paint_canvas_ops(child, ops_storage, cmds);
+        paint_canvas_ops(child, ops_storage, cmds, clip_top);
     }
 }

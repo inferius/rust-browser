@@ -4591,10 +4591,16 @@ impl WebView {
         self.last_layer_tree = Some(layer_tree);
 
         // 3-canvas. Canvas2D ops -> DisplayCommands (po body paint).
+        // clip_top = content-y pod sticky headerem (top:0) - canvas ops jsou
+        // overlay nad vsim vc. headeru, bez clipu kresleni pretekalo pres topbar.
         if let Some(interp) = self.interpreter.as_ref() {
             let canvas_ops = interp.canvas_ops.borrow();
+            let clip_top = self.sticky_layers.iter()
+                .filter(|(_, _, top, _, _)| *top < 1.0)
+                .map(|(_, _, _, _, h)| self.scroll_y + h)
+                .fold(0.0_f32, f32::max);
             crate::browser::render::canvas_paint::paint_canvas_ops(
-                &layout_root, &canvas_ops, &mut display_list);
+                &layout_root, &canvas_ops, &mut display_list, clip_top);
         }
 
         // 3-caret. Blinking caret jen na focused TEXT-EDITABLE input/textarea.
