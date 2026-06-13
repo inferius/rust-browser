@@ -1551,9 +1551,18 @@ impl Interpreter {
                 let ratio = if area_t > 0.0 { (iw * ih) / area_t } else { 0.0 };
                 let prev = obs.prev_ratios.borrow().get(&id).copied().unwrap_or(-1.0);
                 // Threshold crossing detekce - prev < th && cur >= th (or vice versa).
-                let crossed = obs.thresholds.iter().any(|&th| {
-                    (prev < th && ratio >= th) || (prev >= th && ratio < th)
-                }) || prev < 0.0;  // first observation
+                // + isIntersecting boundary (implicitni threshold 0): prechod
+                // "castecne videt" (0<ratio<min_threshold) -> "mimo" (ratio=0)
+                // nezkrizi zadny user threshold (napr. [0.5]) => callback by
+                // nefire-nul => element zustane "visible" navzdy (docx v6: IO
+                // "se neodneviditelni"). Chrome fire i pri zmene isIntersecting.
+                let was_int = prev > 0.0;
+                let is_int = ratio > 0.0;
+                let crossed = prev < 0.0          // first observation
+                    || was_int != is_int          // isIntersecting zmena
+                    || obs.thresholds.iter().any(|&th| {
+                        (prev < th && ratio >= th) || (prev >= th && ratio < th)
+                    });
                 if crossed && std::env::var("RWE_IO_DBG").is_ok() {
                     eprintln!("[IO] target=#{} ratio={:.2} prev={:.2} isInt={} rect=({:.0},{:.0},{:.0}x{:.0}) root=({:.0},{:.0},{:.0}x{:.0})",
                         node.attr("id").unwrap_or_default(), ratio, prev, ratio > 0.0,
