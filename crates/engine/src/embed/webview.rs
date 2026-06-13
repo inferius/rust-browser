@@ -343,6 +343,12 @@ pub struct WebView {
     /// staci re-compose s novym offsetem (compose-only frame, skip paint).
     pub(crate) last_full_scroll_y: f32,
     pub(crate) last_full_scroll_x: f32,
+    /// Po PRVNIM layoutu dispatch window 'load'+'resize' - scripts bezi pred
+    /// layoutem (load_html), takze getBoundingClientRect/offsetWidth pri init
+    /// vraci 0 (layout_rects prazdne) -> canvas.width=0 (resizeCanvas) ->
+    /// sine wave smycka 0x, hsl(offsetX/0) seda, particles na x=0. Resize
+    /// event prepocita canvas s validnim rectem.
+    pub(crate) first_layout_done: bool,
     /// Sticky layery (id, original_y, top_offset, parent_bottom, height) z
     /// posledniho FULL paintu - scroll fast-path je re-pozicuje dle noveho
     /// scrollu (apply_sticky jinak nebezi -> header by se odsunul nahoru).
@@ -1125,6 +1131,7 @@ impl WebView {
             last_full_scroll_y: 0.0,
             last_full_scroll_x: 0.0,
             sticky_layers: Vec::new(),
+            first_layout_done: false,
             tile_textures: std::collections::HashMap::new(),
         }
     }
@@ -3495,11 +3502,32 @@ impl WebView {
                 };
                 set_layer_root_y(&mut tree, id, target_y);
             }
-            // Re-emit overlay (scrollbar thumb pozice zavisi na scroll_y).
+            // Re-emit overlay (scrollbar thumb + canvas ops - oboje zavisi na
+            // scroll_y). Canvas ops jsou overlay; bez re-emitu by canvas behem
+            // scroll fast-path framu ZMIZEL a objevil se az pri full paintu
+            // = blikani ("canvas mizi pri scrollovani").
             let mut overlay: Vec<crate::browser::paint::DisplayCommand> = Vec::new();
             if let Some(root) = self.last_layout_root.as_ref() {
                 let vw = self.viewport_w / self.zoom.max(0.01);
                 let vh = self.viewport_h / self.zoom.max(0.01);
+                // Canvas ops (content coords) -> shift o -scroll na viewport.
+                if let Some(interp) = self.interpreter.as_ref() {
+                    let canvas_ops = interp.canvas_ops.borrow();
+                    if !canvas_ops.is_empty() {
+                        let clip_top = self.sticky_layers.iter()
+                            .filter(|(_, _, top, _, _)| *top < 1.0)
+                            .map(|(_, _, _, _, h)| self.scroll_y + h)
+                            .fold(0.0_f32, f32::max);
+                        let mut cv: Vec<crate::browser::paint::DisplayCommand> = Vec::new();
+                        crate::browser::render::canvas_paint::paint_canvas_ops(
+                            root, &canvas_ops, &mut cv, clip_top);
+                        for cmd in cv.iter_mut() {
+                            crate::browser::render::segments::shift_command_x(cmd, -self.scroll_x);
+                            crate::browser::render::segments::shift_command_y(cmd, -self.scroll_y);
+                        }
+                        overlay.extend(cv);
+                    }
+                }
                 crate::browser::paint::emit_main_scrollbar_overlay(
                     root, &mut overlay, vw, vh, self.scroll_x, self.scroll_y);
             }
@@ -4983,6 +5011,23 @@ impl WebView {
             let mut rects = self.layout_rects.borrow_mut();
             rects.clear();
             populate_layout_rects(&layout_root, self.scroll_x, self.scroll_y, &mut rects);
+        }
+        // PRVNI layout hotovy: dispatch window 'load' + 'resize'. Scripty bezely
+        // pred layoutem (load_html) -> getBoundingClientRect vracel 0 ->
+        // canvas.width=0 (resizeCanvas). Ted s naplnenym layout_rects prepocita.
+        if !self.first_layout_done {
+            self.first_layout_done = true;
+            if let Some(interp) = self.interpreter.as_mut() {
+                let mk = |ty: &str| {
+                    let mut e = crate::interpreter::JsObject::new();
+                    e.set("type".into(), crate::interpreter::JsValue::Str(ty.into()));
+                    crate::interpreter::JsValue::Object(std::rc::Rc::new(std::cell::RefCell::new(e)))
+                };
+                interp.dispatch_window_event("load", mk("load"));
+                interp.dispatch_window_event("resize", mk("resize"));
+            }
+            // Canvas/layout se po resize muze zmenit -> dalsi frame re-render.
+            self.dirty = true;
         }
         {
             // PERF: drive `props.insert(*ptr, style.clone())` per element =
