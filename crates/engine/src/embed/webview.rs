@@ -338,6 +338,15 @@ pub struct WebView {
     /// po extract (override layer.opacity/transform). Pri animaci tickou
     /// = structural_fp NE menil = layer texture cache hit = skip raster.
     pub(crate) compositor_anims: crate::browser::compositor::anim::CompositorAnimStore,
+    /// SCROLL FAST PATH: scroll pri poslednim FULL paintu. Layer textury jsou
+    /// rastrovane pro [scroll +- CULL_BUF]. Dokud |scroll - last_full| < buffer
+    /// staci re-compose s novym offsetem (compose-only frame, skip paint).
+    pub(crate) last_full_scroll_y: f32,
+    pub(crate) last_full_scroll_x: f32,
+    /// Sticky layery (id, original_y, top_offset, parent_bottom, height) z
+    /// posledniho FULL paintu - scroll fast-path je re-pozicuje dle noveho
+    /// scrollu (apply_sticky jinak nebezi -> header by se odsunul nahoru).
+    pub(crate) sticky_layers: Vec<(usize, f32, f32, f32, f32)>,
 }
 
 /// Pomocnik pro debug log node count v layout slow path.
@@ -1113,6 +1122,9 @@ impl WebView {
             layer_local_cache: std::collections::HashMap::new(),
             last_paint_fingerprint: None,
             compositor_anims: crate::browser::compositor::anim::CompositorAnimStore::new(),
+            last_full_scroll_y: 0.0,
+            last_full_scroll_x: 0.0,
+            sticky_layers: Vec::new(),
             tile_textures: std::collections::HashMap::new(),
         }
     }
@@ -3416,6 +3428,106 @@ impl WebView {
             // propadnout do full pipeline (final stav se musi zapect).
         }
 
+        // === SCROLL FAST PATH ===
+        // Cisty scroll frame (jen scroll_y/x se meni, zadny DOM/style/anim):
+        // layer textury jsou rastrovane v LAYOUT coords pro [last_full +-
+        // CULL_BUF]. Dokud je novy viewport uvnitr toho pasma, staci re-compose
+        // s novym scroll offsetem - skip cascade/layout/paint/extract (~10ms ->
+        // ~1.5ms). Sticky layery re-pozicujeme rucne (apply_sticky nebezi).
+        // Mimo buffer -> propadne do full pipeline (re-paint, posune buffer).
+        const SCROLL_FAST_BUF: f32 = 450.0;
+        let scroll_changed = self.scroll_anim_y.is_some() || self.scroll_anim_x.is_some()
+            || (self.scroll_y - self.last_full_scroll_y).abs() > 0.01
+            || (self.scroll_x - self.last_full_scroll_x).abs() > 0.01;
+        let sf_within_buf = (self.scroll_y - self.last_full_scroll_y).abs() < SCROLL_FAST_BUF
+            && (self.scroll_x - self.last_full_scroll_x).abs() < SCROLL_FAST_BUF;
+        // active_transitions (border/bg transitions) jsou paint-only -> pokud
+        // bezi, full pipeline. Viditelne paint-only @keyframes taky. Compositor
+        // anims (transform/opacity) se ticknou ve fast-path. Off-screen anims
+        // ignorovany (culled).
+        let sf_ok = !self.dirty
+            && scroll_changed
+            && self.active_transitions.is_empty()
+            && !self.has_visible_noncompositor_anim()
+            && !self.focused_is_input()
+            && self.resize_layout_override.is_none()
+            && self.pending_selection_texts.is_none()
+            && !self.sel_dragging()
+            && self.open_select.is_none()
+            && self.last_layer_tree.is_some()
+            && self.target_view.is_some()
+            && self.target_texture.is_some()
+            && sf_within_buf
+            && std::env::var("RWE_LAYER_GPU_OFF").is_err()
+            && std::env::var("RWE_SCROLL_FASTPATH_OFF").is_err();
+        if !sf_ok && std::env::var("RWE_GATE_DBG").is_ok() && scroll_changed {
+            eprintln!("[GATE-SKIP] dirty={} sc={} vis_paint_anim={} trans={} focus={} resize={} sel={} seldrag={} selopen={} tree={} buf={}",
+                self.dirty, scroll_changed, self.has_visible_noncompositor_anim(),
+                self.active_transitions.len(),
+                self.focused_is_input(), self.resize_layout_override.is_some(),
+                self.pending_selection_texts.is_some(), self.sel_dragging(),
+                self.open_select.is_some(), self.last_layer_tree.is_some(), sf_within_buf);
+        }
+        if sf_ok {
+            let now_sf = std::time::Instant::now();
+            let mut tree = self.last_layer_tree.take().unwrap();
+            // Tick compositor anims (transform/opacity) + apply na layer tree -
+            // off-screen i on-screen, levne (jen aktivni). Bez tohoto by
+            // compositor animace behem scroll fast-path zamrzly.
+            self.compositor_anims.tick(std::time::Instant::now());
+            self.compositor_anims.apply_to_layer_tree(&mut tree);
+            // Sticky re-pozice: target_y dle noveho scrollu (replika apply_sticky).
+            fn set_layer_root_y(layer: &mut crate::browser::compositor::LayerNode,
+                                id: usize, new_y: f32) -> bool {
+                if layer.id == id { layer.root_rect.y = new_y; return true; }
+                for ch in &mut layer.children {
+                    if set_layer_root_y(ch, id, new_y) { return true; }
+                }
+                false
+            }
+            for &(id, original_y, top, parent_bottom, height) in &self.sticky_layers {
+                let viewport_top = self.scroll_y + top;
+                let target_y = if original_y < viewport_top {
+                    let max_y = parent_bottom - height;
+                    viewport_top.min(max_y).max(original_y)
+                } else {
+                    original_y
+                };
+                set_layer_root_y(&mut tree, id, target_y);
+            }
+            // Re-emit overlay (scrollbar thumb pozice zavisi na scroll_y).
+            let mut overlay: Vec<crate::browser::paint::DisplayCommand> = Vec::new();
+            if let Some(root) = self.last_layout_root.as_ref() {
+                let vw = self.viewport_w / self.zoom.max(0.01);
+                let vh = self.viewport_h / self.zoom.max(0.01);
+                crate::browser::paint::emit_main_scrollbar_overlay(
+                    root, &mut overlay, vw, vh, self.scroll_x, self.scroll_y);
+            }
+            {
+                let target_view = self.target_view.as_ref().unwrap();
+                let target_texture = self.target_texture.as_ref().unwrap();
+                compose_layer_tree_into(
+                    renderer, &tree, target_view, target_texture,
+                    &self.layer_textures, &self.tile_textures,
+                    self.scroll_x, self.scroll_y, self.zoom, self.scale_factor,
+                    &overlay,
+                );
+            }
+            self.last_overlay_cmds = overlay;
+            self.last_layer_tree = Some(tree);
+            if std::env::var("RWE_GATE_DBG").is_ok() {
+                eprintln!("[GATE] scroll-only frame scroll_y={:.0} (full@{:.0}) {:.2}ms",
+                    self.scroll_y, self.last_full_scroll_y,
+                    now_sf.elapsed().as_secs_f32() * 1000.0);
+            }
+            self.prof_cascade_ms = 0.0;
+            self.prof_layout_ms = 0.0;
+            self.prof_paint_ms = 0.0;
+            self.prof_gpu_ms = now_sf.elapsed().as_secs_f32() * 1000.0;
+            self.frame_pacer.mark_presented(_frame_idx);
+            return self.target_view.as_ref();
+        }
+
         // Drain async jobs (image lazy loads, file IO callbacks). Volane PRED
         // cascade aby novy state byl dostupny v style_map (e.g. image natural
         // dims po load aktualizuji layout).
@@ -4173,6 +4285,29 @@ impl WebView {
         // (nize) pak ma sticky-shiftnute rect.y -> sticky header/sidebar drzi.
         crate::browser::layout::apply_sticky(&mut layout_root, self.scroll_y);
         let save_layout_root_at_end = false;
+
+        // SCROLL FAST PATH priprava: zapamatuj scroll tohoto FULL paintu +
+        // collect sticky layery (id, original_y, top, parent_bottom, height).
+        // Scroll fast-path je pak re-pozicuje bez re-layoutu (apply_sticky
+        // nebezi v compose-only frame).
+        self.last_full_scroll_y = self.scroll_y;
+        self.last_full_scroll_x = self.scroll_x;
+        self.sticky_layers.clear();
+        fn collect_sticky(bx: &crate::browser::layout::LayoutBox, parent_bottom: f32,
+                          out: &mut Vec<(usize, f32, f32, f32, f32)>) {
+            if matches!(bx.position, crate::browser::layout::Position::Sticky) {
+                if let Some(node) = &bx.node {
+                    let id = std::rc::Rc::as_ptr(node) as usize;
+                    let orig = bx.sticky_original_y.unwrap_or(bx.rect.y);
+                    let top = bx.offset_top.unwrap_or(0.0);
+                    out.push((id, orig, top, parent_bottom, bx.rect.height));
+                }
+            }
+            let pb = bx.rect.y + bx.rect.height;
+            for ch in &bx.children { collect_sticky(ch, pb, out); }
+        }
+        let root_pb = layout_root.rect.y + layout_root.rect.height;
+        collect_sticky(&layout_root, root_pb, &mut self.sticky_layers);
 
         // 2d. L1+L2 compositor: extract LayerTree z layout + damage tracking.
         // L2: per-layer offscreen texture allocator + damage rect detection.
@@ -5024,6 +5159,23 @@ impl WebView {
     /// vykon "na prazdno". Elapsed time animaci je absolutni -> pri scrollu
     /// zpet do view pokracuji na spravne pozici (scroll sam triggeruje render).
     /// 200px margin = animace tesne za hranou jeste tickaji (plynuly nastup).
+    /// Je viditelna nejaka PAINT-ONLY animace (NE compositor-friendly)? Tyto
+    /// musi re-paint sve layery kazdy frame -> scroll fast-path je nemuze
+    /// skipnout. Compositor anims (transform/opacity) se ticknou + composnou.
+    /// Off-screen animace ignorovany (jejich layer neni videt).
+    fn has_visible_noncompositor_anim(&self) -> bool {
+        let Some(root) = self.last_layout_root.as_ref() else { return true; };
+        let top = self.scroll_y - 50.0;
+        let bot = self.scroll_y + self.viewport_h + 50.0;
+        self.active_animations.iter().any(|(nid, _)| {
+            if self.compositor_anims.has_node(*nid) { return false; }
+            match crate::browser::paint::find_box_by_node_id(root, *nid) {
+                Some(bx) => bx.rect.y + bx.rect.height >= top && bx.rect.y <= bot,
+                None => false,
+            }
+        })
+    }
+
     fn any_active_animation_visible(&self) -> bool {
         let Some(root) = self.last_layout_root.as_ref() else { return true; };
         let top = self.scroll_y - 200.0;
