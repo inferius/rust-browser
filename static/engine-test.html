@@ -931,7 +931,6 @@
 
     /* custom range */
     .fd-range {
-      -webkit-appearance: none;
       appearance: none;
       width: 100%;
       height: 4px;
@@ -939,22 +938,8 @@
       border-radius: 0;
       outline: none;
       border: 1px solid var(--border);
-    }
-
-    .fd-range::-webkit-slider-thumb {
-      -webkit-appearance: none;
-      width: 16px; height: 16px;
-      background: var(--a);
-      cursor: pointer;
-      border-radius: 0;
-    }
-
-    .fd-range::-moz-range-thumb {
-      width: 16px; height: 16px;
-      background: var(--a);
-      cursor: pointer;
-      border-radius: 0;
-      border: none;
+      /* accent-color = standardni zpusob obarveni thumbu (bez webkit prefixu) */
+      accent-color: var(--a);
     }
 
     /* custom checkbox */
