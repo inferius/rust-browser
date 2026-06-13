@@ -4859,6 +4859,28 @@ fn layout_block_multicol(bx: &mut LayoutBox) {
     }
 }
 
+/// Intrinsic max-content sirka pro shrink-to-fit (abs pozicovany element bez
+/// explicit width). Text node = zmerena sirka; inline deti = SUM; block deti
+/// = MAX. + vlastni padding+border. CSS shrink-to-fit aproximace (max-content).
+fn abs_intrinsic_max_content(bx: &LayoutBox) -> f32 {
+    let pad = bx.padding_left.unwrap_or(bx.padding) + bx.padding_right.unwrap_or(bx.padding)
+        + 2.0 * bx.border_width;
+    if let Some(t) = &bx.text {
+        let tw = measure_text_width_full(t, bx.font_size, bx.effective_weight(),
+            bx.italic, &bx.font_family, bx.letter_spacing);
+        return tw + pad;
+    }
+    if bx.children.is_empty() { return pad; }
+    let any_block = bx.children.iter().any(|c| matches!(c.display,
+        Display::Block | Display::Flex | Display::Grid | Display::ListItem));
+    let inner: f32 = if any_block {
+        bx.children.iter().map(abs_intrinsic_max_content).fold(0.0_f32, f32::max)
+    } else {
+        bx.children.iter().map(abs_intrinsic_max_content).sum()
+    };
+    inner + pad
+}
+
 pub fn layout_block(bx: &mut LayoutBox) {
     // writing-mode: vertical-rl / vertical-lr - block axis zmena na X
     let vertical = bx.writing_mode.is_vertical();
@@ -4950,10 +4972,29 @@ pub fn layout_block(bx: &mut LayoutBox) {
                     - 2.0 * bx.border_width)
             };
             let child = &mut bx.children[i];
-            // Width: explicit / auto -> shrink-to-fit (use cb_w upper bound).
-            child.rect.width = child.explicit_width.unwrap_or_else(|| {
-                if let Some(p) = child.width_pct { cb_w * p } else { cb_w }
-            });
+            // Width: explicit / %; jinak SHRINK-TO-FIT (CSS abs spec): width =
+            // intrinsic max-content clamped na cb_w. cb_w fallback (full) byl
+            // bug -> abs element bez width se roztahl na celou sirku containeru
+            // misto obtaknuti obsahu (pos-tl/tr/bl/br "top:left" se prekryvaly).
+            // Vyjimka: L+R oba inset -> resi inset blok nize (cb_w - l - r).
+            let has_lr = child.offset_left.is_some() && child.offset_right.is_some();
+            let mut shrink_to_fit_w: Option<f32> = None;
+            child.rect.width = if let Some(w) = child.explicit_width {
+                w
+            } else if let Some(p) = child.width_pct {
+                cb_w * p
+            } else if has_lr {
+                cb_w // inset blok prepise na cb_w - l - r
+            } else {
+                let iw = abs_intrinsic_max_content(child).min(cb_w);
+                shrink_to_fit_w = Some(iw);
+                iw
+            };
+            // Drz shrink-to-fit width pres layout_dispatch (jinak block layout
+            // prepise rect.width na full cb_w). Restore po dispatch.
+            if let Some(w) = shrink_to_fit_w {
+                child.explicit_width = Some(w);
+            }
             if let Some(eh) = child.explicit_height {
                 child.rect.height = eh;
             } else if let Some(p) = child.height_pct {
@@ -4988,12 +5029,10 @@ pub fn layout_block(bx: &mut LayoutBox) {
                     true
                 } else { false }
             } else { false };
-            // Apply offset (top/left/right/bottom) relative to CB.
+            // Predbezna pozice z left/top - layout_dispatch layoutne obsah
+            // (text/deti) relativne k teto pozici.
             child.rect.x = cb_x + child.offset_left.unwrap_or(0.0);
             child.rect.y = cb_y + child.offset_top.unwrap_or(0.0);
-            if let Some(r) = child.offset_right {
-                child.rect.x = cb_x + cb_w - r - child.rect.width;
-            }
             // Treat display:inline as block for layout (inline OOF rare edge case).
             let saved_display = child.display;
             if matches!(child.display, Display::Inline) {
@@ -5005,9 +5044,25 @@ pub fn layout_block(bx: &mut LayoutBox) {
             // tyto by mely byt computed values bez fallback do user-set rules).
             if inset_w_temp { child.explicit_width = None; }
             if inset_h_temp { child.explicit_height = None; }
+            if shrink_to_fit_w.is_some() { child.explicit_width = None; }
+            // Finalni pozice z right/bottom (width/height zname az po dispatch).
+            // SHIFT celeho subtree o delta - jinak by se posunul jen box rect a
+            // text/deti zustaly na predbezne (left/top) pozici (bot:left/right
+            // text byl nahore misto v boxu).
+            let pre_x = bx.children[i].rect.x;
+            let pre_y = bx.children[i].rect.y;
+            let mut fx = pre_x;
+            let mut fy = pre_y;
+            if let Some(r) = bx.children[i].offset_right {
+                fx = cb_x + cb_w - r - bx.children[i].rect.width;
+            }
             if let Some(b) = bx.children[i].offset_bottom {
-                let h = bx.children[i].rect.height;
-                bx.children[i].rect.y = cb_y + cb_h - b - h;
+                fy = cb_y + cb_h - b - bx.children[i].rect.height;
+            }
+            let dx = fx - pre_x;
+            let dy = fy - pre_y;
+            if dx.abs() > 0.01 || dy.abs() > 0.01 {
+                shift_subtree(&mut bx.children[i], dx, dy);
             }
             i += 1;
             continue;
