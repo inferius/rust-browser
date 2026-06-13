@@ -2,6 +2,30 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`, `debug_utils.md`.
 
+## Session N+43: setTimeout delay (OBECNY) + DnD drop
+
+### setTimeout respektuje delay (OBECNY BUG)
+- setTimeout ZAHAZOVAL delay (let _delay) a drain_timers fire VSECHNY
+  tasky okamzite -> setTimeout(_, 2000) fire instantne. Ovlivnovalo
+  VSECHNY delayed timeouty (DnD reset, debounce, anim sekvence,
+  toast/notifikace, ...). Fix: task_queue tuple + fire_at Instant
+  (now+delay), drain fire jen DUE. Promise/microtask/rAF-idle push s
+  now (fire hned, beze zmeny). + has_pending_timeouts() probudi event
+  loop dokud timer dozrá (klidná stránka jinak neprobudí render).
+
+### DnD drop "neukaze obsah"
+- drop_target se resetoval na None kdyz posledni dragover frame mel
+  kurzor mimo element (hit_test None). Fix: drop_target STICKY (update
+  jen kdyz over=Some). + setTimeout fix vyse (drop reset hned jinak).
+- Overeno: drag ALPHA -> "Dropnuto: ALPHA" + zluty border, drzi 2s.
+
+### ZBYVA
+- Marquee overflow clip (GPU scissor transformed content), writing-mode
+  glyf rotace (vertical-rl latinka stacked misto rotovana 90), column-
+  count vs Chrome, JS Events mouse move sekce, mix-blend pruh (nereprod),
+  particles JS perf, backdrop-filter topbar, DnD ghost element (vizual
+  draggovaneho pod kurzorem - drop uz funguje).
+
 ## Session N+42: docx v6 forms/sekce - abs position, clip circle, range thumb
 
 Navazuje na N+41. Dalsi davka docx v6 bugu. Vse overeno screenshoty.
