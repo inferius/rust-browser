@@ -30,7 +30,7 @@ use super::builtins_helpers::{run_worker_thread, make_message_port, build_search
 
 pub fn setup_builtins(
     env: &Rc<RefCell<Environment>>,
-    task_queue: &Rc<RefCell<Vec<(u32, JsValue, Vec<JsValue>)>>>,
+    task_queue: &Rc<RefCell<Vec<(u32, std::time::Instant, JsValue, Vec<JsValue>)>>>,
     interval_queue: &Rc<RefCell<Vec<super::IntervalEntry>>>,
     next_timer_id: &Rc<RefCell<u32>>,
     workers: &Rc<RefCell<HashMap<u32, super::WorkerState>>>,
@@ -2206,7 +2206,7 @@ pub fn setup_builtins(
         e.define("setTimeout", native("setTimeout", move |a| {
             let mut iter = a.into_iter();
             let cb   = iter.next().unwrap_or(JsValue::Undefined);
-            let _delay = iter.next();
+            let delay_ms = iter.next().map(|v| v.to_number()).unwrap_or(0.0).max(0.0);
             let args: Vec<JsValue> = iter.collect();
             let id = {
                 let mut ctr = id_ctr.borrow_mut();
@@ -2214,7 +2214,11 @@ pub fn setup_builtins(
                 *ctr += 1;
                 id
             };
-            tq.borrow_mut().push((id, cb, args));
+            // fire_at = now + delay. drain_timers fire az DOZRAJE (drive delay
+            // ignorovan = vse fire hned).
+            let fire_at = std::time::Instant::now()
+                + std::time::Duration::from_secs_f64(delay_ms / 1000.0);
+            tq.borrow_mut().push((id, fire_at, cb, args));
             Ok(JsValue::Number(id as f64))
         }));
     }
@@ -2222,7 +2226,7 @@ pub fn setup_builtins(
         let tq = Rc::clone(task_queue);
         e.define("clearTimeout", native("clearTimeout", move |a| {
             let id = a.into_iter().next().map(|v| v.to_number() as u32).unwrap_or(0);
-            tq.borrow_mut().retain(|(tid, _, _)| *tid != id);
+            tq.borrow_mut().retain(|(tid, _, _, _)| *tid != id);
             Ok(JsValue::Undefined)
         }));
     }
@@ -4564,7 +4568,7 @@ pub fn setup_builtins(
             deadline.borrow_mut().set("didTimeout".into(), JsValue::Bool(false));
             deadline.borrow_mut().set("timeRemaining".into(),
                 native("timeRemaining", |_| Ok(JsValue::Number(50.0))));
-            tq.borrow_mut().push((id, cb, vec![JsValue::Object(deadline)]));
+            tq.borrow_mut().push((id, std::time::Instant::now(), cb, vec![JsValue::Object(deadline)]));
             Ok(JsValue::Number(id as f64))
         }));
     }
@@ -4572,7 +4576,7 @@ pub fn setup_builtins(
         let tq = Rc::clone(task_queue);
         e.define("cancelIdleCallback", native("cancelIdleCallback", move |a| {
             let id = a.into_iter().next().map(|v| v.to_number() as u32).unwrap_or(0);
-            tq.borrow_mut().retain(|(tid, _, _)| *tid != id);
+            tq.borrow_mut().retain(|(tid, _, _, _)| *tid != id);
             Ok(JsValue::Undefined)
         }));
     }
@@ -4997,7 +5001,7 @@ pub fn setup_builtins(
         e.define("queueMicrotask", native("queueMicrotask", move |a| {
             let cb = a.into_iter().next().unwrap_or(JsValue::Undefined);
             let id = { let mut ctr = id_ctr.borrow_mut(); let id = *ctr; *ctr += 1; id };
-            tq.borrow_mut().push((id, cb, Vec::new()));
+            tq.borrow_mut().push((id, std::time::Instant::now(), cb, Vec::new()));
             Ok(JsValue::Undefined)
         }));
     }

@@ -694,7 +694,11 @@ pub struct Interpreter {
     yield_buffer: Option<Vec<JsValue>>,
     /// Fronta one-shot timeru pro setTimeout (id, callback, args).
     /// drain_timers vola + REMOVE - kazdy task bezi 1x.
-    task_queue: Rc<RefCell<Vec<(u32, JsValue, Vec<JsValue>)>>>,
+    /// setTimeout fronta: (id, fire_at, cb, args). fire_at = kdy task DOZRAJE
+    /// (now + delay). drain_timers fire jen DUE (now >= fire_at) - drive se
+    /// delay ignoroval a VSE fire hned (setTimeout(reset, 2000) reset okamzite
+    /// = DnD "Dropnuto" se nikdy neukazalo, animace s timeoutem skakaly).
+    task_queue: Rc<RefCell<Vec<(u32, std::time::Instant, JsValue, Vec<JsValue>)>>>,
     /// Periodic intervaly pro setInterval. Drzi se do clearInterval volani.
     /// drain_intervals vola cb pri uplynuti interval_ms od last_call, NEremove.
     /// Format: (id, callback, args, interval_ms, last_call_instant).
@@ -952,7 +956,7 @@ impl Interpreter {
     /// Vytvori novy interpreter s inicializovanymi vestavenymi objekty.
     pub fn new() -> Self {
         let global = Environment::new_global();
-        let task_queue: Rc<RefCell<Vec<(u32, JsValue, Vec<JsValue>)>>> =
+        let task_queue: Rc<RefCell<Vec<(u32, std::time::Instant, JsValue, Vec<JsValue>)>>> =
             Rc::new(RefCell::new(Vec::new()));
         let interval_queue: Rc<RefCell<Vec<IntervalEntry>>> =
             Rc::new(RefCell::new(Vec::new()));
@@ -2100,11 +2104,18 @@ impl Interpreter {
         let drain_start = std::time::Instant::now();
         let mut count = 0;
         loop {
-            let next = { self.task_queue.borrow().first().cloned() };
+            let now = std::time::Instant::now();
+            // Fire jen DUE task (now >= fire_at). Ne-due (delay jeste bezi)
+            // zustanou ve fronte na dalsi frame. Bez tohoto setTimeout(_, 2000)
+            // fire okamzite.
+            let next = {
+                let q = self.task_queue.borrow();
+                q.iter().position(|(_, fire_at, _, _)| now >= *fire_at)
+            };
             match next {
                 None => break,
-                Some((_, cb, args)) => {
-                    self.task_queue.borrow_mut().remove(0);
+                Some(idx) => {
+                    let (_, _, cb, args) = self.task_queue.borrow_mut().remove(idx);
                     let t0 = std::time::Instant::now();
                     self.call_function(cb, args, None)?;
                     let elapsed = t0.elapsed().as_secs_f32() * 1000.0;

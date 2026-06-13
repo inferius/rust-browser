@@ -2122,8 +2122,23 @@ impl WebView {
                                 }
                                 prevented = matches!(rc.borrow().get("defaultPrevented"), JsValue::Bool(true));
                             }
+                            if std::env::var("RWE_DND_DBG").is_ok() {
+                                let ot = over.as_ref().and_then(|n| n.tag_name()).unwrap_or_default();
+                                eprintln!("[DND] dragover over={} over_tag={} prevented={} started={}",
+                                    over.is_some(), ot, prevented, started);
+                            }
                             if let Some(d) = self.drag.as_mut() {
-                                d.drop_target = if prevented { over.clone() } else { None };
+                                // drop_target STICKY: aktualizuj jen kdyz je pod
+                                // kurzorem ELEMENT (over=Some). Kdyz hit_test vrati
+                                // None (kurzor v mezere / posledni drag frame mimo
+                                // box), ponech posledni validni target - jinak drop
+                                // na konci dragu nenastal ("drop neukaze obsah").
+                                if over.is_some() {
+                                    d.drop_target = if prevented { over.clone() } else { None };
+                                }
+                                if std::env::var("RWE_DND_DBG").is_ok() {
+                                    eprintln!("[DND]   -> drop_target set to {}", d.drop_target.is_some());
+                                }
                             }
                             self.hit_rtree = None;
                             self.dirty = true;
@@ -2779,12 +2794,24 @@ impl WebView {
                     // dragend (na source). Pri pouhem kliku bez pohybu (!started) jen
                     // zrus session a nech klik/mouseup probehnout normalne (no return).
                     if let Some(d) = self.drag.take() {
+                        if std::env::var("RWE_DND_DBG").is_ok() {
+                            eprintln!("[DND] mouseup started={} drop_target={:?}",
+                                d.started, d.drop_target.as_ref().and_then(|n| n.tag_name()));
+                        }
                         if d.started {
                             let dt = d.data_transfer.clone();
                             if let Some(tgt) = d.drop_target.as_ref() {
+                                if std::env::var("RWE_DND_DBG").is_ok() {
+                                    eprintln!("[DND] drop dispatch tgt id={:?} class={:?} ondrop={:?}",
+                                        tgt.attr("id"), tgt.attr("class"),
+                                        tgt.attr("ondrop").map(|s| s.chars().take(20).collect::<String>()));
+                                }
                                 let (ev, _) = make_drag_event("drop", tgt, &dt, x, y);
                                 if let Some(interp) = self.interpreter.as_mut() {
-                                    let _ = interp.dispatch_event(tgt, "drop", ev);
+                                    let r = interp.dispatch_event(tgt, "drop", ev);
+                                    if std::env::var("RWE_DND_DBG").is_ok() {
+                                        eprintln!("[DND] drop dispatch result={:?}", r.as_ref().err().map(|e| format!("{e}")));
+                                    }
                                 }
                             }
                             let (ev, _) = make_drag_event("dragend", &d.source, &dt, x, y);

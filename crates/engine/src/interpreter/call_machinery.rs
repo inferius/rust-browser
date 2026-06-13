@@ -287,7 +287,7 @@ impl Interpreter {
                                     let mut ctr = id_ctr.borrow_mut();
                                     let id = *ctr; *ctr += 1; id
                                 };
-                                tq.borrow_mut().push((id, on_f, vec![val.clone()]));
+                                tq.borrow_mut().push((id, std::time::Instant::now(), on_f, vec![val.clone()]));
                             }
                         }
                     }
@@ -321,7 +321,7 @@ impl Interpreter {
                                     let mut ctr = id_ctr2.borrow_mut();
                                     let id = *ctr; *ctr += 1; id
                                 };
-                                tq2.borrow_mut().push((id, on_r, vec![val.clone()]));
+                                tq2.borrow_mut().push((id, std::time::Instant::now(), on_r, vec![val.clone()]));
                             }
                         }
                     }
