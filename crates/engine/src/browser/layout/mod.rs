@@ -4247,7 +4247,13 @@ fn build_box_inner_impl(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &supe
             }
             if !ch.bold { ch.bold = parent_bold; }
             if !ch.italic { ch.italic = parent_italic; }
-            if ch.text_color.is_none() { ch.text_color = parent_color; }
+            // Text nodes nemaji vlastni cascade -> color VZDY z parenta (ne jen
+            // pri None). Bez toho: parent zmeni color (napr. .visible class) ->
+            // box se rebuildne (cache miss) ale text-node dite cache-HIT (jeho
+            // fingerprint = ptr+tag+text, neobsahuje zdedenou color) -> drzi
+            // starou barvu (docx r.71: io-box .visible da zluty border ale text
+            // zustal sedy). Pseudo ::first-line/letter maji tag => sem nespadaji.
+            ch.text_color = parent_color;
             if ch.selection_bg.is_none() { ch.selection_bg = parent_sel_bg; }
             if ch.selection_color.is_none() { ch.selection_color = parent_sel_color; }
             if ch.font_family.is_empty() { ch.font_family = parent_family.clone(); }
