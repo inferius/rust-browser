@@ -3158,6 +3158,22 @@ impl WebView {
                         let printable: String = text.chars()
                             .filter(|c| !c.is_control()).collect();
                         if printable.is_empty() { return response; }
+                        // type=number: filtruj ne-numericke znaky uz na vstupu
+                        // (Chrome - pismena se do number inputu nedostanou).
+                        // Konsolidace: logika byla jen v engine App (render/mod.rs),
+                        // shell ji nemel -> "do cisel jdou zadavat pismena".
+                        let input_type = target.attr("type")
+                            .map(|t| t.to_lowercase()).unwrap_or_default();
+                        if input_type == "number" {
+                            let ok = printable.chars().all(|c|
+                                c.is_ascii_digit() || matches!(c, '.' | '-' | '+' | 'e' | 'E'));
+                            if !ok {
+                                // Konzumuj bez efektu (zadny insert).
+                                response.dirty = true;
+                                self.dirty = true;
+                                return response;
+                            }
+                        }
                         let nid = std::rc::Rc::as_ptr(&target) as usize;
                         let cur = target.attr("value").unwrap_or_default();
                         // Ensure EditorState exists + synced s attr value.
@@ -3165,6 +3181,15 @@ impl WebView {
                             crate::browser::editor::EditorState::new(&cur));
                         if entry.text != cur { entry.set_text(&cur); }
                         entry.insert(&printable);
+                        // type=number 2. brana: vysledek musi byt prefix platneho
+                        // cisla ([+-]?dig*(.dig*)?(e[+-]?dig*)?). Samotne "e"/"+-"/
+                        // "1ee" whitelist pustil -> revert na puvodni hodnotu.
+                        if input_type == "number"
+                            && entry.text != cur
+                            && !crate::browser::render::is_valid_number_prefix(&entry.text)
+                        {
+                            entry.set_text(&cur);
+                        }
                         let new_value = entry.text.clone();
                         let new_caret_byte = entry.caret;
                         target.set_attr("value", &new_value);
