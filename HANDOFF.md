@@ -23,6 +23,50 @@ JS Events v shellu: mousemove + integer offsety taky overeny OK.
 POZN: contextmenu (pravy klik) v shellu nefire (pmclick synthetic RMB mozna
 winit nedoruci) - ale NENI to docx polozka.
 
+### DALSI shell opravy (autonomni session, vse overeno v shellu no-fg)
+- **Number-input filtr**: pismena do type=number filtrovana jen v engine App
+  -> presunuto do webview.rs TextInput (whitelist + is_valid_number_prefix
+  revert). Overeno "a1b2c3" -> "123". (docx r.51)
+- **Textarea newline**: webview KeyDown submitoval Enter i pro textarea ->
+  ted single-line input submit, textarea Enter = \n insert. Overeno
+  "AAA<Enter>BBB" -> 2 radky. (docx r.52)
+
+### SHELL PARITY overena (uz fungovalo ve webview, user netestoval cerstve)
+- Range drag: "RANGE: 50->68" zluty thumb OK.
+- Canvas kresleni: souvisla cara s gradientem OK.
+=> Tyto v docx jsou ZASTARALE (user mel stary shell build).
+
+### TESTOVACI POSTUP (DULEZITE)
+- Spoustet SHELL: `target\debug\rwe-shell.exe static\engine-test.html`.
+- Title okna pro pmclick/cap3: "RustWebEngine" (NE "FPS" - to matchne i
+  user-uv Chrome se stejnou strankou!).
+- Shell ma chrome bar (~+48px y offset vs engine). Sidebar Formulare y~571,
+  Canvas2D y~710, Events y~734.
+- INPUT testy: pouzit cap3nofg.ps1 (BEZ SetForegroundWindow) - cap3/typekeys2
+  delaji focus-change co MASKUJE "psani se zpozdenim" bugy! (cap3nofg v %TEMP%)
+- pmclick.ps1 ma novy "rclick" mode (pravy klik).
+
+### ZBYVA - confirmed broken v shellu (s hypotezami)
+- **io-box text color** (r.71): .visible da zluty BORDER ale text "IO 1" sedy.
+  Hypoteza: transition na border-color/bg drzi element na paint-anim ceste co
+  interpoluje border/bg ALE pouziva cached layout (stary text_color); color
+  neni v transition listu. Nebo layout cache nerebuilduje text child.
+  Pristup: zkontrolovat apply_paint_animations - updatuje text_color? +
+  layout/mod.rs:4250 inheritance (jen pri is_none).
+- **Button click** (r.23): mouseup akce az po opusteni tlacitka + pul-modry
+  border vpravo dole co se po mouse-leave rozprostre. :active/:focus stav.
+- **Input selection + Ctrl+A/C/V/X v inputech** (r.49): shell intercepuje
+  Ctrl+C/A pro PAGE selection, ne pro input. Doplnit do webview input cesty.
+- **Email validace** (r.51), border shrink po psani, border jen u :focus.
+- **Select dropdown** nestylovany + uzsi + option styling (r.49,51).
+- **Tabulka hover jump** par px (r.55) - border/padding on hover reflow.
+- **aspect-ratio** spatna vyska (r.56). **Progress** styling (r.52).
+- **mix-blend pruh dole** (r.29), repeating-linear gradient (r.25), ellipse
+  clip (r.33), blur(4px) lehce vic (r.28).
+- **Particles** 26 FPS (r.63) - O(n^2) interpreter hot-path, velke.
+- **Scrollbar** thumb (r.11,38,66) - re-overit page scrollbar v shellu.
+- **DnD ghost element + dragover styl** (r.74).
+
 ### KLICOVE ZJISTENI: docx v6 - cast polozek uz opravena v ENGINU
 (ale pozor - nemusi byt v shellu, viz vyse! Re-overit v shellu.)
 Empiricky overeno proti aktualnimu buildu (pmclick/cap3) - HODNE polozek
