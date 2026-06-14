@@ -3017,9 +3017,11 @@ impl WebView {
                 if let Some(target) = self.focused_dom_node() {
                     let is_input = matches!(target.tag_name().as_deref(),
                         Some("input") | Some("textarea"));
-                    // Enter na focused input -> form submit: dispatch submit
-                    // event + check defaultPrevented + emit NavigationRequest.
-                    if is_input && key == "Enter" {
+                    let is_textarea = target.tag_name().as_deref() == Some("textarea");
+                    // Enter na single-line <input> -> form submit. Textarea Enter
+                    // = novy radek (resi se nize v editor bloku), NE submit. Driv
+                    // submitoval i textarea -> "v textarea nefunguje odradkovani".
+                    if is_input && !is_textarea && key == "Enter" {
                         if let Some(form) = crate::browser::render::forms::find_ancestor_form(&target) {
                             let event_obj_rc = std::rc::Rc::new(std::cell::RefCell::new({
                                 let mut event = crate::interpreter::JsObject::new();
@@ -3088,6 +3090,11 @@ impl WebView {
                             "End" => {
                                 entry.move_end(false);
                                 moved = true;
+                            }
+                            "Enter" if is_textarea => {
+                                // Textarea: Enter vlozi novy radek (Chrome).
+                                entry.insert("\n");
+                                mutated = true;
                             }
                             _ => {}
                         }
