@@ -45,6 +45,14 @@ impl Overflow {
         matches!(self, Self::Scroll | Self::Auto)
     }
 
+    /// overflow:scroll zobrazi scrollbar VZDY (i kdyz se obsah vejde) - na
+    /// rozdil od auto (jen pri preteceni). CSS spec. Docx: "overflow: scroll
+    /// s custom scrollbarem" blok neukazoval zadny scrollbar (bral se jako auto).
+    #[inline]
+    pub fn always_shows(&self) -> bool {
+        matches!(self, Self::Scroll)
+    }
+
     /// True pri hidden / clip - no scrollbar, just clip.
     #[inline]
     pub fn hides(&self) -> bool {

@@ -56,7 +56,9 @@ pub trait Scrollable {
         let (_, vh) = self.viewport_size();
         let (_, ch) = self.content_size();
         let (_, sy) = self.scroll_offset();
-        let thumb_h = (track_h * vh / ch).max(30.0);
+        // .min(track_h): pri overflow:scroll + obsah se vejde (vh>=ch) by thumb
+        // presahl track - clamp aby vyplnil presne track (nic ke scrollovani).
+        let thumb_h = (track_h * vh / ch).max(30.0).min(track_h);
         let (_, my) = self.max_scroll();
         let usable = (track_h - thumb_h).max(0.0);
         let thumb_y = if my > 0.0 { (sy / my).clamp(0.0, 1.0) * usable } else { 0.0 };
@@ -67,7 +69,7 @@ pub trait Scrollable {
         let (vw, _) = self.viewport_size();
         let (cw, _) = self.content_size();
         let (sx, _) = self.scroll_offset();
-        let thumb_w = (track_w * vw / cw).max(30.0);
+        let thumb_w = (track_w * vw / cw).max(30.0).min(track_w);
         let (mx, _) = self.max_scroll();
         let usable = (track_w - thumb_w).max(0.0);
         let thumb_x = if mx > 0.0 { (sx / mx).clamp(0.0, 1.0) * usable } else { 0.0 };
@@ -112,10 +114,14 @@ impl Scrollable for LayoutBox {
     // needs_scrollbar_y/x override - musi byt overflow:auto/scroll (jinak
     // content_h > rect.height moze byt overflow:visible = no scrollbar).
     fn needs_scrollbar_y(&self) -> bool {
-        self.overflow_y.scrollable() && self.inner_content_h > self.rect.height + 0.5
+        self.overflow_y.scrollable()
+            && (self.overflow_y.always_shows()
+                || self.inner_content_h > self.rect.height + 0.5)
     }
     fn needs_scrollbar_x(&self) -> bool {
-        self.overflow_x.scrollable() && self.inner_content_w > self.rect.width + 0.5
+        self.overflow_x.scrollable()
+            && (self.overflow_x.always_shows()
+                || self.inner_content_w > self.rect.width + 0.5)
     }
 }
 
