@@ -61,6 +61,19 @@ winit nedoruci) - ale NENI to docx polozka.
   scrollbar-color/width stylovani = VETSI FEATURE, ne quick fix.
 - TODO: zvyraznit thumb (vyssi kontrast/sirka) + scrollbar styling support.
 
+### DALSI opraveno (autonomni session 2)
+- io-box text color (text-node vzdy dedi color z parenta).
+- overflow:scroll vzdy zobrazi scrollbar (.ov-scroll custom block) + thumb
+  clamp na track. Overeno v shellu (zluty custom scrollbar se ukaze).
+
+### mix-blend pruh (r.29) - REPRO POTVRZEN, deep
+.blend-wrap (80px, gradient bg) + .blend-overlay (absolute inset:0, pink
+rgba 60%, mix-blend-mode). Pruh dole ~10px = RAW pink (neblendovany). Blend
+compose (render/mod.rs ~8630 compose_blend_layer_batch): backdrop = full
+dst_texture copy, src_uv 0-1 z offscreen_tex (layer). Hypoteza: layer texture
+region overlaye vs compose dst_box nesedi o ~10px na spodku => bottom strip
+sampluje mimo layer => raw. DEEP GPU compositor, odlozeno.
+
 ### ZBYVA - confirmed broken v shellu (s hypotezami)
 - **io-box text color** (r.71): .visible da zluty BORDER ale text "IO 1" sedy.
   Hypoteza: transition na border-color/bg drzi element na paint-anim ceste co
