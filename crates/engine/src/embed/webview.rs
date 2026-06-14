@@ -3096,6 +3096,11 @@ impl WebView {
                             let new_caret_byte = entry.caret;
                             if mutated {
                                 target.set_attr("value", &new_value);
+                                // Control_text v cached layout strome HNED - jinak
+                                // shell (ktery nema engine-App input cestu) zobrazi
+                                // novou hodnotu az pri pristim re-layoutu = "text se
+                                // objevi az kdyz delam neco v jinem inputu".
+                                self.update_control_text(nid, &new_value);
                             }
                             // Sync legacy char-idx caret pro back-compat caret blink.
                             let char_idx = crate::browser::editor::byte_to_char_offset(
@@ -3163,6 +3168,10 @@ impl WebView {
                         let new_value = entry.text.clone();
                         let new_caret_byte = entry.caret;
                         target.set_attr("value", &new_value);
+                        // Control_text v cached layout strome HNED - jinak shell
+                        // (bez engine-App input cesty) zobrazi novou hodnotu az pri
+                        // pristim re-layoutu = "psani se zpozdenim".
+                        self.update_control_text(nid, &new_value);
                         // Sync legacy char-index input_caret (pouzity caret blink).
                         let char_idx = crate::browser::editor::byte_to_char_offset(
                             &new_value, new_caret_byte);
