@@ -46,6 +46,21 @@ winit nedoruci) - ale NENI to docx polozka.
   delaji focus-change co MASKUJE "psani se zpozdenim" bugy! (cap3nofg v %TEMP%)
 - pmclick.ps1 ma novy "rclick" mode (pravy klik).
 
+### OPRAVENO tento autonomni session (vse overeno v shellu)
+- Forms typing (update_control_text), number-filtr, textarea newline,
+  io-box text color (text-node vzdy dedi color). Range drag + canvas =
+  parity OK (uz fungovalo). Vse commitnuto.
+
+### SCROLLBAR (top stiznost r.11/38/66) - ZJISTENI
+- Page scrollbar: TRACKUJE (thumb jde dolu pri scrollu) ale je hodne FAINT
+  (skoro neviditelny) - kresli ho webview, ne shell.
+- Inner scrollbar (radek list): trackuje (overeno v enginu, kod sdileny
+  paint.rs emit_inner_scrollbars).
+- => "scrollbar se nehýbe" je nejspis VIDITELNOST (faint thumb), ne tracking.
+  User chce navic: SIPKY (jak Chrome) + skryti + plne ::-webkit-scrollbar /
+  scrollbar-color/width stylovani = VETSI FEATURE, ne quick fix.
+- TODO: zvyraznit thumb (vyssi kontrast/sirka) + scrollbar styling support.
+
 ### ZBYVA - confirmed broken v shellu (s hypotezami)
 - **io-box text color** (r.71): .visible da zluty BORDER ale text "IO 1" sedy.
   Hypoteza: transition na border-color/bg drzi element na paint-anim ceste co
