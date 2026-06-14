@@ -4,7 +4,27 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`, `debug_ut
 
 ## Session N+44: docx v6 triage + JS Events + IntersectionObserver
 
-### KLICOVE ZJISTENI: docx v6 je z velke casti ZASTARALY
+### NEJDULEZITEJSI: uzivatel testuje SHELL, ne engine browser!
+Uzivatel pousti `cargo run -p rwe-shell -- static/engine-test.html`, NE
+`cargo run -- browser`. Shell ma vlastni event loop -> routuje vstup PRIMO
+do webview.handle_input. Engine App (render/mod.rs) ma navic vlastni input
+handling (forms typing update_control_text, RMB routing) co shell NEMA.
+=> Mnoho "uz opravenych" veci fungovalo jen v enginu, ne v shellu. Proto
+uzivatel videl "vetsina docx stale plati". VZDY TESTOVAT SHELL. Viz memory
+[[user-tests-shell-not-engine]]. Test okno title obsahuje "RustWebEngine"
+(+ live FPS); pozor uzivatel ma casto otevreny i Chrome se stejnou strankou.
+
+### Forms typing v SHELLU (OPRAVENO + overeno)
+webview.rs KeyDown/TextInput delal set_attr("value") ale NEvolal
+update_control_text -> cached layout drzel starou hodnotu -> "text se objevi
+az kdyz delam neco v jinem inputu". Pridano update_control_text na obe mista.
+Overeno no-fg capture v shellu: "Hello X" se objevi per-uhoz bez focus change.
+JS Events v shellu: mousemove + integer offsety taky overeny OK.
+POZN: contextmenu (pravy klik) v shellu nefire (pmclick synthetic RMB mozna
+winit nedoruci) - ale NENI to docx polozka.
+
+### KLICOVE ZJISTENI: docx v6 - cast polozek uz opravena v ENGINU
+(ale pozor - nemusi byt v shellu, viz vyse! Re-overit v shellu.)
 Empiricky overeno proti aktualnimu buildu (pmclick/cap3) - HODNE polozek
 z docx v6 uz FUNGUJE (docx psan proti starsi verzi):
 - Forms typing: "Hello" se objevi HNED (ne az po focus change). OK.
