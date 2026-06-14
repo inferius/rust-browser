@@ -74,6 +74,25 @@ dst_texture copy, src_uv 0-1 z offscreen_tex (layer). Hypoteza: layer texture
 region overlaye vs compose dst_box nesedi o ~10px na spodku => bottom strip
 sampluje mimo layer => raw. DEEP GPU compositor, odlozeno.
 
+### INVESTIGOVANO = NENI BUG (neztracet cas)
+- aspect-ratio (r.56): boxy proporcionalne spravne (height=w/ar, flex.rs:115).
+- email :valid (r.51): cascade matchuje (@) + cache key ma validity bit
+  (cascade.rs:2888). Zeleny border je rgba(82,255,160,0.4)=40% alpha = faint
+  na tmavem (Chrome stejne). Funguje, jen nevyrazne.
+- Page scrollbar + inner scrollbar: TRACKUJI (overeno). Faint thumb = vizual.
+
+### ZBYVA - DEEP (fresh context, neresit na dne velkeho kontextu)
+- **mix-blend pruh** (r.29): GPU compositor backdrop region ~10px (viz vyse).
+- **button click** (r.23): mouseup az po opusteni + pul-modry border. :active/
+  :focus interakce. webview MouseUp/MouseDown.
+- **tabulka hover jump** (r.55): hover je jen background (ne border) ale layout
+  se re-layoutne o par px jinak = layout determinismus mezi cache a hover.
+- **particles** (r.63): 26 FPS, O(n^2) tree-walk interpreter hot-path.
+- **select dropdown** styling + sirka (r.49,51), **progress** (r.52).
+- **DnD ghost element** (r.74) - drop uz funguje, chybi ghost pod kurzorem.
+- **scrollbar feature**: sipky + ::-webkit-scrollbar full styling + vyraznejsi
+  thumb (r.38 "kompletni podpora stylovani scrollbaru").
+
 ### ZBYVA - confirmed broken v shellu (s hypotezami)
 - **io-box text color** (r.71): .visible da zluty BORDER ale text "IO 1" sedy.
   Hypoteza: transition na border-color/bg drzi element na paint-anim ceste co
