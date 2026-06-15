@@ -2068,14 +2068,27 @@ impl ApplicationHandler for ShellApp {
                     Key::Named(NamedKey::ArrowRight) => "ArrowRight".into(),
                     Key::Named(NamedKey::ArrowUp) => "ArrowUp".into(),
                     Key::Named(NamedKey::ArrowDown) => "ArrowDown".into(),
+                    Key::Named(NamedKey::Home) => "Home".into(),
+                    Key::Named(NamedKey::End) => "End".into(),
+                    Key::Named(NamedKey::Delete) => "Delete".into(),
                     Key::Named(NamedKey::Space) => " ".into(),
                     Key::Character(s) => s.to_string(),
                     _ => return,
                 };
+                // Propaguj modifikatory (shift=extend selection, ctrl=po slovech)
+                // do input editoru. Driv KeyModifiers::default() -> shift+home /
+                // ctrl+sipka / Home / End nefungovaly (docx2 "vsechny zakladni
+                // zkratky na ktere jsou lide zvykli").
+                let mods = KeyModifiers {
+                    shift: self.modifiers.shift_key(),
+                    ctrl: self.modifiers.control_key(),
+                    alt: self.modifiers.alt_key(),
+                    meta: self.modifiers.super_key(),
+                };
                 if matches!(key_event.state, ElementState::Pressed) {
                     let resp = self.dispatch_input(InputEvent::KeyDown {
                         key: key_str.clone(),
-                        modifiers: KeyModifiers::default(),
+                        modifiers: mods,
                     });
                     if resp.dirty {
                         if let Some(w) = &self.window { w.request_redraw(); }

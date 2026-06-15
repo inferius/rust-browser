@@ -3061,7 +3061,7 @@ impl WebView {
                     response.dirty = true;
                 }
             }
-            InputEvent::KeyDown { ref key, .. } => {
+            InputEvent::KeyDown { ref key, ref modifiers, .. } => {
                 if let Some(target) = self.focused_dom_node() {
                     let is_input = matches!(target.tag_name().as_deref(),
                         Some("input") | Some("textarea"));
@@ -3123,20 +3123,21 @@ impl WebView {
                                 entry.delete_forward();
                                 mutated = true;
                             }
+                            // shift = extend selection, ctrl = po slovech.
                             "ArrowLeft" => {
-                                entry.move_left(false, false);
+                                entry.move_left(modifiers.ctrl, modifiers.shift);
                                 moved = true;
                             }
                             "ArrowRight" => {
-                                entry.move_right(false, false);
+                                entry.move_right(modifiers.ctrl, modifiers.shift);
                                 moved = true;
                             }
                             "Home" => {
-                                entry.move_home(false);
+                                entry.move_home(modifiers.shift);
                                 moved = true;
                             }
                             "End" => {
-                                entry.move_end(false);
+                                entry.move_end(modifiers.shift);
                                 moved = true;
                             }
                             "Enter" if is_textarea => {
