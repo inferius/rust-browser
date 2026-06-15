@@ -2431,7 +2431,38 @@ impl WebView {
                     let css_cursor = hit_id.and_then(|nid| self.last_layout_root.as_ref()
                         .and_then(|root| crate::browser::paint::find_box_by_node_id(root, nid))
                         .and_then(|bx| bx.cursor.clone()));
+                    // Hit je casto text node uvnitr buttonu/labelu/inputu -> walk up
+                    // na interaktivni ancestor aby kurzor sedel (button text != I-beam,
+                    // range != I-beam) - docx2 r.22/45. CSS cursor (vyse) ma prioritu.
+                    let interactive: Option<crate::embed::CursorIcon> = hit_id
+                        .and_then(|nid| self.last_layout_root.as_ref()
+                            .and_then(|root| crate::browser::paint::find_box_by_node_id(root, nid))
+                            .and_then(|bx| bx.node.clone()))
+                        .and_then(|n| {
+                            let mut cur = Some(n);
+                            while let Some(node) = cur {
+                                match node.tag_name().as_deref() {
+                                    Some("a") | Some("button") | Some("select")
+                                        => return Some(crate::embed::CursorIcon::Pointer),
+                                    Some("input") => {
+                                        let ty = node.attr("type")
+                                            .map(|t| t.to_lowercase()).unwrap_or_default();
+                                        return Some(match ty.as_str() {
+                                            "range" | "checkbox" | "radio" | "button"
+                                            | "submit" | "reset" | "color" | "file"
+                                                => crate::embed::CursorIcon::Pointer,
+                                            _ => crate::embed::CursorIcon::Text,
+                                        });
+                                    }
+                                    Some("textarea") => return Some(crate::embed::CursorIcon::Text),
+                                    _ => {}
+                                }
+                                cur = node.parent.borrow().upgrade();
+                            }
+                            None
+                        });
                     let fallback = |hit_tag: &Option<String>, hit_over_text: bool| {
+                        if let Some(c) = interactive { return c; }
                         match hit_tag.as_deref() {
                             Some("a") | Some("button") => crate::embed::CursorIcon::Pointer,
                             Some("input") | Some("textarea") => crate::embed::CursorIcon::Text,
