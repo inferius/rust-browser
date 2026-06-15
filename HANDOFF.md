@@ -26,8 +26,21 @@ Opraveno tento round:
   webview.select_all_focused_input + shell handler. Overeno.
 
 ### ZBYVA z docx2 (priorita)
-- **VYKON** (r.3,15,56,59): particles 26 FPS, resize 14 FPS, hover sekce 1
-  240->60. Tree-walk interpreter + re-layout. Nejvetsi kus, user-priorita.
+- **VYKON** (r.3,15,56,59): user-priorita. PROFILE (title ukazuje page phase
+  times: cas/lay/pnt/gpu):
+  - Hover sekce 1: 67 FPS, page render 10-20ms. Breakdown: **pnt 5.5ms (spike
+    11.7) = HLAVNI ZROUT**, lay 2.6, cas 0.6, gpu 1.4. Tj. hover re-paintuje
+    zasazene layery (+ re-layoutuje hovered box, i kdyz hover zmeny jsou
+    PAINT-only: border-color/color/transform = nemely by reflow).
+  - Particles 26 FPS: JS-interpreter-bound (O(n^2)=3160 iter/frame v tree-walk;
+    NENI v cas/lay/pnt/gpu breakdownu - je to rAF callback v interpretu).
+  - Resize 14 FPS: pravdepodobne lay-bound (re-layout per drag frame), zmerit.
+  ROOT CAUSE hover: layout BAKE-uje paint props (color/border) do LayoutBox ->
+  hover-color-zmena = layout cache MISS = re-layout + re-paint celeho layeru.
+  FIX (refaktor): bud (a) oddelit paint-props od layout cache (paint re-aplikuje
+  barvy na cached layout jako apply_paint_animations), nebo (b) izolovat hovered
+  element na vlastni maly compositor layer (jen ten re-paint). Oboji moderate +
+  risk - na cerstvy kontext (ne na dne velkeho).
 - **mix-blend pruh** (r.28): GPU compositor backdrop region, viz N+44.
 - **:focus prebiji :invalid** pri focusu (cascade source-order, cerveny az po
   odkliku) - jemne. **shift+home** v inputu, textarea caret pozice pri resize.
