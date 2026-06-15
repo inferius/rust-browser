@@ -251,6 +251,41 @@ pub fn focused_chain_contains(id: usize) -> bool { FOCUSED_CHAIN.with(|c| c.borr
 /// = "tlacitko se odmackne az pri mouse-over" (docx2 r.22).
 pub fn active_chain_contains(id: usize) -> bool { ACTIVE_CHAIN.with(|c| c.borrow().contains(&id)) }
 
+/// Form-control :invalid? (required+empty, email format, number min/max).
+/// Sdileno: cache focus_bit + :valid/:invalid pseudo match (jeden zdroj pravdy).
+/// Docx2 r.43: email validace jen "@" nestacila, number min/max chybel.
+pub fn form_control_invalid(node: &Rc<Node>) -> bool {
+    let tag = node.tag_name().unwrap_or_default();
+    if !matches!(tag.as_str(), "input" | "select" | "textarea") { return false; }
+    let val = node.attr("value").unwrap_or_default();
+    let empty = val.is_empty();
+    if node.attr("required").is_some() && empty { return true; }
+    if empty { return false; }
+    let typ = node.attr("type").map(|t| t.to_lowercase()).unwrap_or_default();
+    match typ.as_str() {
+        "email" => {
+            // nonempty local @ nonempty domain, bez mezer (Chrome-like - vic nez
+            // jen "@", aby "test@" nebylo validni).
+            let mut parts = val.split('@');
+            let ok = matches!((parts.next(), parts.next(), parts.next()),
+                (Some(l), Some(d), None) if !l.is_empty() && !d.is_empty())
+                && !val.chars().any(|c| c.is_whitespace());
+            !ok
+        }
+        "number" => {
+            match val.parse::<f64>() {
+                Ok(n) => {
+                    let lo = node.attr("min").and_then(|m| m.parse::<f64>().ok());
+                    let hi = node.attr("max").and_then(|m| m.parse::<f64>().ok());
+                    lo.map(|m| n < m).unwrap_or(false) || hi.map(|m| n > m).unwrap_or(false)
+                }
+                Err(_) => true, // ne-cislo = invalid
+            }
+        }
+        _ => false,
+    }
+}
+
 fn current_node_id(node: &Rc<Node>) -> usize { Rc::as_ptr(node) as usize }
 fn is_node_match(node: &Rc<Node>, cell: &'static std::thread::LocalKey<std::cell::RefCell<Option<usize>>>) -> bool {
     let id = current_node_id(node);
@@ -2890,10 +2925,7 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
             if matches!(node_tag, "input" | "textarea" | "select") {
                 let val = node.attr("value").unwrap_or_default();
                 let empty = val.is_empty();
-                let required = node.attr("required").is_some();
-                let typ = node.attr("type").map(|t| t.to_lowercase()).unwrap_or_default();
-                let invalid = (required && empty)
-                    || (typ == "email" && !empty && !val.contains('@'));
+                let invalid = form_control_invalid(node);
                 b |= 4; // form control marker
                 if empty { b |= 8; }
                 if invalid { b |= 16; }
@@ -3741,36 +3773,16 @@ pub fn matches_simple(node: &Rc<Node>, sel: &SimpleSelector) -> bool {
                 }
             }
             "valid" => {
-                // :valid match pokud form input s required ma neprazdnou hodnotu
+                // :valid = form control ktery NENI invalid (required+empty, email
+                // format, number min/max). Sdileno s form_control_invalid (docx2 r.43).
                 let is_form = matches!(tag, "input" | "select" | "textarea" | "form");
                 if !is_form { return false; }
-                if node.attr("required").is_some() {
-                    let val = node.attr("value").unwrap_or_default();
-                    if val.is_empty() { return false; }
-                }
-                // type="email" - musi obsahovat @
-                if let Some(ty) = node.attr("type") {
-                    if ty == "email" {
-                        let val = node.attr("value").unwrap_or_default();
-                        if !val.is_empty() && !val.contains('@') { return false; }
-                    }
-                }
+                if tag != "form" && form_control_invalid(node) { return false; }
             }
             "invalid" => {
-                let is_form = matches!(tag, "input" | "select" | "textarea" | "form");
+                let is_form = matches!(tag, "input" | "select" | "textarea");
                 if !is_form { return false; }
-                let mut is_invalid = false;
-                if node.attr("required").is_some() {
-                    let val = node.attr("value").unwrap_or_default();
-                    if val.is_empty() { is_invalid = true; }
-                }
-                if let Some(ty) = node.attr("type") {
-                    if ty == "email" {
-                        let val = node.attr("value").unwrap_or_default();
-                        if !val.is_empty() && !val.contains('@') { is_invalid = true; }
-                    }
-                }
-                if !is_invalid { return false; }
+                if !form_control_invalid(node) { return false; }
             }
             "default" => {
                 // :default match pro default-checked input + button[type=submit]
