@@ -1504,8 +1504,9 @@ html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #
             let fps = if avg_ms > 0.01 { 1000.0 / avg_ms } else { 999.0 };
             let title_base = if t.is_empty() { "RustWebEngine".to_string() }
                 else { format!("{} - RustWebEngine", t) };
-            // Per-phase timing devtools WV - kde je drahy: cascade/layout/paint/gpu?
-            let (dc, dl, dp, dg) = self.devtools.as_ref()
+            // Per-phase timing PAGE WV - kde je drahy: cascade/layout/paint/gpu?
+            // (Driv devtools WV = vzdy 0 kdyz zavrene; page je co optimalizujem.)
+            let (dc, dl, dp, dg) = self.webview.as_ref()
                 .map(|w| w.render_phase_times())
                 .unwrap_or((0.0, 0.0, 0.0, 0.0));
             // L1 compositor diagnostika: pocet layer + cache hit rate v posledni WV render.
