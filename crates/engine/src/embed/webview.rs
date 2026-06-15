@@ -982,6 +982,10 @@ pub(crate) struct DragSession {
     /// Aktualni drop target - element jehoz dragover zavolal preventDefault
     /// (= "tady lze dropnout"). None = drop se nesmi.
     pub drop_target: Option<std::rc::Rc<crate::browser::dom::Node>>,
+    /// Aktualni pozice kurzoru v CONTENT coords (= viewport + scroll) - pro
+    /// kresleni ghost elementu pod kurzorem behem dragu.
+    pub cur_x: f32,
+    pub cur_y: f32,
 }
 
 /// Walk od node nahoru, vrati nejblizsi element s draggable="true".
@@ -2085,6 +2089,8 @@ impl WebView {
                             (d.started, d.start_x, d.start_y, d.data_transfer.clone(),
                              std::rc::Rc::clone(&d.source), d.last_over.clone())
                         };
+                        // Track kurzor pro ghost element (content coords).
+                        if let Some(d) = self.drag.as_mut() { d.cur_x = cx_inner; d.cur_y = cy_inner; }
                         let moved = (cx_inner - sx).abs() > 4.0 || (cy_inner - sy).abs() > 4.0;
                         if moved {
                             use crate::interpreter::JsValue;
@@ -2653,6 +2659,7 @@ impl WebView {
                                 started: false,
                                 start_x: content_x, start_y: content_y,
                                 last_over: None, drop_target: None,
+                                cur_x: content_x, cur_y: content_y,
                             });
                         }
                     }
@@ -4937,6 +4944,43 @@ impl WebView {
         // scroll shift -> overlay coords v content-space.
         if let Some(painter) = self.overlay_painter.as_mut() {
             painter(&layout_root, self.scroll_y, &mut display_list);
+        }
+
+        // 3z2. Drag ghost - polopruhledna kopie draggovaneho elementu pod
+        // kurzorem (Chrome-like). Emit v content coords (PRED scroll shift) ->
+        // shift ho da na viewport kurzor. Docx r.74: "Drag nema ghost element".
+        if let Some(d) = self.drag.as_ref() {
+            if d.started {
+                let src_ptr = std::rc::Rc::as_ptr(&d.source) as usize;
+                if let Some(sb) = crate::browser::paint::find_box_by_node_id(&layout_root, src_ptr) {
+                    let bw = sb.rect.width.max(20.0);
+                    let bh = sb.rect.height.max(16.0);
+                    // Grab offset = kde v boxu user chytil (drzi relativni pozici).
+                    let gox = (d.start_x - sb.rect.x).clamp(0.0, bw);
+                    let goy = (d.start_y - sb.rect.y).clamp(0.0, bh);
+                    let gx = d.cur_x - gox;
+                    let gy = d.cur_y - goy;
+                    let mut col = sb.bg_color.unwrap_or([120, 120, 140, 255]);
+                    col[3] = (col[3] as f32 * 0.6) as u8; // poloprhledny
+                    display_list.push(crate::browser::paint::DisplayCommand::Rect {
+                        x: gx, y: gy, w: bw, h: bh, color: col, radius: 4.0,
+                    });
+                    let label = sb.control_text.clone()
+                        .or_else(|| sb.text.clone())
+                        .or_else(|| sb.children.iter().find_map(|c| c.text.clone()));
+                    if let Some(txt) = label {
+                        let tc = sb.text_color.unwrap_or([235, 235, 240, 255]);
+                        display_list.push(crate::browser::paint::DisplayCommand::Text {
+                            x: gx + 8.0, y: gy + bh * 0.5 - sb.font_size.max(10.0) * 0.5,
+                            content: txt, color: tc,
+                            font_size: sb.font_size.max(10.0), bold: sb.bold,
+                            font_weight: sb.font_weight, italic: sb.italic,
+                            font_family: String::new(),
+                            strikethrough: false, underline: false,
+                        });
+                    }
+                }
+            }
         }
 
         // 3a. Apply scroll: posun page commands o -scroll_y/x. Respektuje
