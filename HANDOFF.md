@@ -85,11 +85,12 @@ sampluje mimo layer => raw. DEEP GPU compositor, odlozeno.
 - **mix-blend pruh** (r.29): GPU compositor backdrop region ~10px (viz vyse).
 - **button click** (r.23): mouseup az po opusteni + pul-modry border. :active/
   :focus interakce. webview MouseUp/MouseDown.
-- **tabulka hover jump** (r.55): hover je jen background (ne border) ale layout
-  se re-layoutne o par px jinak = layout determinismus mezi cache a hover.
+- ~~tabulka hover jump~~: HOTOVO (user odstranil z docx v6, neni uz complaint).
 - **particles** (r.63): 26 FPS, O(n^2) tree-walk interpreter hot-path.
 - **select dropdown** styling + sirka (r.49,51), **progress** (r.52).
-- **DnD ghost element** (r.74) - drop uz funguje, chybi ghost pod kurzorem.
+- ~~DnD ghost element~~ (r.74): HOTOVO - ghost (polopruhledny rect+label pod
+  kurzorem) pridan + overeno. Dragover styl (.over zluty border behem dragu)
+  TAKY funguje (overeno close-up, drive spatne odhadnuto jako sedy). DnD cele OK.
 - **scrollbar feature**: sipky + ::-webkit-scrollbar full styling + vyraznejsi
   thumb (r.38 "kompletni podpora stylovani scrollbaru").
 
