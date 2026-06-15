@@ -5737,6 +5737,26 @@ impl WebView {
         self.input_caret.insert(nid, char_idx);
     }
 
+    /// Ctrl+A ve focused inputu: vybere cely text inputu (ne stranku). Vrati
+    /// true pokud focused je input/textarea (shell pak NEdela page select_all).
+    /// Docx2 r.44 "Ctrl+a oznaci text cele stranky".
+    pub fn select_all_focused_input(&mut self) -> bool {
+        let Some(node) = self.focused_dom_node() else { return false };
+        if !matches!(node.tag_name().as_deref(), Some("input") | Some("textarea")) {
+            return false;
+        }
+        let nid = std::rc::Rc::as_ptr(&node) as usize;
+        let cur = node.attr("value").unwrap_or_default();
+        let ed = self.editors.entry(nid).or_insert_with(||
+            crate::browser::editor::EditorState::new(&cur));
+        if ed.text != cur { ed.set_text(&cur); }
+        ed.select_all();
+        let char_idx = ed.caret_char_index();
+        self.input_caret.insert(nid, char_idx);
+        self.dirty = true;
+        true
+    }
+
     // -- Page selection (text drag) ---------------------------------------
 
     /// Zacni text selection drag pri MouseDown.

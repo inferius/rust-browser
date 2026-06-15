@@ -1927,8 +1927,15 @@ impl ApplicationHandler for ShellApp {
                             return;
                         }
                         if s.eq_ignore_ascii_case("a") {
-                            // Ctrl+A: select all v aktivnim WebView.
-                            self.with_active_mut(|wv| wv.select_all());
+                            // Ctrl+A: ve focused inputu vybere text inputu, jinak
+                            // celou stranku (docx2 r.44 "Ctrl+a oznaci celou stranku").
+                            let in_input = self.with_active(|wv| wv.focused_is_input())
+                                .unwrap_or(false);
+                            if in_input {
+                                self.with_active_mut(|wv| { wv.select_all_focused_input(); });
+                            } else {
+                                self.with_active_mut(|wv| wv.select_all());
+                            }
                             if let Some(w) = &self.window { w.request_redraw(); }
                             return;
                         }
