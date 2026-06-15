@@ -246,6 +246,10 @@ pub fn rebuild_state_chains(root: &Rc<Node>) {
 pub fn hovered_chain_contains(id: usize) -> bool { HOVERED_CHAIN.with(|c| c.borrow().contains(&id)) }
 /// :focus / :focus-within chain membership (node je focused nebo predek).
 pub fn focused_chain_contains(id: usize) -> bool { FOCUSED_CHAIN.with(|c| c.borrow().contains(&id)) }
+/// :active chain membership. pub: cache klic musi zahrnout active stav, jinak
+/// po mouseup (active cleared) per-node cache HIT vrati stary :active vysledek
+/// = "tlacitko se odmackne az pri mouse-over" (docx2 r.22).
+pub fn active_chain_contains(id: usize) -> bool { ACTIVE_CHAIN.with(|c| c.borrow().contains(&id)) }
 
 fn current_node_id(node: &Rc<Node>) -> usize { Rc::as_ptr(node) as usize }
 fn is_node_match(node: &Rc<Node>, cell: &'static std::thread::LocalKey<std::cell::RefCell<Option<usize>>>) -> bool {
@@ -2872,7 +2876,10 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
         // kdyz se hovered/focused zmeni, musi se prepocitat i PREDCI (jejich
         // :hover/:focus-within stav se zmenil). Bez chain by predci drzeli stary
         // (cerveny) cache = sticky hover.
-        let hover_bit: u8 = if hovered_chain_contains(node_ptr) { 1 } else { 0 };
+        // bit0 = hover, bit1 = active (:active stav v cache klici - bez nej
+        // mouseup neodmackne tlacitko dokud nezmeni hover, docx2 r.22).
+        let hover_bit: u8 = (if hovered_chain_contains(node_ptr) { 1 } else { 0 })
+            | (if active_chain_contains(node_ptr) { 2 } else { 0 });
         // focus_bit nese i VALUE-STATE bity form controlu (empty/invalid):
         // :valid/:invalid/:placeholder-shown zavisi na value attr, ktery NENI
         // v dom_style_version (typing bumpa jen content verzi). Bez bitu cache
