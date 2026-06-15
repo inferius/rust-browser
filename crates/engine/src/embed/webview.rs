@@ -855,9 +855,19 @@ fn find_box_dims(bx: &crate::browser::layout::LayoutBox, node_id: usize)
 fn resolve_label_target(node: &std::rc::Rc<crate::browser::dom::Node>)
     -> std::rc::Rc<crate::browser::dom::Node>
 {
-    if node.tag_name().as_deref() != Some("label") {
-        return std::rc::Rc::clone(node);
-    }
+    // Najdi <label> - klikly node NEBO jeho ancestor. Hit-test vraci nejhlubsi
+    // box, takze klik na TEXT "Checkbox A" uvnitr <label> vrati text node (ne
+    // label) -> drive se neresolvovalo = "klik na label nedeje nic" (docx2 r.46).
+    let label = {
+        let mut found = None;
+        let mut cur = Some(std::rc::Rc::clone(node));
+        while let Some(n) = cur {
+            if n.tag_name().as_deref() == Some("label") { found = Some(n); break; }
+            cur = n.parent.borrow().upgrade();
+        }
+        match found { Some(l) => l, None => return std::rc::Rc::clone(node) }
+    };
+    let node = &label;
     // for="id" -> dohledej element v dokumentu (walk od rootu).
     if let Some(for_id) = node.attr("for") {
         if !for_id.is_empty() {

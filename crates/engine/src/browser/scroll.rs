@@ -114,14 +114,15 @@ impl Scrollable for LayoutBox {
     // needs_scrollbar_y/x override - musi byt overflow:auto/scroll (jinak
     // content_h > rect.height moze byt overflow:visible = no scrollbar).
     fn needs_scrollbar_y(&self) -> bool {
-        self.overflow_y.scrollable()
-            && (self.overflow_y.always_shows()
-                || self.inner_content_h > self.rect.height + 0.5)
+        // Pozn: overflow:scroll per spec ukazuje scrollbar vzdy, ALE custom
+        // scrollbar-color (zluta) pak svitil "zlute linky" i kdyz neni co
+        // scrollovat (docx2 sekce 11). User chce bez draggeru kdyz se vejde ->
+        // chovame se jako auto (scrollbar jen pri preteceni). always_shows()
+        // ponechano pro pripadne budouci subtle-disabled rendering.
+        self.overflow_y.scrollable() && self.inner_content_h > self.rect.height + 0.5
     }
     fn needs_scrollbar_x(&self) -> bool {
-        self.overflow_x.scrollable()
-            && (self.overflow_x.always_shows()
-                || self.inner_content_w > self.rect.width + 0.5)
+        self.overflow_x.scrollable() && self.inner_content_w > self.rect.width + 0.5
     }
 }
 
