@@ -4887,6 +4887,29 @@ impl WebView {
                     let caret_x = input_box.rect.x + border + pad_l + prefix_w;
                     let caret_y = input_box.rect.y + border + pad_t + v_offset;
                     let caret_h = input_box.font_size * 1.2;
+                    // Selection highlight v inputu (anchor != cursor) - docx2 r.44
+                    // "nefunguje viditelne oznaceni textu". Polopruhledny modry rect
+                    // pres selected text (text prosvita). Mirror caret x_at_char.
+                    // Selekce zije v EditorState (self.editors) - drag ji updatuje
+                    // pres editor_hit_test_input (ne doc.selection.input_state).
+                    let sel_bytes = self.editors.get(&nid)
+                        .and_then(|ed| ed.selection_range());
+                    if let Some((a_byte, c_byte)) = sel_bytes {
+                        let a_byte = a_byte.min(value.len());
+                        let c_byte = c_byte.min(value.len());
+                        if a_byte != c_byte {
+                            let a_char = value[..a_byte].chars().count();
+                            let c_char = value[..c_byte].chars().count();
+                            let (s_char, e_char) = (a_char.min(c_char), a_char.max(c_char));
+                            let x_s = shaped.x_at_char(s_char);
+                            let x_e = shaped.x_at_char(e_char);
+                            display_list.push(crate::browser::paint::DisplayCommand::Rect {
+                                x: input_box.rect.x + border + pad_l + x_s,
+                                y: caret_y, w: (x_e - x_s).max(1.0), h: caret_h,
+                                color: [74, 124, 232, 120], radius: 0.0,
+                            });
+                        }
+                    }
                     // Blink 1 Hz: even seconds visible, odd off.
                     let elapsed = self.animation_origin.elapsed().as_secs_f32();
                     let blink_on = (elapsed * 2.0) as i32 % 2 == 0;
