@@ -2,6 +2,40 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`, `debug_utils.md`.
 
+## Session N+45: docx v6/v7 (chyby-rbro2.docx) - shell input/forms/cascade
+
+Vse overeno v SHELLU (`target\debug\rwe-shell.exe static\engine-test.html`,
+title "RustWebEngine", input testy pres cap3nofg = bez focus-change masku).
+Opraveno tento round:
+- **Forms typing** (update_control_text), **number filtr**, **textarea newline**
+  - vse presunuto do webview.rs (shell je nemel, engine ano). User potvrdil
+    "Text psani funguje".
+- **io-box text color**: text-node vzdy dedi color z parenta (cache staleness).
+- **overflow:scroll REVERT**: predchozi always-show delal zlute linky kdyz
+  neni co scrollovat -> zpet auto (docx2 sekce 11 "Ne zlute linky").
+- **Label klik**: resolve_label_target walk-up na <label> ancestor (klik na
+  TEXT uvnitr labelu togluje checkbox). Overeno.
+- **Button :active**: pridan do cascade cache klice (mouseup odmackne hned,
+  ne az pri mouse-over). docx2 r.22.
+- **Kurzory**: walk-up na interaktivni ancestor (button text/range != I-beam).
+- **Validace**: form_control_invalid() helper - email format (ne jen @) +
+  number min/max. :valid/:invalid + cache focus_bit. Overeno "200"->cerveny.
+- **Input selection highlight**: drag-select v inputu se renderuje (modry
+  rect, cteno z self.editors EditorState.selection_range). docx2 r.44.
+- **Ctrl+A scope**: ve focused inputu vybere text inputu (ne stranku) -
+  webview.select_all_focused_input + shell handler. Overeno.
+
+### ZBYVA z docx2 (priorita)
+- **VYKON** (r.3,15,56,59): particles 26 FPS, resize 14 FPS, hover sekce 1
+  240->60. Tree-walk interpreter + re-layout. Nejvetsi kus, user-priorita.
+- **mix-blend pruh** (r.28): GPU compositor backdrop region, viz N+44.
+- **:focus prebiji :invalid** pri focusu (cascade source-order, cerveny az po
+  odkliku) - jemne. **shift+home** v inputu, textarea caret pozice pri resize.
+- scrollbar sipky + z-index nad sticky topbar (r.10), select option styling,
+  progressbar styling + radio-checked v accent-color (r.47), resize kurzor.
+- IO demo flex-wrap (vsechny boxy zluty najednou, ma byt horizontal scroll).
+- writing-mode glyf rotace, column-count +1, repeating-linear gradient, ellipse.
+
 ## Session N+44: docx v6 triage + JS Events + IntersectionObserver
 
 ### NEJDULEZITEJSI: uzivatel testuje SHELL, ne engine browser!
