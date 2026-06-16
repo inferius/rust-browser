@@ -2,6 +2,24 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`, `debug_utils.md`.
 
+## Session N+46: perf profiling + event-dispatch skip
+
+PROFILING (title = page phase times): hover sekce 1 ~67 FPS = RENDER-bound
+(pnt 5.5ms = root layer = cely viewport re-raster pri zmene 1 boxu; lay 2.6 =
+layout+extract walk 667; cas 0.6). Mouse-move sekce = render + JS (logEvt per
+move, roste s logem). General "bezny pohyb" = ~4ms event-dispatch overhead.
+- EXPERIMENT 1 (REVERT): promote hovered na vlastni layer -> churn root, 0 win.
+- SHIPPED: event-dispatch skip - mousemove/enter/leave/over/out se dispatchne
+  jen kdyz node_chain_has_listener (konzistentni s dispatch_event chainem =
+  bezpecne). Pomaha "bezny pohyb" nad NEinteraktivnim obsahem (ř.3). NEHNE
+  sekci 1 (render-bound) ani mouse-move (ma listener + JS).
+- ZBYVA (skutecny fix pro viditelne sekce): DIRTY-RECT raster - re-raster jen
+  damage rect zmeneneho boxu do existujici root textury misto celeho root
+  (pnt 5.5->~). Scissor mechanismus existuje (draw_main_pass_clipped), wiring
+  do layer raster chybi. DEEP compositor (hottest kod) - na cerstvy kontext.
+  POZN: measurement ma velkou variance (cold-cache warmup prvni ~3 frames +
+  background load) - merit az ustaleny steady-state (~67 FPS sekce 1).
+
 ## Session N+45: docx v6/v7 (chyby-rbro2.docx) - shell input/forms/cascade
 
 Vse overeno v SHELLU (`target\debug\rwe-shell.exe static\engine-test.html`,

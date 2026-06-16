@@ -849,6 +849,26 @@ fn find_box_dims(bx: &crate::browser::layout::LayoutBox, node_id: usize)
 }
 
 /// Klik na <label> aktivuje jeho asociovany control (browser chovani). Vrati
+/// True pokud node NEBO nejaky predek ma listener (nebo inline on<event> attr)
+/// pro dany event. PERF: webview skipne build+dispatch mouse eventu kdyz NIKDO
+/// neposloucha (neinteraktivni obsah pod mysi nebrzdi "bezny pohyb"). Pro
+/// non-bubbling (mouseenter/leave) je chain-check over-inclusive (max nedispatchne
+/// kdyz mel) - nikdy ne FALSE-pozitivni skip -> bezpecne.
+fn node_chain_has_listener(node: &std::rc::Rc<crate::browser::dom::Node>, event_type: &str) -> bool {
+    let on_attr = format!("on{event_type}");
+    let mut cur = Some(std::rc::Rc::clone(node));
+    while let Some(n) = cur {
+        if n.listeners.borrow().get(event_type).map(|v| !v.is_empty()).unwrap_or(false) {
+            return true;
+        }
+        if n.attr(&on_attr).map(|s| !s.trim().is_empty()).unwrap_or(false) {
+            return true;
+        }
+        cur = n.parent.borrow().upgrade();
+    }
+    false
+}
+
 /// control pro label, jinak puvodni node. for="id" nebo prvni form-control
 /// descendant (label obaluje input). Bez tohoto klik na text labelu (napr.
 /// "Polozka 1") nic nedelal = checkbox/radio "nereaguji".
@@ -2346,17 +2366,26 @@ impl WebView {
                                 crate::browser::paint::find_box_by_node_id(root, n)
                                     .and_then(|bx| bx.node.clone()));
                             if let Some(interp) = self.interpreter.as_mut() {
+                                // PERF: skip dispatch kdyz nikdo neposloucha.
                                 if let Some(t) = prev_target {
-                                    let e1 = make_evt(x, y, "mouseleave", &t);
-                                    let e2 = make_evt(x, y, "mouseout", &t);
-                                    let _ = interp.dispatch_event(&t, "mouseleave", e1);
-                                    let _ = interp.dispatch_event(&t, "mouseout", e2);
+                                    if node_chain_has_listener(&t, "mouseleave") {
+                                        let e1 = make_evt(x, y, "mouseleave", &t);
+                                        let _ = interp.dispatch_event(&t, "mouseleave", e1);
+                                    }
+                                    if node_chain_has_listener(&t, "mouseout") {
+                                        let e2 = make_evt(x, y, "mouseout", &t);
+                                        let _ = interp.dispatch_event(&t, "mouseout", e2);
+                                    }
                                 }
                                 if let Some(t) = cur_target {
-                                    let e1 = make_evt(x, y, "mouseenter", &t);
-                                    let e2 = make_evt(x, y, "mouseover", &t);
-                                    let _ = interp.dispatch_event(&t, "mouseenter", e1);
-                                    let _ = interp.dispatch_event(&t, "mouseover", e2);
+                                    if node_chain_has_listener(&t, "mouseenter") {
+                                        let e1 = make_evt(x, y, "mouseenter", &t);
+                                        let _ = interp.dispatch_event(&t, "mouseenter", e1);
+                                    }
+                                    if node_chain_has_listener(&t, "mouseover") {
+                                        let e2 = make_evt(x, y, "mouseover", &t);
+                                        let _ = interp.dispatch_event(&t, "mouseover", e2);
+                                    }
                                 }
                             }
                         }
@@ -2378,7 +2407,12 @@ impl WebView {
                             }))
                     });
                     if let Some((Some(t), ox, oy)) = mm {
-                        if let Some(interp) = self.interpreter.as_mut() {
+                        // PERF: dispatchni mousemove jen kdyz na nej nekdo posloucha
+                        // (listener / onmousemove v chainu). Bez tohoto se KAZDY pohyb
+                        // nad NEinteraktivnim obsahem stavel event objekt + walkoval
+                        // chain zbytecne = brzda "bezneho pohybu strankou".
+                        if node_chain_has_listener(&t, "mousemove")
+                            && let Some(interp) = self.interpreter.as_mut() {
                             let mut event = crate::interpreter::JsObject::new();
                             event.set("type".into(), crate::interpreter::JsValue::Str("mousemove".into()));
                             event.set("clientX".into(), crate::interpreter::JsValue::Number(x as f64));
