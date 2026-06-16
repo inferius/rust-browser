@@ -37,10 +37,19 @@ Opraveno tento round:
   - Resize 14 FPS: pravdepodobne lay-bound (re-layout per drag frame), zmerit.
   ROOT CAUSE hover: layout BAKE-uje paint props (color/border) do LayoutBox ->
   hover-color-zmena = layout cache MISS = re-layout + re-paint celeho layeru.
-  FIX (refaktor): bud (a) oddelit paint-props od layout cache (paint re-aplikuje
-  barvy na cached layout jako apply_paint_animations), nebo (b) izolovat hovered
-  element na vlastni maly compositor layer (jen ten re-paint). Oboji moderate +
-  risk - na cerstvy kontext (ne na dne velkeho).
+  ROOT CAUSE PRESNE: prof_paint_ms (pnt 5.5ms) = rasterizace ne-cached layeru.
+  Hover meni 1 box, ale ten box je v ROOT layeru (= cely viewport) -> root se
+  re-rasterizuje cely (5.5ms). prof_layout_ms (lay 2.6) = layout + layer EXTRACT
+  walk (667 uzlu). cca 4ms neúčtovaných = hit-test + event dispatch per move.
+  EXPERIMENT (zkouseno, NEFUNGUJE - nezkouset znovu): promote hovered node na
+  vlastni layer (set_force_layer_nodes + hovered). Merer: 60-68 FPS = ZADNE
+  zlepseni + horsi spiky (pnt 11.9), protoze pri pohybu mezi boxy se hovered
+  meni -> layer churn -> ROOT se stejne re-rasterizuje (box pridan/odebran).
+  SKUTECNY FIX = DIRTY-RECT raster: pri zmene 1 boxu re-rasterizovat jen jeho
+  damage rect do existujici root textury (scissor), ne cely root. DirtyRegion
+  scaffold existuje (render/dirty.rs) ale neni wired do paint_layer_into pro
+  hover/change path. paint_layer_into clearuje+rasterizuje CELY layer - musel by
+  drzet predchozi texturu + scissor na damage rect. DEEP compositor, hottest kod.
 - **mix-blend pruh** (r.28): GPU compositor backdrop region, viz N+44.
 - **:focus prebiji :invalid** pri focusu (cascade source-order, cerveny az po
   odkliku) - jemne. **shift+home** v inputu, textarea caret pozice pri resize.
