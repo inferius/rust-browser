@@ -2,23 +2,75 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`, `debug_utils.md`.
 
-## Session N+46: perf profiling + event-dispatch skip
+## Session N+46: perf profiling + event-dispatch skip + DIRTY-RECT plan
 
-PROFILING (title = page phase times): hover sekce 1 ~67 FPS = RENDER-bound
-(pnt 5.5ms = root layer = cely viewport re-raster pri zmene 1 boxu; lay 2.6 =
-layout+extract walk 667; cas 0.6). Mouse-move sekce = render + JS (logEvt per
-move, roste s logem). General "bezny pohyb" = ~4ms event-dispatch overhead.
-- EXPERIMENT 1 (REVERT): promote hovered na vlastni layer -> churn root, 0 win.
-- SHIPPED: event-dispatch skip - mousemove/enter/leave/over/out se dispatchne
-  jen kdyz node_chain_has_listener (konzistentni s dispatch_event chainem =
-  bezpecne). Pomaha "bezny pohyb" nad NEinteraktivnim obsahem (ř.3). NEHNE
-  sekci 1 (render-bound) ani mouse-move (ma listener + JS).
-- ZBYVA (skutecny fix pro viditelne sekce): DIRTY-RECT raster - re-raster jen
-  damage rect zmeneneho boxu do existujici root textury misto celeho root
-  (pnt 5.5->~). Scissor mechanismus existuje (draw_main_pass_clipped), wiring
-  do layer raster chybi. DEEP compositor (hottest kod) - na cerstvy kontext.
-  POZN: measurement ma velkou variance (cold-cache warmup prvni ~3 frames +
-  background load) - merit az ustaleny steady-state (~67 FPS sekce 1).
+### Zprofilovano (title = PAGE phase times "P:<ms> ... cas:X lay:Y pnt:Z gpu:W")
+- Hover sekce 1 ~67 FPS, page ~10ms = cas 0.6 (cascade) + lay 2.6 (layout +
+  extract_layer_tree walk ~667 nodu) + pnt 5.5 (RASTER root layeru) + gpu 1.4.
+- ROOT CAUSE: zmena 1 boxu (hover bg) => root layer je damaged => CELY root
+  layer se re-rasterizuje (draw_segments_into_view_clipped clear+draw vsech
+  vertices) = pnt 5.5ms. Damage tracking je jen PER-LAYER (re-raster jen
+  zmenene layery), ale root layer = jeden velky => re-raster cely.
+- Mouse-move sekce = render (~10ms) + JS logEvt (~5ms, roste s delkou logu).
+- Particle sekce ~26 FPS = JS-interpreter-bound (O(n^2) ~3160 iter/frame),
+  NENI v render breakdownu.
+- Obecny "bezny pohyb" = ~4ms/move overhead z dispatche eventu.
+- POZOR na measurement: prvni ~3 frames cold-cache warmup + background load =
+  velka variance. Merit az ustaleny steady-state.
+
+### EXPERIMENT 1 (REVERTNUTO, neopakovat)
+Promote hovered node na vlastni layer => churnuje root layer pri pohybu
+(layer tree se meni kazdy move) => 0 win, horsi spiky.
+
+### SHIPPED (commit 7bb3d21)
+Event-dispatch skip: mousemove + mouseenter/leave/over/out se dispatchnou jen
+kdyz node_chain_has_listener(node, type) (webview.rs ~852). Konzistentni s tim
+co dispatch_event pres chain stejne dela => bezpecne (:hover CSS na JS eventu
+nezavisi). Pomaha "bezny pohyb" nad NEinteraktivnim obsahem (docx2 r.3). NEHNE
+sekci 1 (render-bound) ani mouse-move (ma listener).
+
+### SKUTECNY FIX = DIRTY-RECT raster root layeru (na cerstvy kontext, DEEP)
+Cil: pri paint-only zmene (hover) re-rasterizovat jen DAMAGE RECT do existujici
+root textury misto celeho root layeru (pnt 5.5 -> ~0.3ms, hover zpet na 200+).
+
+PLUMBING UZ EXISTUJE end-to-end (zjisteno N+46):
+- `draw_main_pass_clipped(view, verts, first, scissor)` (render/mod.rs:7970) -
+  bere scissor: Option<(x,y,w,h)> phys px (set_scissor_rect na :8012) + `first`
+  flag (Clear vs Load na :7986).
+- `draw_segments_into_view_clipped(view, cmds, start_clear, scissor)`
+  (mod.rs:7695) - take scissor param uz taky.
+- `render_into_layer` (:7622) -> `render_into_layer_scaled` (:7637) vola
+  draw_segments_into_view_clipped s scissor=None, start_clear=true => CLEAR
+  cely + draw vsech vertices = ten 5.5ms. <== tady se scissor NEPOUZIVA.
+
+CO DODELAT (3 casti):
+1. DAMAGE RECT vypocet (webview.rs): union(prev hovered box screen rect, cur
+   hovered box screen rect) v PHYSICAL px (* zoom * scale_factor), clamp na
+   layer dims. Box rect helper: find_box_rect_by_id (devtools_panel.rs).
+   Hover-change cesta zna oba nody (hovered_node_local + prev).
+2. GATE: jen na "paint-only" frame = layout_hit (geometrie stejna) + cascade
+   zmenil jen paint props + zadny scroll/resize/anim/struktura. Na takovem
+   frame root layer raster jde scissored-Load cestou misto full clear.
+3. CLEAR DAMAGE REGIONU = trik: wgpu LoadOp::Clear cleanuje CELY target (ne
+   scissor region). Takze nelze "clear jen damage" pres LoadOp. Nutno bud:
+   (a) scissored "reset quad" (bg/transparent) s blend=REPLACE pipeline pres
+       damage rect, pak draw content scissored s Load; NEBO
+   (b) cached root texturu (per-layer cache uz existuje) prekreslit jen damage:
+       pass1 reset-quad (Replace blend) scissored, pass2 vsechny vertices
+       scissored Load. Reset-quad chce maly dedikovany pipeline blend=Replace
+       (RECT pipeline ma alpha blend, neresetuje alpha).
+   Tohle je nejcitlivejsi cast - spatne => artefakty / cerna obrazovka.
+
+ALT (mensi, nizsi risk, castecny win): OVERIT jestli root layer texture =
+full PAGE height nebo jen viewport (ensure_layer_texture vs build_layered_
+display_list dostava viewport_h+scroll_y na :4688). Pokud full page, scissor
+root rasteru na viewport = levny win bez cele damage-rect komplexity.
+
+### Zbyva docx2 (mimo perf) - viz tez N+45
+mix-blend pruh (GPU compose), select option styling, progress styling +
+radio-checked accent-color (r.47), scrollbar sipky + z-index nad topbar (r.10),
+aspect-ratio (r.52), writing-mode, column-count, repeating-linear-gradient,
+ellipse, resize cursor, :focus prebiji :invalid (cascade source-order).
 
 ## Session N+45: docx v6/v7 (chyby-rbro2.docx) - shell input/forms/cascade
 
