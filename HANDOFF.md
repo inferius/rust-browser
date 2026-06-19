@@ -2,6 +2,97 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`, `debug_utils.md`.
 
+## Session N+47: hover perf - SHIPPED tile cmd-filtering (spiky 24.7->6.8ms); N+46 premisa vyvracena
+
+### TL;DR (SHIPPED FIX + 2 slepe ulicky pred nim)
+SHIPPED: **per-tile cmd filtering** v render_into_tile (segments.rs
+`filter_cmds_to_tile` + `cmd_bbox`). render_into_tile drive build_vertices z CELE
+vrstvy per tile (N dirty tiles = N x full-page vertex build = release spiky
+18-24ms). Ted filtruje cmds na tile rect (jen co protina tile) + scoped segmenty
+(Filter/Transform/Mask/Blend/Backdrop) ATOMICKY (cely Begin..End dle bboxu scope
+-> zachova partition parovani). Per tile ~37-146 cmds misto 1427 (10-30x mensi).
+- ZMERENO release sustained hover: **max raster 24.7 -> 6.8ms, avg 4.93 -> 3.67ms**
+  (spiky pryc). Korektni: screenshoty (normal + scoped sekce filtry/blend/gradient
+  /transform/clip) bez orezu/seams. 3 unit testy (filter_cmds_to_tile). 4204 pass.
+
+NEJDULEZITEJSI ZJISTENI (proc N+46 plan nefungoval): **engine-test stranka je
+~9000px vysoka -> ROOT layer je >8192 phys -> root UZ TILUJE** (~10 tiles,
+potvrzeno RWE_TILE_DBG: tiles origin (0,0)..(1024,8192) size 1024, sirka 1265).
+Tj. **N+46 premisa "root = jedna velka textura re-rasterizovana cela (pnt
+5.5ms)" je FALSE** - root neni single texture, je tiled. **N+46 dirty-rect plan
+(scissor damage sub-rectu jedne root textury) je MOOT** (zadna single root
+textura neexistuje). Spiky = root TILES re-raster pri hover churn pres neefektivni
+render_into_tile (full-layer build per tile) - to fixnul cmd-filtering.
+
+### Co fix zmenil (SHIPPED)
+- `segments.rs`: `cmd_bbox(cmd)` (konzervativni AABB, effect-extenty zapocteny,
+  Text odhad generozni), `filter_cmds_to_tile(cmds, tile)` (atomicke scopes pres
+  `scope_marker_kind` + `scope_end_index`), + 3 testy.
+- `render/mod.rs render_into_tile`: filter -> (empty fallback na cely layer kvuli
+  clearu) -> shift -> draw. RWE_TILE_DBG ted `cmds=filtered/total`.
+
+### 2 slepe ulicky pred tim (ZMERENY + REVERTNUTY):
+
+### Pokus 1: "tilovat root pres layer_uses_tiles gate" -> REDUNDANTNI
+Sjednotil 3 gate mista (alloc/raster/compose, vsechny `>8192`) do
+`layer_uses_tiles` + trigger `tiles.len()>1`. ALE root uz tiluje (>8192), takze
+zmena byla pro tuhle stranku NO-OP. Zmereno A/B (RWE_TILE_ROOT_OFF): median 4.5
+vs 4.1ms = debug sum, zadny win. Revertnuto.
+
+### Pokus 2: "render_into_tile shader viewport-offset" -> KOREKTNI, ale nepomaha
+render_into_tile drive klonuje+shiftuje+build_vertices z CELEHO layeru per tile
+(N dirty tiles = N x full-page vertex build). Fix: RECT/LCD uniform rozsiren o
+`origin: vec4` (16->32B), shader NDC = (pos-origin)/vp, render_into_tile
+NEshiftuje (vertices v layer coords -> vert_cache HIT pres tiles), origin pres
+TILE_ORIGIN thread-local + write_rect_uniform helper.
+- OVERENO KOREKTNI: RWE_FORCE_TILES (vsechny vrstvy pres tile path) = screenshot
+  identicky s normalem, zadne seams/posun. Main path (origin=0) beze zmeny.
+- ALE NEPOMAHA: RWE_TILE_DBG ukazal **`scoped=true` pro VSECHNY tile rendery** -
+  root (~1410 cmds) obsahuje Filter/Transform/Mask/Blend segmenty -> fast no-shift
+  path VZDY padá do FALLBACKU (clone+shift+rebuild). Release spiky beze zmeny
+  (max 23.5 vs 24.7ms). Revertnuto.
+
+### SKUTECNY perf obraz (release, sustained hover sekci 01)
+- Median 3ms (OK), ale **spiky 18-24ms** na framech "2L/2-3T".
+- "2L" = 2 hover boxy promote na transform LAYER (`.box:hover{transform:scale;
+  color; transition:all .3s}`, HTML:188/191) - leave/join root + per-frame
+  re-raster kvuli COLOR transition (paint, ne compositor-friendly).
+- "2-3T" = ROOT tiles re-raster pri hover churn (box opusti root -> tile co
+  zabiral se prekresli), pres SCOPED FALLBACK = clone+shift+build vsech ~1410
+  cmds per tile. To jsou ty spiky.
+
+### FIX = varianta (B) cmd-filtering -> SHIPPED (viz TL;DR). Zbyva (dalsi sessions)
+- **Orthogonalni win-target: transition COLOR re-raster ("2L" cost)**: hover boxy
+  re-raster per-frame protoze `.box {transition: all 0.3s}` animuje i color/
+  border-color (paint, ne jen transform). Transform cast by sla compositor-only
+  (N+38 gate), ale color ne (Chrome stejne). Po cmd-filteru uz to NENI hlavni
+  zrout (median 3.6ms, max 6.8ms = ~150 FPS floor), ale je to zbyly per-frame
+  cost. Mensi prostor.
+- **Dalsi tile efektivita** (volitelne): cmd-filter resi build/draw objem; per-tile
+  je porad separate encoder/buffer-create/submit (draw_main_pass_clipped alokuje
+  vertex buffer per call). Buffer reuse by srazil i ten overhead. + warm_atlas
+  bezi na CELE damaged vrstve (ne per-tile) - na hoveru bez novych glyfu skoro
+  no-op (text_cmd_warmed cache), ale iterace 1427 cmds neni zadarmo.
+- Odlozena varianta (A) origin-aware scoped compose (shader viewport-offset +
+  compose_offscreen/transform/blend NDC) NENI potreba - cmd-filter staci.
+
+### POZOR: user pousti DEBUG build (`cargo run -p rwe-shell`)
+V debug per-frame overhead (build_vertices, buffer-create-per-draw, draw calls)
+dominuje (cisla vyse jsou release). Po cmd-filteru je i debug lepsi (mene cmds/
+tile), ale debug bude vzdy pomalejsi. Zvazit doporucit user release build pro
+realne FPS, NEBO optimalizovat hot-path (buffer reuse v draw_main_pass_clipped).
+
+### Tooling pozn. (uzitecne pro dalsi session)
+- **RWE_TILE_DBG**: `[TILE] origin=(x,y) size=(w,h) cmds=N scoped=bool` per tile
+  render - takhle se zjistila root tile geometrie + scoped=true.
+- RWE_DAMAGE_DBG: `[D4 GPU] X layers, Y tiles rendered` + `[DAMAGE] x/y tiles`.
+- RWE_PROF: `[PAINT-SUB2] warm+raster=Xms` (POZOR: warm+raster DOHROMADY).
+- RWE_FORCE_TILES: protlaci vsechny vrstvy pres tile path (verifikace tile cesty).
+- Tiled vrstvy NEtisknou RWE_COMPOSE_DBG (continue pred print).
+- A/B pattern: 2x Start-Process shell ruzny env + pmclick sustained motion pres
+  box row + parse [PAINT-SUB2]. Harness blokuje `Remove-Item`+`\d+` v 1 prikazu
+  (unikatni log jmena + `[0-9]+`).
+
 ## Session N+46: perf profiling + event-dispatch skip + DIRTY-RECT plan
 
 ### Zprofilovano (title = PAGE phase times "P:<ms> ... cas:X lay:Y pnt:Z gpu:W")

@@ -7675,15 +7675,27 @@ impl Renderer {
         layer_cmds: &[DisplayCommand],
     ) -> bool {
         if layer_cmds.is_empty() { return false; }
-        // Clone + shift cmds to tile-local origin.
-        let mut tile_cmds: Vec<DisplayCommand> = layer_cmds.to_vec();
+        // Filtruj cmds na tile rect (layer-local coords) - jen commands co
+        // protinaji tile + scoped segmenty atomicky. Tim render_into_tile
+        // NEbuildi vertices z CELE vrstvy per tile (drive N dirty tiles = N x
+        // full-layer vertex build = hover spiky 18-24ms na tiled root layeru).
+        let mut tile_cmds = crate::browser::render::segments::filter_cmds_to_tile(
+            layer_cmds, (tile_local_x, tile_local_y, tile_w, tile_h));
+        // Prazdny vysledek (nic neprotina tile) = fallback na cely layer, aby se
+        // tile texture aspon vyclearovala (draw_segments early-returnuje bez clearu
+        // pri prazdnem vstupu = stale/garbage v nove tile texture). Vzacne - body
+        // bg obvykle pokryva vsechny tiles.
+        if tile_cmds.is_empty() {
+            tile_cmds = layer_cmds.to_vec();
+        }
+        // Shift do tile-local origin (tile top-left = (0,0)).
         for cmd in tile_cmds.iter_mut() {
             crate::browser::render::segments::shift_command_x(cmd, -tile_local_x);
             crate::browser::render::segments::shift_command_y(cmd, -tile_local_y);
         }
         if std::env::var("RWE_TILE_DBG").is_ok() {
-            eprintln!("[TILE] origin=({:.0},{:.0}) size=({:.0},{:.0}) cmds={}",
-                tile_local_x, tile_local_y, tile_w, tile_h, tile_cmds.len());
+            eprintln!("[TILE] origin=({:.0},{:.0}) size=({:.0},{:.0}) cmds={}/{}",
+                tile_local_x, tile_local_y, tile_w, tile_h, tile_cmds.len(), layer_cmds.len());
         }
         // Set vp override pres tile dims (draw_segments_into_view_clipped uses).
         VIEWPORT_OVERRIDE.with(|c| c.set((tile_w, tile_h)));
