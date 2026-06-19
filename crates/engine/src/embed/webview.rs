@@ -534,19 +534,69 @@ pub(crate) fn build_layer_local_cache(
     layer_tree: &crate::browser::compositor::LayerNode,
     layout_root: &crate::browser::layout::LayoutBox,
     cache: &mut std::collections::HashMap<usize, Vec<crate::browser::paint::DisplayCommand>>,
+    sf: f32,
+    force_tiles: bool,
 ) {
-    walk_layer_local(layer_tree, layout_root, cache);
+    walk_layer_local(layer_tree, layout_root, cache, sf, force_tiles);
+}
+
+/// Union y-range (world coords) dirty tiles vrstvy, nebo None kdyz zadny dirty.
+/// Slouzi k damage-scoped paint cullu (repaint jen sekci kolem zmeny).
+fn dirty_tiles_yrange(layer: &crate::browser::compositor::LayerNode) -> Option<(f32, f32)> {
+    let mut top = f32::MAX;
+    let mut bot = f32::MIN;
+    for tile in &layer.tiles {
+        if tile.dirty {
+            let ty = layer.root_rect.y + tile.local_rect.y;
+            top = top.min(ty);
+            bot = bot.max(ty + tile.local_rect.height);
+        }
+    }
+    if top <= bot { Some((top, bot)) } else { None }
 }
 
 fn walk_layer_local(
     layer: &crate::browser::compositor::LayerNode,
     layout_root: &crate::browser::layout::LayoutBox,
     cache: &mut std::collections::HashMap<usize, Vec<crate::browser::paint::DisplayCommand>>,
+    sf: f32,
+    force_tiles: bool,
 ) {
-    if layer.damage_rect.is_some() || !cache.contains_key(&layer.id) {
+    // Gate rebuildu. Pro TILE-path vrstvy (gate musi sedet s needs_tiles v render
+    // loopu): rebuild jen kdyz ma DIRTY tile - cmds konzumuji JEN dirty tiles
+    // (render_into_tile per dirty tile) + warm. damage_rect Some bez dirty tiles =
+    // spurious (struct fp churn z layer-promotion pri hoveru - hovered box
+    // opousti/vraci se do root -> root structural_fp se meni, ale jeho tile fp ne)
+    // -> full repaint by byl WASTED (0 tiles se renderuje). To byl hlavni zrout
+    // (local_cache 2.7ms kazdy hover frame). Single-texture vrstvy: damage_rect.
+    let uses_tiles = !layer.tiles.is_empty() && (force_tiles
+        || (layer.root_rect.width * sf).max(layer.root_rect.height * sf) > 8192.0);
+    let has_dirty_tile = layer.tiles.iter().any(|t| t.dirty);
+    let needs_rebuild = if uses_tiles {
+        has_dirty_tile || !cache.contains_key(&layer.id)
+    } else {
+        layer.damage_rect.is_some() || !cache.contains_key(&layer.id)
+    };
+    if needs_rebuild {
         if let Some(bx) = crate::browser::paint::find_box_by_node_id(layout_root, layer.id) {
             let mut tmp = Vec::new();
-            crate::browser::paint::paint_layer_into(bx, &mut tmp);
+            // DAMAGE-SCOPED paint: pro tile-path vrstvy culluj paint na y-range
+            // dirty tiles misto cele vrstvy -> paint jen zasazene sekce (hierarchicky
+            // cull skipne off-dirty subtrees). Tile textury ostatnich persistuji
+            // (frame 1 = vse dirty), warm dirty-range staci.
+            let cull = if uses_tiles { dirty_tiles_yrange(layer) } else { None };
+            if let Some((top, bot)) = cull {
+                crate::browser::paint::set_viewport_cull(top, bot);
+                crate::browser::paint::paint_layer_into(bx, &mut tmp);
+                crate::browser::paint::clear_viewport_cull();
+            } else {
+                crate::browser::paint::paint_layer_into(bx, &mut tmp);
+            }
+            if std::env::var("RWE_CULL_DBG").is_ok() {
+                let nd = layer.tiles.iter().filter(|t| t.dirty).count();
+                eprintln!("[CULL] layer={} uses_tiles={} cull={:?} dirty_tiles={}/{} cmds={} root_h={:.0}",
+                    layer.id, uses_tiles, cull, nd, layer.tiles.len(), tmp.len(), layer.root_rect.height);
+            }
             // Shift cmds to layer-local: subtract layer.root_rect origin.
             let dx = -layer.root_rect.x;
             let dy = -layer.root_rect.y;
@@ -568,7 +618,7 @@ fn walk_layer_local(
         }
     }
     for child in &layer.children {
-        walk_layer_local(child, layout_root, cache);
+        walk_layer_local(child, layout_root, cache, sf, force_tiles);
     }
 }
 
@@ -4720,7 +4770,8 @@ impl WebView {
             // VSECHNY layery kazdy frame (root = cely strom walk ~2.5ms paint).
             // Persistent: re-paint JEN damaged layery (podminka ve
             // walk_layer_local), undamaged reuse cmds z minuleho framu.
-            build_layer_local_cache(&layer_tree, &layout_root, &mut self.layer_local_cache);
+            build_layer_local_cache(&layer_tree, &layout_root, &mut self.layer_local_cache,
+                self.zoom * self.scale_factor, std::env::var("RWE_FORCE_TILES").is_ok());
             // Drop entries pro layery co uz neexistuji (DOM restrukturalizace) -
             // jinak mapa roste neomezene.
             {
