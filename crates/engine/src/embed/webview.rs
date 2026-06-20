@@ -2155,7 +2155,11 @@ impl WebView {
                             let nh = (sh + (cy_inner - sy)).max(24.0);
                             set_inline_style_prop(&node, "height", &format!("{}px", nh.round()));
                         }
-                        if let Some(interp) = self.interpreter.as_mut() { interp.bump_dom_version(); }
+                        // STYLE-ONLY bump (ne match): inline width/height nemenni selector
+                        // matching -> cascade walk reuse-ne vse krom resized elementu
+                        // (cas 15ms -> ~1ms). Webview cascade cache (dom_style_version)
+                        // stejne MISSne -> walk se spusti (levny, per-element cache HIT).
+                        if let Some(interp) = self.interpreter.as_mut() { interp.bump_dom_version_style_only(); }
                         self.hit_rtree = None;
                         self.dirty = true;
                         response.dirty = true;
@@ -4022,7 +4026,13 @@ impl WebView {
             // Pres host_id se WV-A entries nesmichaji s WV-B; pres dom_ver
             // stale entries po DOM mutaci auto-invalidne (key miss).
             let host_id = std::rc::Rc::as_ptr(&doc.root) as usize as u64;
-            let dom_ver = self.interpreter.as_ref().map(|i| i.dom_style_version()).unwrap_or(0);
+            // Cascade per-element caches klicuji na dom_MATCH_version (ne style):
+            // inline-style-only mutace (resize) ji nebumpaji -> walk reuse-ne vse
+            // krom zmeneneho elementu (pres inline_hash ve walk_key). Class/id/
+            // structural zmeny ji bumpaji (bump_dom_version) = full invalidate (correct
+            // pro combinatory). Webview cascade cache (vyse, hashe dom_style_version)
+            // stale MISSne na resize -> walk se spusti.
+            let dom_ver = self.interpreter.as_ref().map(|i| i.dom_match_version()).unwrap_or(0);
             crate::browser::cascade::set_cascade_ctx(host_id, dom_ver);
             let m = std::rc::Rc::new(if uses_container {
                 crate::browser::cascade::cascade_with_container_sizes(

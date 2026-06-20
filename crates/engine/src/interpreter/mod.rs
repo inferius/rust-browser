@@ -839,6 +839,16 @@ pub struct Interpreter {
     /// re-layoutuje BEZ re-cascade (dom_style_version) a SVG points re-paint
     /// BEZ re-layout.
     pub dom_layout_version: Rc<std::cell::Cell<u64>>,
+    /// MATCHING-relevantni mutation counter: bumpuje JEN kdyz se muze zmenit
+    /// SELECTOR MATCHING (class/id/structural attr, append/remove child). NE pri
+    /// inline-style-value / geometry zmenach (ty meni computed styly daneho
+    /// elementu, ne KTERE rules matchuji). Cascade per-element caches (matched_decls
+    /// / walk_output / propagated) klicuji na TENTO counter -> inline-style-only
+    /// mutace (napr. textarea resize) NEinvaliduji matched_decls celeho stromu,
+    /// cascade walk reuse-ne vse krom zmeneneho elementu (ten pres inline_hash v
+    /// walk_key). Konzervativni: bump_dom_version (default) ho bumpuje taky, takze
+    /// jen explicitni style-only cesty (resize) jsou incremental; zbytek full.
+    pub dom_match_version: Rc<std::cell::Cell<u64>>,
     /// Nody mutovane content-only zmenou (SVG geometry attrs) od posledniho
     /// take_content_mutated_nodes(). WebView pres ne rozhoduje, jestli
     /// off-screen JS animace (SVG wave RAF) musi dirty-ovat render.
@@ -1046,6 +1056,7 @@ impl Interpreter {
             content_mutated_nodes: Rc::new(RefCell::new(Vec::new())),
             dom_style_version: Rc::new(std::cell::Cell::new(0)),
             dom_layout_version: Rc::new(std::cell::Cell::new(0)),
+            dom_match_version: Rc::new(std::cell::Cell::new(0)),
         }
     }
 
@@ -1060,6 +1071,30 @@ impl Interpreter {
         // Geometry-only setAttribute pouziva bump_dom_version_content_only().
         self.dom_style_version.set(self.dom_style_version.get().wrapping_add(1));
         self.dom_layout_version.set(self.dom_layout_version.get().wrapping_add(1));
+        // Konzervativni: default mutace MUZE zmenit selector matching (class/id/
+        // structural) -> bump match verzi (= full cascade invalidate). Jen explicitni
+        // style-only cesty (bump_dom_version_style_only) ji NEbumpaji = incremental.
+        self.dom_match_version.set(self.dom_match_version.get().wrapping_add(1));
+    }
+
+    /// Bump version + style + layout, ALE NE match. Pro inline-style-VALUE zmeny
+    /// co nemenni selector matching (textarea resize: inline width/height). Cascade
+    /// per-element caches (klicuji na dom_match_version) prezijou -> walk reuse-ne
+    /// vse krom zmeneneho elementu (ten pres inline_hash). Webview cascade cache
+    /// (dom_style_version) ale MISSne -> walk se spusti (jen levny). = ~15ms saved
+    /// na resize. POZOR: korektni jen kdyz zmena fakt neovlivnuje matching (inline
+    /// style nikdy nematchuje selektory krom vzacneho [style] attr selektoru).
+    #[inline]
+    pub fn bump_dom_version_style_only(&self) {
+        self.dom_version.set(self.dom_version.get().wrapping_add(1));
+        self.dom_style_version.set(self.dom_style_version.get().wrapping_add(1));
+        self.dom_layout_version.set(self.dom_layout_version.get().wrapping_add(1));
+    }
+
+    /// Matching-relevantni mutation counter (viz pole dom_match_version).
+    #[inline]
+    pub fn dom_match_version(&self) -> u64 {
+        self.dom_match_version.get()
     }
 
     /// Bump content + LAYOUT verzi, ne style. Pro textContent/value - meni
