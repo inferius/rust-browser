@@ -145,10 +145,18 @@ pub fn extract_layer_tree(layout_root: &LayoutBox) -> LayerNode {
         damage_rect: None,
         tiles: Vec::new(),
     };
+    let _p0 = std::time::Instant::now();
     walk_box(layout_root, &mut root);
     root.children.sort_by_key(|l| l.z_index.unwrap_or(0));
+    let _p1 = std::time::Instant::now();
     // Spocti fingerprint kazdy layer pres post-walk (children jiz finalized).
     compute_fingerprints(&mut root, layout_root);
+    let _p2 = std::time::Instant::now();
+    if std::env::var("RWE_LAYPROF").is_ok() {
+        eprintln!("[EXTPROF] walk_box={:.2} fingerprints+tiles={:.2}",
+            _p1.duration_since(_p0).as_secs_f32()*1000.0,
+            _p2.duration_since(_p1).as_secs_f32()*1000.0);
+    }
     root
 }
 
@@ -165,10 +173,22 @@ fn compute_fingerprints(layer: &mut LayerNode, layout_root: &LayoutBox) {
         }
         for ch in &bx.children { collect_boxes(ch, out); }
     }
+    let _q0 = std::time::Instant::now();
     let mut box_map: std::collections::HashMap<usize, &LayoutBox> =
         std::collections::HashMap::new();
     collect_boxes(layout_root, &mut box_map);
+    let _q1 = std::time::Instant::now();
+    TILES_PROF_US.with(|c| c.set(0));
     compute_fingerprints_inner(layer, &box_map);
+    let _q2 = std::time::Instant::now();
+    if std::env::var("RWE_LAYPROF").is_ok() {
+        let tiles_us = TILES_PROF_US.with(|c| c.get());
+        eprintln!("[FPPROF] box_map_build={:.2} fp_only={:.2} tiles={:.2} boxes={}",
+            _q1.duration_since(_q0).as_secs_f32()*1000.0,
+            (_q2.duration_since(_q1).as_micros() as f32 - tiles_us as f32)/1000.0,
+            tiles_us as f32/1000.0,
+            box_map.len());
+    }
 }
 
 fn compute_fingerprints_inner(
@@ -300,12 +320,79 @@ fn compute_fingerprints_inner(
     layer.fingerprint = h_full.finish();
     layer.structural_fp = h_struct.finish();
     // Build tile grid + per-tile fingerprint.
+    let _t0 = std::time::Instant::now();
     compute_layer_tiles(layer, box_map);
+    TILES_PROF_US.with(|c| c.set(c.get() + _t0.elapsed().as_micros() as u64));
+}
+
+thread_local! {
+    static TILES_PROF_US: std::cell::Cell<u64> = std::cell::Cell::new(0);
+}
+
+/// Spocita konzervativni paint-extent boxu (outline kresli VNE boxu +
+/// box-shadow reach). Sdileno mezi tile assignment + (historicky) intersection
+/// test. Vraci 0 pro boxy bez outline/shadow.
+#[inline]
+fn box_paint_ext(bx: &LayoutBox) -> f32 {
+    let mut ext = if bx.outline_width > 0.0 {
+        bx.outline_width + bx.outline_offset.max(0.0)
+    } else { 0.0 };
+    for &(sx, sy, sb, ss, _, inset) in &bx.box_shadow {
+        if !inset {
+            ext = ext.max(sx.abs().max(sy.abs()) + sb + ss);
+        }
+    }
+    ext
+}
+
+/// Hash content boxu do tile hasheru. MUSI byt bit-identicke s historickym
+/// inline blokem (jinak by se zmenily vsechny tile fingerprinty = false damage).
+#[inline]
+fn hash_box_into_tile<H: std::hash::Hasher>(h: &mut H, id: usize, bx: &LayoutBox) {
+    use std::hash::Hash;
+    id.hash(h);
+    bx.rect.x.to_bits().hash(h);
+    bx.rect.y.to_bits().hash(h);
+    bx.rect.width.to_bits().hash(h);
+    bx.rect.height.to_bits().hash(h);
+    if let Some(c) = bx.bg_color { c.hash(h); }
+    if let Some(c) = bx.text_color { c.hash(h); }
+    // border-color/width: paint property - bez nej border-color
+    // transition (.tf-box:hover) nezmeni tile fp -> tile se
+    // neoznaci dirty -> NEprepaintuje -> border se "zjevi az na
+    // konci" animace (layer structural_fp se menil ale tile ne).
+    if let Some(c) = bx.border_color { c.hash(h); }
+    bx.border_width.to_bits().hash(h);
+    // Outline + box-shadow: focus ring / hover stin (viz layer fp).
+    if let Some(c) = bx.outline_color { c.hash(h); }
+    bx.outline_width.to_bits().hash(h);
+    for &(sx, sy, sb, ss, sc, inset) in &bx.box_shadow {
+        sx.to_bits().hash(h); sy.to_bits().hash(h);
+        sb.to_bits().hash(h); ss.to_bits().hash(h);
+        sc.hash(h); inset.hash(h);
+    }
+    if let Some(t) = &bx.text { t.hash(h); }
+    // Form control obsah - stejny duvod jako v layer fp (psani
+    // do inputu jinak nedirti tile -> stary obraz).
+    if let Some(t) = &bx.control_text { t.hash(h); }
+    // Checked + range value (checkbox/radio/range paint z attru).
+    if bx.tag.as_deref() == Some("input") {
+        if let Some(n) = &bx.node {
+            n.attr("checked").is_some().hash(h);
+            if let Some(v) = n.attr("value") { v.hash(h); }
+        }
+    }
 }
 
 /// Rozdeli layer.root_rect na NxM grid tiles velikost TILE_SIZE. Per tile
 /// vypocti fingerprint z content boxes ktere intersect tile rect. Foundation
 /// pro tile-level damage tracking (per-tile re-paint misto cely layer).
+///
+/// PERF: drive O(tiles * boxes) (per-tile loop pres VSECHNY content boxy +
+/// intersection test). Root layer ~9000px = ~9 tile rows * 1079 boxu = ~9700
+/// iteraci/frame (~0.5ms debug). Ted O(boxes): per box urci rozsah
+/// [col0..col1]x[row0..row1] ktery protina, append do tech tiles' seznamu
+/// (poradi pruchodu content_box_ids zachovano -> tile hash BIT-identicky).
 fn compute_layer_tiles(
     layer: &mut LayerNode,
     box_map: &std::collections::HashMap<usize, &LayoutBox>,
@@ -319,7 +406,44 @@ fn compute_layer_tiles(
     }
     let cols = ((lr.width / TILE_SIZE).ceil() as usize).max(1);
     let rows = ((lr.height / TILE_SIZE).ceil() as usize).max(1);
-    let mut tiles = Vec::with_capacity(cols * rows);
+    let ntiles = cols * rows;
+    // Per-tile seznam (box_id, box ref) v poradi pruchodu content_box_ids.
+    // Single tile (typicke pro male layery) = fast path bez per-box bucketingu.
+    let mut buckets: Vec<Vec<(usize, &LayoutBox)>> = vec![Vec::new(); ntiles];
+    for id in &layer.content_box_ids {
+        if let Some(bx) = box_map.get(id) {
+            let ext = box_paint_ext(bx);
+            let bx_x0 = bx.rect.x - ext;
+            let bx_y0 = bx.rect.y - ext;
+            let bx_x1 = bx.rect.x + bx.rect.width + ext;
+            let bx_y1 = bx.rect.y + bx.rect.height + ext;
+            // Urci rozsah tile-bunek ktere box protina. Box mimo layer = skip.
+            // col/row index z box pozice relativne k layer originu.
+            if bx_x1 <= lr.x || bx_x0 >= lr.x + lr.width
+               || bx_y1 <= lr.y || bx_y0 >= lr.y + lr.height { continue; }
+            // Rozsah col/row bunek ktere box (vc. ext) muze protinat. floor pro
+            // start, ceil pro konec - nadmnozina, presny `if ix` test nize
+            // filtruje hranicni bunky (zachova puvodni > / < semantiku).
+            let c0 = (((bx_x0 - lr.x) / TILE_SIZE).floor() as isize).max(0) as usize;
+            let c1 = ((((bx_x1 - lr.x) / TILE_SIZE).ceil() as isize).max(0) as usize).min(cols);
+            let r0 = (((bx_y0 - lr.y) / TILE_SIZE).floor() as isize).max(0) as usize;
+            let r1 = ((((bx_y1 - lr.y) / TILE_SIZE).ceil() as isize).max(0) as usize).min(rows);
+            for row in r0..r1 {
+                for col in c0..c1 {
+                    // Presny intersection test vs tile rect (stejny jako puvodni
+                    // inline kod) - col/row rozsah je konzervativne sirsi.
+                    let tx = lr.x + col as f32 * TILE_SIZE;
+                    let ty = lr.y + row as f32 * TILE_SIZE;
+                    let tw = TILE_SIZE.min(lr.x + lr.width - tx);
+                    let th = TILE_SIZE.min(lr.y + lr.height - ty);
+                    let ix = bx_x1 > tx && bx_x0 < tx + tw
+                          && bx_y1 > ty && bx_y0 < ty + th;
+                    if ix { buckets[row * cols + col].push((*id, bx)); }
+                }
+            }
+        }
+    }
+    let mut tiles = Vec::with_capacity(ntiles);
     for row in 0..rows {
         for col in 0..cols {
             let tx = lr.x + col as f32 * TILE_SIZE;
@@ -333,61 +457,8 @@ fn compute_layer_tiles(
             (tile_rect.y.to_bits()).hash(&mut h);
             (tile_rect.width.to_bits()).hash(&mut h);
             (tile_rect.height.to_bits()).hash(&mut h);
-            for id in &layer.content_box_ids {
-                if let Some(bx) = box_map.get(id) {
-                    // Paint extent presahujici rect: outline (kresli se VNE
-                    // boxu) + box-shadow reach. Bez expanze se sousedni tile
-                    // (kam outline/stiny pretekaji) neoznacil dirty -> pulka
-                    // focus ringu chybela do dalsiho full repaintu.
-                    let mut ext = if bx.outline_width > 0.0 {
-                        bx.outline_width + bx.outline_offset.max(0.0)
-                    } else { 0.0 };
-                    for &(sx, sy, sb, ss, _, inset) in &bx.box_shadow {
-                        if !inset {
-                            ext = ext.max(sx.abs().max(sy.abs()) + sb + ss);
-                        }
-                    }
-                    // Bx rect (+ext) intersect tile?
-                    let bx_x0 = bx.rect.x - ext;
-                    let bx_y0 = bx.rect.y - ext;
-                    let bx_x1 = bx.rect.x + bx.rect.width + ext;
-                    let bx_y1 = bx.rect.y + bx.rect.height + ext;
-                    let ix = bx_x1 > tile_rect.x && bx_x0 < tile_rect.x + tile_rect.width
-                          && bx_y1 > tile_rect.y && bx_y0 < tile_rect.y + tile_rect.height;
-                    if !ix { continue; }
-                    id.hash(&mut h);
-                    bx.rect.x.to_bits().hash(&mut h);
-                    bx.rect.y.to_bits().hash(&mut h);
-                    bx.rect.width.to_bits().hash(&mut h);
-                    bx.rect.height.to_bits().hash(&mut h);
-                    if let Some(c) = bx.bg_color { c.hash(&mut h); }
-                    if let Some(c) = bx.text_color { c.hash(&mut h); }
-                    // border-color/width: paint property - bez nej border-color
-                    // transition (.tf-box:hover) nezmeni tile fp -> tile se
-                    // neoznaci dirty -> NEprepaintuje -> border se "zjevi az na
-                    // konci" animace (layer structural_fp se menil ale tile ne).
-                    if let Some(c) = bx.border_color { c.hash(&mut h); }
-                    bx.border_width.to_bits().hash(&mut h);
-                    // Outline + box-shadow: focus ring / hover stin (viz layer fp).
-                    if let Some(c) = bx.outline_color { c.hash(&mut h); }
-                    bx.outline_width.to_bits().hash(&mut h);
-                    for &(sx, sy, sb, ss, sc, inset) in &bx.box_shadow {
-                        sx.to_bits().hash(&mut h); sy.to_bits().hash(&mut h);
-                        sb.to_bits().hash(&mut h); ss.to_bits().hash(&mut h);
-                        sc.hash(&mut h); inset.hash(&mut h);
-                    }
-                    if let Some(t) = &bx.text { t.hash(&mut h); }
-                    // Form control obsah - stejny duvod jako v layer fp (psani
-                    // do inputu jinak nedirti tile -> stary obraz).
-                    if let Some(t) = &bx.control_text { t.hash(&mut h); }
-                    // Checked + range value (checkbox/radio/range paint z attru).
-                    if bx.tag.as_deref() == Some("input") {
-                        if let Some(n) = &bx.node {
-                            n.attr("checked").is_some().hash(&mut h);
-                            if let Some(v) = n.attr("value") { v.hash(&mut h); }
-                        }
-                    }
-                }
+            for (id, bx) in &buckets[row * cols + col] {
+                hash_box_into_tile(&mut h, *id, bx);
             }
             tiles.push(Tile {
                 local_rect: Rect {
@@ -823,5 +894,84 @@ mod tests {
         compute_layer_tiles(&mut layer, &map);
         assert!(layer.tiles[0].local_rect.x.abs() < 0.01);
         assert!(layer.tiles[0].local_rect.y.abs() < 0.01);
+    }
+
+    // Naivni referenci compute_layer_tiles (puvodni O(tiles*boxes) algoritmus) -
+    // per tile iteruj VSECHNY content boxy. Slouzi k overeni ze nova bucket
+    // verze produkuje BIT-IDENTICKE tile fingerprinty.
+    fn ref_tile_fingerprints(
+        layer: &LayerNode,
+        box_map: &std::collections::HashMap<usize, &LayoutBox>,
+    ) -> Vec<u64> {
+        use std::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+        let lr = layer.root_rect;
+        if lr.width < 1.0 || lr.height < 1.0 { return Vec::new(); }
+        let cols = ((lr.width / TILE_SIZE).ceil() as usize).max(1);
+        let rows = ((lr.height / TILE_SIZE).ceil() as usize).max(1);
+        let mut out = Vec::new();
+        for row in 0..rows {
+            for col in 0..cols {
+                let tx = lr.x + col as f32 * TILE_SIZE;
+                let ty = lr.y + row as f32 * TILE_SIZE;
+                let tw = TILE_SIZE.min(lr.x + lr.width - tx);
+                let th = TILE_SIZE.min(lr.y + lr.height - ty);
+                let tile_rect = Rect { x: tx, y: ty, width: tw, height: th };
+                let mut h = DefaultHasher::new();
+                (tile_rect.x.to_bits()).hash(&mut h);
+                (tile_rect.y.to_bits()).hash(&mut h);
+                (tile_rect.width.to_bits()).hash(&mut h);
+                (tile_rect.height.to_bits()).hash(&mut h);
+                for id in &layer.content_box_ids {
+                    if let Some(bx) = box_map.get(id) {
+                        let ext = box_paint_ext(bx);
+                        let bx_x0 = bx.rect.x - ext;
+                        let bx_y0 = bx.rect.y - ext;
+                        let bx_x1 = bx.rect.x + bx.rect.width + ext;
+                        let bx_y1 = bx.rect.y + bx.rect.height + ext;
+                        let ix = bx_x1 > tile_rect.x && bx_x0 < tile_rect.x + tile_rect.width
+                              && bx_y1 > tile_rect.y && bx_y0 < tile_rect.y + tile_rect.height;
+                        if !ix { continue; }
+                        hash_box_into_tile(&mut h, *id, bx);
+                    }
+                }
+                out.push(h.finish());
+            }
+        }
+        out
+    }
+
+    // Postavi layer tree z velke stranky (vice tiles vysoke) a overi ze nova
+    // bucketovana compute_layer_tiles da stejne tile fingerprinty jako naivni
+    // referenci. Klic korektnosti PERF refactoru (bucket misto per-tile scan).
+    #[test]
+    fn tile_fingerprints_match_naive_reference() {
+        // Mnoho ruznych bloku -> page vyssi nez nekolik tiles (TILE_SIZE=1024).
+        let mut body = String::from("<html><body>");
+        for i in 0..120 {
+            body.push_str(&format!(
+                "<div style=\"height:80px;border:2px solid #f0{0:02x}0;background:#{0:02x}3344;outline:3px solid #00f;box-shadow:4px 4px 8px #000;\">blk {0}</div>",
+                i % 200));
+        }
+        body.push_str("</body></html>");
+        let doc = crate::browser::html_parser::parse_html(&body, "about:blank");
+        let sheets: Vec<crate::browser::css_parser::Stylesheet> = Vec::new();
+        let style_map = std::rc::Rc::new(crate::browser::cascade::cascade(&doc.root, &sheets));
+        let layout = crate::browser::layout::layout_tree(&doc.root, &style_map, 1265.0, 900.0);
+        let tree = extract_layer_tree(&layout);
+        // Postav box_map jako compute_fingerprints (pres celou layout tree).
+        fn collect<'a>(bx: &'a LayoutBox, out: &mut std::collections::HashMap<usize, &'a LayoutBox>) {
+            if let Some(n) = &bx.node { out.insert(std::rc::Rc::as_ptr(n) as usize, bx); }
+            for ch in &bx.children { collect(ch, out); }
+        }
+        let mut map = std::collections::HashMap::new();
+        collect(&layout, &mut map);
+        // Root layer musi mit > 1 tile (jinak test nic neoveri).
+        assert!(tree.tiles.len() > 1, "page musi byt vice tiles vysoka, je {}", tree.tiles.len());
+        let reference = ref_tile_fingerprints(&tree, &map);
+        let actual: Vec<u64> = tree.tiles.iter().map(|t| t.fingerprint).collect();
+        assert_eq!(actual.len(), reference.len(), "stejny pocet tiles");
+        assert_eq!(actual, reference,
+            "bucketovana compute_layer_tiles musi dat BIT-identicke fingerprinty jako naivni reference");
     }
 }

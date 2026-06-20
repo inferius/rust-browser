@@ -4508,9 +4508,12 @@ impl WebView {
         // hit_test pres nej respektuje scroll_offset; anim posuny se bakuji
         // az do PAINT kopie nize (hit na animovanych elementech = layout
         // pozice, Chrome-ish kompromis).
+        let _prof_clone0 = std::time::Instant::now();
         self.last_layout_root = Some(layout_root.clone());
+        let _prof_clone1 = std::time::Instant::now();
         // 2c (presunuto): paint-side animations apply na PAINT kopii.
         crate::browser::render::apply_paint_animations(&mut layout_root, &style_map);
+        let _prof_apply1 = std::time::Instant::now();
         // @container konvergence: cascade tohoto framu pouzila container_sizes z
         // PREDCHOZIHO layoutu. Ted (po novem layoutu) prepocti aktualni container
         // velikosti; pokud se lisi od pouzitych -> force dirty (dalsi frame
@@ -4642,7 +4645,15 @@ impl WebView {
         let anim_layer_ids: std::collections::HashSet<usize> =
             self.active_animations.iter().map(|(id, _)| *id).collect();
         crate::browser::compositor::set_force_layer_nodes(anim_layer_ids);
+        let _prof_ext0 = std::time::Instant::now();
         let mut layer_tree = crate::browser::compositor::extract_layer_tree(&layout_root);
+        let _prof_ext1 = std::time::Instant::now();
+        if std::env::var("RWE_LAYPROF").is_ok() {
+            eprintln!("[LAYPROF] clone={:.2} apply_paint={:.2} extract_layer_tree={:.2}",
+                _prof_clone1.duration_since(_prof_clone0).as_secs_f32()*1000.0,
+                _prof_apply1.duration_since(_prof_clone1).as_secs_f32()*1000.0,
+                _prof_ext1.duration_since(_prof_ext0).as_secs_f32()*1000.0);
+        }
         // Compositor-driven anim tick - posune progress + override layer
         // opacity/transform values BEZ re-cascade. Pri animaci jen tyhle props
         // = structural_fp identical = damage_rect = None = texture cache reuse.
