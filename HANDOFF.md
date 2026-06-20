@@ -2,6 +2,64 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`, `debug_utils.md`.
 
+## Session N+48: IN-PLACE LAYOUT (PLAN B) - 2 SHIPPED commity (move misto clone)
+
+### TL;DR - PLAN B z N+47 DOKONCEN (resize layout clone -> move)
+Dva staged commity, oba overene (4205 testu, screenshoty vsech sekci, mereni A/B):
+1. `3de1597` **KROK A**: layout cache prev_root OWNED (move-in) misto borrowed.
+   `layout_tree_with_pseudo_cached` bere `prev_root: Option<LayoutBox>` by-value;
+   caller (webview.rs:~4424) preda `self.last_layout_root.take()` misto `.as_ref()`.
+   NO-OP perf - jen priprava (cache stale klonovala). last_layout_root je mezi
+   take() a save(4512) None = bezpecne (HIT vetev sem nejde, pass_a/b na layout_root).
+2. `ab44e77` **KROK B**: cache HIT presune subtree `std::mem::replace(prev,
+   LayoutBox::new())` misto `prev.clone()`. Cache mapa `*const`->`*mut LayoutBox`,
+   prev_owned drzen mut. Guard double-take: placeholder LayoutBox::new() ma
+   fingerprint=0, lookup je `prev.fingerprint==h && h!=0` -> vyplundrovany slot
+   vzdy MISS. Mut ptr aliasing OK: build top-down, HIT na parent presune cely
+   subtree (vc deti) a NEvnori se -> dite-ptr se nepouzije.
+
+### Mereni A/B (RWE_LAYPROF2 - NOVY gated, deterministicky per-frame)
+Engine-test, window resize (monotonni zuzeni, 68 cache-HIT subtrees), DEBUG:
+- **CLONE (pred): build_box#1 ~3.65ms** | **MOVE (po): ~2.85ms** = **-22%**.
+- Mereno pres RWE_FORCE_CLONE toggle (docasny A/B v build_box_inner_cached, pak
+  ODSTRANEN - finalni kod = cisty move). RWE_LAYPROF2 v kodu ZUSTAL (uzitecny).
+- POZN: na teto strance jsou cache-HIT subtrees MALE (build jen 3.65ms celkem,
+  68 hits). Clone = O(subtree size), move = O(1) per HIT -> na deep/velkem DOM
+  bude absolutni win VYRAZNE vetsi. HANDOFF N+47 cislo 24.9ms bylo jina konfig.
+
+### RWE_LAYPROF2 (novy tooling)
+`[LAYPROF2] build_box#1=X.XXms move_hits=N` KAZDY layout (gated env, jen kdyz
+cache.is_some()). Spolehlivejsi nez title-bar `lay:` sampling (to chyti jen par
+framu pri resize - shell kolapsuje resize udalosti, mereni nestabilni).
+
+### >>> cq-container RESIZE GRIP NEFUNGUJE (correctness finding, user-reported) <<<
+User chce sekce 19 `.cq-container` (resize:horizontal grip vpravo dole) tahnout
+za roh -> reflow. ZJISTENO: **grip drag pres pmclick (down + moveheld kroky)
+NEZPUSOBI zadny resize** - container zustava nezmenen, lay:0.0, zadny layout.
+Bud (a) shell neimplementuje `resize:horizontal` grip mouse-drag handler, nebo
+(b) pmclick moveheld nedrzi button tak jak shell ocekava. NEDORESENO (perf byl
+primarni). Layout SAMOTNY je korektni: pri sirsim containeru (cold load) je
+spravne grid 2x2 (Item A/B | C/D, @container min-width:400px splneno). Reflow
+pres WINDOW resize funguje spravne (cela stranka se relayoutuje). Dalsi session:
+overit/implementovat resize-grip drag v shellu (webview.rs hit-test grip rect +
+mouse-down-drag -> set inline width na resizovanem elementu + dirty layout).
+
+### ZBYVA (dalsi session) - serazeno dle win/risk
+1. **Hover lay clone** (`last_layout_root = layout_root.clone()` webview.rs:4512,
+   ~1ms): full clone clean snapshotu pro hit-test PRED apply_paint_animations
+   (paint kopie). Potrebuje DVE kopie (clean hit-test + paint), takze primy move
+   nejde (1 clone nutny). Moznost: obratit - clean strom MOVE do last_layout_root,
+   paint strom = clone (stejny pocet klonu, 0 win). Skutecny win jen Rc-share NEBO
+   hit-test proti paint stromu (= meni hit semantiku na animovanych elementech,
+   komentar 4509 to explicitne nechce). RISKANTNI, maly win - zvazit jestli stoji.
+2. **cq-container grip resize** (viz vyse) - correctness, ne perf.
+3. **Scrollbar-repath 2x build** (layout/mod.rs:~1711): pri MISS bez prev overflow
+   se build vola 2x; po KROKU B druhy build uz nenajde nic (placeholdery fp=0) =
+   FULL rebuild. Mitiguje prev_had_overflow skip (ustaleny resize = 1 build, OK),
+   ale prvni frame po cold cache 2x. Mensi, low prio.
+
+---
+
 ## Session N+47: hover+resize perf - 4 SHIPPED commity + in-place layout PLAN pro DALSI session
 
 ### TL;DR - 4 perf commity (cti drive nez sahnes na perf / layout / cascade znovu)
