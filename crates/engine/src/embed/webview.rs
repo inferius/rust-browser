@@ -4419,9 +4419,14 @@ impl WebView {
                 m
             };
             let t = std::time::Instant::now();
+            // KROK A: predame prev strom MOVE (take) misto borrowed ref. Cache
+            // uvnitr drzi ownership po dobu call. last_layout_root je nyni None
+            // az do save nize (4512) - mezi tim se necte (HIT vetev sem nejde,
+            // pass_a/pass_b pracuji na layout_root). KROK B pak misto clone
+            // subtrees presune (move) z tohoto owned prev stromu = 0 alloc.
             let r = crate::browser::layout::layout_tree_with_pseudo_cached(
                 &doc.root, &style_map, &pseudo_map, viewport_w, viewport_h,
-                self.last_layout_root.as_ref());
+                self.last_layout_root.take());
             let _ = t_ps;
             let elapsed = t.elapsed().as_secs_f32() * 1000.0;
             if elapsed > 100.0 {

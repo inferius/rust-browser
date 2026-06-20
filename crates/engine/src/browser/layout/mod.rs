@@ -1641,8 +1641,14 @@ pub fn layout_tree_with_pseudo_cached(
     pseudo_map: &super::cascade::PseudoStyleMap,
     viewport_width: f32,
     viewport_height: f32,
-    prev_root: Option<&LayoutBox>,
+    prev_root: Option<LayoutBox>,
 ) -> LayoutBox {
+    // KROK A (in-place layout staging): prev_root je nyni OWNED (move-in) misto
+    // borrowed. Drzime ho v lokalni promenne `prev_owned` po celou dobu call -
+    // raw ptr cache (prev_map) ukazuje do nej, lifetime garance = tato fn. Cache
+    // HIT zatim stale klonuje (KROK B zameni clone->move z owned stromu).
+    let prev_owned = prev_root;
+    let prev_root: Option<&LayoutBox> = prev_owned.as_ref();
     // Ulozi viewport pro layout-time calc()/clamp() vw/vh resolve.
     set_layout_viewport(viewport_width, viewport_height);
     // Clear subtree hash memo - per-frame valid (style_map se mezi
