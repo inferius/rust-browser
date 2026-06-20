@@ -40,12 +40,25 @@ VYVRACENA (root je >8192 = tiluje, ~10 tiles) - viz "slepe ulicky" nize.
 - `extract_layer_tree` (lay v hoveru): walk celeho layout stromu + compute_fingerprints
   + compute_layer_tiles KAZDY frame. NEcachovane.
 
-#### PLAN A (mensi, BEZPECNE, HOVER->240) - doporuceny warm-up
-Cachovat layer tree STRUKTURU (LayerNode skeleton: id/reason/content_box_ids/tiles
-geometry) kdyz se layout NEzmenil (dom_layout_version + scroll stejne). Damage
-fingerprinty (compute_fingerprints/tiles) prepocitat vzdy fresh na cached strukture
-(meni se hover/anim). walk_box strukturu skip -> lay hover 2ms -> ~0.3ms -> ~220-240.
-Nizsi riziko (struktura deterministicka z layout_root; invaliduj na layout_version).
+#### >>> UPDATE (agent continuation, commit 28af84d): PLAN A JE SLEPA ULICKA <<<
+RWE_LAYPROF (novy gated profiling, viz nize) zmeril lay sub-faze a ODHALIL ze
+extract_layer_tree NENI bottleneck - jeho sub-casti jsou levne: **walk_box 0.07ms,
+compute_layer_tiles 0.23ms, fp_only 0.10ms** (debug). Cachovat extract strukturu
+(Plan A) by uslo skoro nic. (Profiling ma observer overhead = inflated, merit
+relativne.) Agent misto toho landoval `compute_layer_tiles` O(tiles*boxes)->O(boxes)
+bucketing (0.5->0.23ms, bit-identicky test) - drobny win, ne bottleneck.
+
+SKUTECNY lay bottleneck = CLONE LAYOUT STROMU (potvrzeno LAYPROF):
+- **Hover lay ~2ms** = `last_layout_root = layout_root.clone()` (webview.rs:~4511,
+  full clone stromu pro hit-test PRED apply_paint_animations) **1.0ms** + apply_paint
+  0.7 + extract 0.5. Layout SAMOTNY (build_box) je CACHED (paint props nejsou v
+  layout fingerprintu -> hover NErebuilduje). Target: vyhnout se last_layout_root
+  clonu (Rc share? hit-test proti pre-paint layout_root?).
+- **Resize lay ~24.9ms** = `build_box_inner_cached:2755` `prev.clone()` rebuild
+  VSECH subtrees (size zmena -> layout fp zmena -> root miss -> clone all). Target:
+  in-place move (PLAN B nize).
+=> OBOJI = no-clone/in-place. Plan B (move misto clone) je jediny realny smer.
+   Hover-240 navic chce vyresit last_layout_root.clone (mensi, ale taky clone).
 
 #### PLAN B (VELKY, RISKANTNI, RESIZE smooth) - in-place layout (move misto clone)
 Cil: misto rebuild+clone celeho stromu kazdy frame MUTOVAT persistentni strom.
