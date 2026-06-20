@@ -2,9 +2,73 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`, `debug_utils.md`.
 
-## Session N+47: hover perf - SHIPPED tile cmd-filtering (spiky 24.7->6.8ms); N+46 premisa vyvracena
+## Session N+47: hover+resize perf - 4 SHIPPED commity + in-place layout PLAN pro DALSI session
 
-### TL;DR (SHIPPED FIX + 2 slepe ulicky pred nim)
+### TL;DR - 4 perf commity (cti drive nez sahnes na perf / layout / cascade znovu)
+1. `a6b9270` **per-tile cmd filtering** (render_into_tile) - raster spiky 24.7->6.8ms.
+2. `18e732e` **damage-scoped paint cache** (walk_layer_local) - hover page render
+   12->4.5ms, pnt 5.5->0.5ms, FPS 145->190. Tile-path vrstvy rebuilduji local_cache
+   JEN kdyz maji dirty tile (ne damage_rect - root je casto damaged z layer-promotion
+   churn ale 0 dirty tiles = wasted full repaint). + cull paint na dirty-tile y-range.
+3. `6e45f2c` **incremental cascade** (dom_match_version) - resize cascade 15ms->cached.
+   Novy counter co bumpuje JEN na matching-relevant mutace (class/id/structural);
+   inline-style-only (resize) ho nebumpaji -> cascade per-element walk_output cache
+   prezije -> reuse vseho krom zmeneneho elementu. bump_dom_version (default) ho
+   bumpuje = konzervativni. bump_dom_version_style_only (NEW) ne = resize incremental.
+   Zmereno: [CASCADE PROF] (>10ms) fired 2/14 resize framu misto 14/14.
+
+Vse overeno: 4204 testu pass, screenshoty (hover box scale+barva, resize textarea
+roste+reflow, scoped sekce), styly korektni. N+46 premisa "root=single texture"
+VYVRACENA (root je >8192 = tiluje, ~10 tiles) - viz "slepe ulicky" nize.
+
+### >>> ZBYVA = LAYOUT FAZE (perf zed). DETAILNI PLAN PRO DALSI SESSION: <<<
+
+#### Aktualni stav (zmereno title bar `[FPS ms | C P D (cas lay pnt gpu)]`)
+- **Hover** (release, sustained): page render ~4.5ms = cas 0.7 + **LAY 2.0** + pnt
+  0.5 + gpu 1.1 -> ~190 FPS. Zbyva `lay` = extract_layer_tree walk 667 uzlu/frame.
+- **Resize** (debug, textarea grip drag): cas ~1 (cached, #3) + **LAY 24.9** + pnt
+  16.1. Lay dominuje. POZOR: lay 24.9 je ~5x DEBUG-inflated (release ~5ms); user
+  pousti debug (`cargo run -p rwe-shell`).
+
+#### Root cause OBOU: LAYOUT REBUILD-PER-FRAME + DEEP CLONE
+- `build_box_inner_cached` (layout/mod.rs:2755): cached subtree reuse = `prev.clone()`
+  (DEEP clone LayoutBox subtree - 120+ poli vc. `children: Vec<LayoutBox>` rekurzivne
+  + String/Vec poli) + reset_subtree_rect. 667 boxu * ~37us (debug) = 24.9ms.
+- Cache = flat `HashMap<node_ptr, *const LayoutBox>` (BORROWED ptr do prev stromu,
+  drzeny callerem). Fingerprint propaguje child fps -> parent -> ROOT vzdy "miss"
+  pri jakekoli zmene -> cely strom se znovu clone-uje.
+- `extract_layer_tree` (lay v hoveru): walk celeho layout stromu + compute_fingerprints
+  + compute_layer_tiles KAZDY frame. NEcachovane.
+
+#### PLAN A (mensi, BEZPECNE, HOVER->240) - doporuceny warm-up
+Cachovat layer tree STRUKTURU (LayerNode skeleton: id/reason/content_box_ids/tiles
+geometry) kdyz se layout NEzmenil (dom_layout_version + scroll stejne). Damage
+fingerprinty (compute_fingerprints/tiles) prepocitat vzdy fresh na cached strukture
+(meni se hover/anim). walk_box strukturu skip -> lay hover 2ms -> ~0.3ms -> ~220-240.
+Nizsi riziko (struktura deterministicka z layout_root; invaliduj na layout_version).
+
+#### PLAN B (VELKY, RISKANTNI, RESIZE smooth) - in-place layout (move misto clone)
+Cil: misto rebuild+clone celeho stromu kazdy frame MUTOVAT persistentni strom.
+- Webview drzi `prev_layout_root: LayoutBox` OWNED (ne jen flat ptr cache).
+- Layout entry: PARALLEL walk DOM + prev_root. Per DOM node najdi matching prev box
+  (node_ptr); fingerprint match -> MOVE prev subtree (ownership transfer) misto clone;
+  jinak rebuild. Cache HIT = 0 alloc. resize lay 24.9 -> few ms.
+RIZIKA (proc fresh session + verifikace po krocich):
+- Move semantika: prev_root se konzumuje; diry po move (Option sloty / take). Guard
+  use-after-move (node v DOM 2x by nemel byt).
+- Flat ptr cache NEJDE s move (dangling) -> nutno PARALLEL walk (DOM + prev strom
+  soubezne) misto flat lookup. Reorder deti: matchuj per node_ptr, NE per index.
+- compute_subtree_hash MUSI byt presny (uz existuje jako fingerprint) - false-positive
+  match = reuse stale subtree = spatne styly/velikosti.
+- VERIFIKACE: layout = jadro. Po KAZDEM kroku screenshot VSECH sekci (box/flex/grid/
+  position/forms/table/svg) + 4204 testu. RWE_LAYOUT_DUMP=force.
+- POSTUP: (1) prevest cache na OWNED prev_root + stale clone (z owned) = no-op perf,
+  overit korektni. (2) zamenit clone->move per-subtree, mereni. (3) Plan A nahore.
+- Tooling: title bar phase times, RWE_PROF [PAINT-SUB], RWE_CULL_DBG, RWE_TILE_DBG,
+  [CASCADE PROF] (>10ms). Title sampling NEKAPTUJE resize rendery spolehlive (timing)
+  - radsi [CASCADE PROF] count / per-frame stderr.
+
+### TL;DR (SHIPPED FIX #1 + 2 slepe ulicky pred nim)
 SHIPPED: **per-tile cmd filtering** v render_into_tile (segments.rs
 `filter_cmds_to_tile` + `cmd_bbox`). render_into_tile drive build_vertices z CELE
 vrstvy per tile (N dirty tiles = N x full-page vertex build = release spiky
