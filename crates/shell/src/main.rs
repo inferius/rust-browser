@@ -39,7 +39,13 @@ fn main() {
         .stack_size(256 * 1024 * 1024)
         .spawn(real_main)
         .expect("nelze spawnout main worker thread");
-    let _ = handle.join();
+    // Panic v rwe-main threadu PROPAGOVAT jako nenulovy exit code. Drive
+    // `let _ = join()` panic spolknul -> proces skoncil 0 = "tiche umreni"
+    // nerozlisitelne od normalniho zavreni (spatne diagnostikovatelne).
+    // Default panic hook uz hlasku vypsal na stderr pri unwindu.
+    if handle.join().is_err() {
+        std::process::exit(101);
+    }
 }
 
 fn real_main() {
