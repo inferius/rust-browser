@@ -2152,6 +2152,9 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         let value = bx.node.as_ref().and_then(|n| n.attr("value")).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
         let max = bx.node.as_ref().and_then(|n| n.attr("max")).and_then(|v| v.parse::<f32>().ok()).unwrap_or(1.0).max(0.0001);
         let frac = (value / max).clamp(0.0, 1.0);
+        // Fill respektuje accent-color (dedi se, jako checkbox/radio/range) -
+        // drive hardcoded Chrome-blue = accent-color na progress nefungoval.
+        let accent = bx.accent_color.unwrap_or([80, 130, 240, 255]);
         cmds.push(DisplayCommand::Rect {
             x: bx.rect.x, y: bx.rect.y, w: bx.rect.width, h: bx.rect.height,
             color: [220, 220, 225, 255], radius: bx.rect.height * 0.3,
@@ -2159,7 +2162,7 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         if frac > 0.0 {
             cmds.push(DisplayCommand::Rect {
                 x: bx.rect.x, y: bx.rect.y, w: bx.rect.width * frac, h: bx.rect.height,
-                color: [80, 130, 240, 255], radius: bx.rect.height * 0.3,
+                color: accent, radius: bx.rect.height * 0.3,
             });
         }
     }
@@ -2624,6 +2627,19 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
                 let cy = bx.rect.y + bx.rect.height * 0.5;
                 let r = bx.rect.width.min(bx.rect.height) * 0.28;
                 let dot = if app_none { bx.text_color.unwrap_or(accent) } else { accent };
+                if !app_none {
+                    // Chrome parity: checked radio ma ACCENT ring (cely obvod), svetlou
+                    // mezeru a accent tecku - drive jen tecka na bilem UA kruhu, takze
+                    // accent-color na radiu skoro nebyl videt (docx r.47).
+                    let rr = bx.rect.width.min(bx.rect.height) * 0.5;
+                    cmds.push(DisplayCommand::Rect {
+                        x: cx - rr, y: cy - rr, w: rr * 2.0, h: rr * 2.0, color: accent, radius: rr,
+                    });
+                    let ri = (rr - 2.0).max(r);
+                    cmds.push(DisplayCommand::Rect {
+                        x: cx - ri, y: cy - ri, w: ri * 2.0, h: ri * 2.0, color: [250, 250, 252, 255], radius: ri,
+                    });
+                }
                 cmds.push(DisplayCommand::Rect {
                     x: cx - r, y: cy - r, w: r * 2.0, h: r * 2.0, color: dot, radius: r,
                 });
