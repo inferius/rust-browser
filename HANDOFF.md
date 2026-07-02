@@ -2,6 +2,51 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`, `debug_utils.md`.
 
+## Session N+49: vizualni audit 22 sekci + accent-color fix + panic-propagace
+
+### SHIPPED
+- `9bb5e48` PAINT: progress fill respektuje accent-color (byl hardcoded Chrome-blue)
+  + radio checked = Chrome-style accent RING + svetla mezera + accent tecka
+  (drive jen mala tecka na bilem UA kruhu). appearance:none cesty nezasazeny.
+- `0d12b53` SHELL: panic v rwe-main threadu -> exit 101 misto ticheho 0.
+  `let _ = handle.join()` panic SPOLKNUL = jakykoliv engine panic vypadal jako
+  cilene zavreni okna. Ted propagovan; default hook pise na stderr.
+
+### AUDIT VYSLEDEK (22 sekci pres sidebar nav + screenshoty)
+Vetsina sekci renderuje SPRAVNE: box model, flex, grid, position/z-index,
+transforms, keyframes, pseudo-el, calc/clamp, scroll-snap, tabulka, counter,
+aspect-ratio, cq-container, canvas, events, observers, DnD, clip-path tvary,
+repeating gradienty, conic (vc. QUADRANT hard-stops), column-count 3.
+
+### FALSE POSITIVES auditu (NEZKOUMAT znovu - overeno native-res/izolaci)
+- **select sipka**: fd-select ma `appearance:none` -> Chrome taky NEkresli sipku.
+  Plain select sipku MA (overeno izolovanym testem). Parity OK.
+- **conic quadrant**: v izolaci (lit/vars/pct/wheel) i na strance SPRAVNE
+  (TR zluta / BR tmava / BL teal / TL tmava). Zdanliva chyba = downscale artefakt.
+- **fade to bg**: linear-gradient(transparent, #0a0a0c) na tmavem = zamerne
+  subtilni demo. multi-layer: obe vrstvy se skladaji (zluty linear + teal glow).
+- **SVG mask**: maska = bily rect + CERNY text -> text se VYRAZI (tmavy text na
+  gradientu) - presne nas render. resvg mask funguje; Seg::Mask stub se tyka
+  CSS mask-image (jina feature).
+- **typewriter**: anim width 0->100% steps + forwards FUNGUJE (drzi text); caret
+  konci na pravem okraji = spravne (CSS jde na 100%, ne Nch). Prazdne boxy na
+  screenshotech = debug startup latence (~4.5s do 1. framu) + capture timing.
+**LEKCE: bugy zakladat az po NATIVE-RES cropu / izolovanem repro testu -
+downscale plneho screenshotu generuje falesne zavery o barvach/prazdnych boxech.**
+
+### Silent-exit investigace (nedotazeno, zdokumentovano)
+Behem session shell nekolikrat tise skoncil (exit 0, ~9s uptime, jen v bezich
+BEZ stderr redirectu). Overeno co to NENI: autotest env (diag ukazal NotPresent),
+CloseRequested (instrumentace nefirela), WER crash (zadny zaznam), load_html
+reload za klidu (0 za 14s x N). Pod instrumentaci nereprodukovatelne (0/30+).
+Pravdepodobne sum test harness (SetForegroundWindow valka pmclick/cap3 s dev
+prostredim). Fix 0d12b53 zaruci, ze REALNY panic uz nebude vypadat stejne.
+
+### ZBYVA - zname deep items (nemenilo se)
+mix-blend pruh dole (GPU compose backdrop region), writing-mode glyf rotace,
+marquee overflow leak (GPU transform obsah vs CPU clip - text viditelne
+pretejka vlevo od marquee boxu), select option popup styling, scrollbar sipky.
+
 ## Session N+48: IN-PLACE LAYOUT (PLAN B) - 2 SHIPPED commity (move misto clone)
 
 ### TL;DR - PLAN B z N+47 DOKONCEN (resize layout clone -> move)
