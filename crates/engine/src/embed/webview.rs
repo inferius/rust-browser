@@ -2532,6 +2532,24 @@ impl WebView {
                             response.dirty = true;
                         }
                     }
+                    // Resize grip zona (pravy dolni roh resizable elementu) nebo
+                    // aktivni resize drag -> resize kurzor dle osy (Chrome parity).
+                    // Prebiji CSS cursor i tag fallback (textarea grip != I-beam).
+                    let grip_cursor: Option<crate::embed::CursorIcon> = {
+                        let axis = if let Some((_, _, _, _, _, a)) = &self.resize_drag {
+                            Some(a.clone())
+                        } else {
+                            self.last_layout_root.as_ref()
+                                .and_then(|root| find_resize_grip(
+                                    root, x + self.scroll_x, y + self.scroll_y))
+                                .map(|(_, _, _, a)| a)
+                        };
+                        axis.map(|a| match a.as_str() {
+                            "horizontal" => crate::embed::CursorIcon::ResizeEw,
+                            "vertical" => crate::embed::CursorIcon::ResizeNs,
+                            _ => crate::embed::CursorIcon::ResizeNwse,
+                        })
+                    };
                     // Cursor icon: nejdriv CSS `cursor` property (LayoutBox.cursor,
                     // inherited - span pod divem dedi). Az fallback na tag/text.
                     // Drive se CSS cursor ignoroval -> `cursor:text` na divu se
@@ -2578,7 +2596,7 @@ impl WebView {
                                  else { crate::embed::CursorIcon::Default },
                         }
                     };
-                    response.cursor = Some(match css_cursor.as_deref() {
+                    response.cursor = Some(if let Some(g) = grip_cursor { g } else { match css_cursor.as_deref() {
                         Some("pointer") => crate::embed::CursorIcon::Pointer,
                         Some("text") | Some("vertical-text") => crate::embed::CursorIcon::Text,
                         Some("wait") | Some("progress") => crate::embed::CursorIcon::Wait,
@@ -2598,7 +2616,7 @@ impl WebView {
                             => crate::embed::CursorIcon::ResizeNwse,
                         Some("default") | Some("auto") | None => fallback(&hit_tag, hit_over_text),
                         _ => fallback(&hit_tag, hit_over_text),
-                    });
+                    }});
                 }
             }
             InputEvent::MouseDown { x, y, button, .. } => {
