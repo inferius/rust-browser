@@ -1175,6 +1175,11 @@ html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #
                 return self.webview.as_mut()
                     .map(|wv| wv.handle_input(event)).unwrap_or_default();
             }
+            // Fallback: klavesnice bez fokusu jde do PAGE webview - drive
+            // spadla do position-based routingu (mouse na chrome baru =>
+            // Tab traversal fokusoval chrome tlacitka misto stranky).
+            return self.webview.as_mut()
+                .map(|wv| wv.handle_input(event)).unwrap_or_default();
         }
         let in_chrome = self.point_in_chrome(self.mouse_y);
         let in_dev = !in_chrome && self.point_in_devtools(self.mouse_y);

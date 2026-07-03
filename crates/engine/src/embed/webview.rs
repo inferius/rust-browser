@@ -3225,6 +3225,94 @@ impl WebView {
                 }
             }
             InputEvent::KeyDown { ref key, ref modifiers, .. } => {
+                // Tab / Shift+Tab: focus traversal pres focusable elementy v DOM
+                // poradi (Chrome parity). Drive Tab nedelal NIC (docx r.40 forms +
+                // :focus-visible demo "Tab pro navigaci"). set_focus_from_keyboard
+                // (true) -> :focus-visible ring matchne (mouse focus ho nema).
+                if key == "Tab" {
+                    let doc_root = self.interpreter.as_ref()
+                        .map(|i| std::rc::Rc::clone(&i.document.borrow().root));
+                    if let Some(doc_root) = doc_root {
+                        fn walk_focusables(
+                            n: &std::rc::Rc<crate::browser::dom::Node>,
+                            out: &mut Vec<std::rc::Rc<crate::browser::dom::Node>>,
+                        ) {
+                            if is_focusable_element(n)
+                                && n.attr("disabled").is_none()
+                                && n.attr("tabindex").as_deref() != Some("-1")
+                            {
+                                out.push(std::rc::Rc::clone(n));
+                            }
+                            for ch in n.children.borrow().iter() {
+                                walk_focusables(ch, out);
+                            }
+                        }
+                        let mut focusables: Vec<std::rc::Rc<crate::browser::dom::Node>> = Vec::new();
+                        walk_focusables(&doc_root, &mut focusables);
+                        if std::env::var("RWE_INPUT_DBG").is_ok() {
+                            eprintln!("[TAB] focusables={} cur={:?} shift={}",
+                                focusables.len(), self.focused_node_local, modifiers.shift);
+                        }
+                        if !focusables.is_empty() {
+                            let cur_idx = self.focused_node_local.and_then(|id|
+                                focusables.iter().position(|n|
+                                    std::rc::Rc::as_ptr(n) as usize == id));
+                            let next_idx = match (cur_idx, modifiers.shift) {
+                                (Some(i), false) => (i + 1) % focusables.len(),
+                                (Some(i), true) => (i + focusables.len() - 1) % focusables.len(),
+                                (None, false) => 0,
+                                (None, true) => focusables.len() - 1,
+                            };
+                            let new_node = std::rc::Rc::clone(&focusables[next_idx]);
+                            let new_id = Some(std::rc::Rc::as_ptr(&new_node) as usize);
+                            let old_focus_id = self.focused_node_local;
+                            self.focused_node_local = new_id;
+                            crate::browser::cascade::set_focused_node(new_id);
+                            crate::browser::cascade::set_focus_from_keyboard(true);
+                            if old_focus_id != new_id {
+                                if let Some(interp) = self.interpreter.as_mut() {
+                                    if let Some(oid) = old_focus_id {
+                                        if let Some(old_node) = crate::browser::render::find_node_by_ptr(&doc_root, oid) {
+                                            let ev = make_focus_event("blur", &old_node);
+                                            let _ = interp.dispatch_event(&old_node, "blur", ev);
+                                        }
+                                    }
+                                    let ev = make_focus_event("focus", &new_node);
+                                    let _ = interp.dispatch_event(&new_node, "focus", ev);
+                                }
+                            }
+                            // Caret na konec value pri fokusu text inputu.
+                            if matches!(new_node.tag_name().as_deref(),
+                                Some("input") | Some("textarea"))
+                            {
+                                let val = new_node.attr("value").unwrap_or_default();
+                                let nid2 = std::rc::Rc::as_ptr(&new_node) as usize;
+                                let entry = self.editors.entry(nid2).or_insert_with(||
+                                    crate::browser::editor::EditorState::new(&val));
+                                if entry.text != val { entry.set_text(&val); }
+                                entry.move_end(false);
+                                self.input_caret.insert(nid2, val.chars().count());
+                            }
+                            // Scroll-into-view: fokusovany element mimo viewport
+                            // scrollni do vidma (Chrome parity pri Tab).
+                            if let (Some(nid2), Some(root)) = (new_id, self.last_layout_root.as_ref()) {
+                                if let Some(bx) = crate::browser::paint::find_box_by_node_id(root, nid2) {
+                                    let vh = self.viewport_h / self.zoom.max(0.01);
+                                    let top = bx.rect.y;
+                                    let bot = bx.rect.y + bx.rect.height;
+                                    if top < self.scroll_y || bot > self.scroll_y + vh {
+                                        let target_y = (top - vh * 0.35).max(0.0);
+                                        self.scroll_y = target_y;
+                                        self.scroll_target_y = target_y;
+                                    }
+                                }
+                            }
+                            response.dirty = true;
+                            self.dirty = true;
+                        }
+                    }
+                    return response;
+                }
                 if let Some(target) = self.focused_dom_node() {
                     let is_input = matches!(target.tag_name().as_deref(),
                         Some("input") | Some("textarea"));
@@ -4129,12 +4217,12 @@ impl WebView {
                     if let Some(tag) = n.tag_name() {
                         if matches!(tag.as_str(), "input" | "textarea" | "select") {
                             let val = n.attr("value").unwrap_or_default();
-                            let required = n.attr("required").is_some();
-                            let typ = n.attr("type").map(|t| t.to_lowercase()).unwrap_or_default();
                             let empty = val.is_empty();
-                            // Zrcadli matches_simple :valid/:invalid logiku.
-                            let invalid = (required && empty)
-                                || (typ == "email" && !empty && !val.contains('@'));
+                            // JEDEN zdroj pravdy s cascade :invalid matchem
+                            // (required/email/number min-max). Drive lokalni
+                            // kopie bez number range -> prepnuti number
+                            // valid<->invalid neinvalidovalo cascade cache.
+                            let invalid = crate::browser::cascade::form_control_invalid(n);
                             (std::rc::Rc::as_ptr(n) as usize).hash(h);
                             empty.hash(h);
                             invalid.hash(h);
@@ -5127,26 +5215,41 @@ impl WebView {
                 }
                 if let Some(input_box) = find_box(&layout_root, nid) {
                     let weight = input_box.effective_weight();
+                    // MULTILINE (textarea s \n): caret = radek + sloupec. Drive
+                    // se x pocital pres CELOU hodnotu (vc. \n) a y byl fixne na
+                    // 1. radku s v-center offsetem -> Enter caret nepohnul a po
+                    // resize textarea se caret posunul (docx r.41).
+                    let chars_before = &chars[..caret];
+                    let line_idx = chars_before.iter().filter(|c| **c == '\n').count();
+                    let col_start = chars_before.iter().rposition(|c| *c == '\n')
+                        .map(|p| p + 1).unwrap_or(0);
+                    let line_text: String = chars[col_start..caret].iter().collect();
                     // Single source of truth: shape_text vraci stejne advance
                     // jako measure_text_width_full (= layout canonical).
-                    // x_at_char pres ShapedText cumulative pole - bez separateho
-                    // prefix sum (drive prefix_w mereny zvlast, mohl rounding-differ).
                     let (_runs, shaped) = crate::browser::editor::shape_text(
-                        &value, input_box.font_size, weight, input_box.italic,
+                        &line_text, input_box.font_size, weight, input_box.italic,
                         &input_box.font_family, input_box.letter_spacing);
-                    let prefix_w = shaped.x_at_char(caret);
+                    let prefix_w = shaped.x_at_char(line_text.chars().count());
                     // Pad z node-specific - musi shodovat s paint.rs text_x.
                     // Pad_l asymmetric pripady (padding_left wins).
                     let pad_l = input_box.padding_left.unwrap_or(input_box.padding);
                     let pad_t = input_box.padding_top.unwrap_or(input_box.padding);
                     let pad_b = input_box.padding_bottom.unwrap_or(input_box.padding);
                     let border = input_box.border_width.max(0.0);
-                    // Inner h pro vertical centering (CSS technique stejna jako
-                    // paint.rs vertical center pres v_offset = (inner_h - 1.5*fs)/2).
                     let inner_h = input_box.rect.height - pad_t - pad_b - 2.0 * border;
-                    let v_offset = ((inner_h - 1.5 * input_box.font_size) * 0.5).max(0.0);
+                    // Mirror paint.rs is_multiline/needs_center: textarea (vysoky
+                    // box / \n v textu) = TOP align bez v-centeringu -> caret se
+                    // po resize nehybe; single-line input = v-center jako drive.
+                    let advance_h = input_box.font_size * 1.2;
+                    let is_multiline = value.contains('\n') || inner_h > advance_h * 1.5;
+                    let v_offset = if !is_multiline && inner_h > advance_h + 4.0 {
+                        ((inner_h - 1.5 * input_box.font_size) * 0.5).max(0.0)
+                    } else {
+                        0.0
+                    };
                     let caret_x = input_box.rect.x + border + pad_l + prefix_w;
-                    let caret_y = input_box.rect.y + border + pad_t + v_offset;
+                    let caret_y = input_box.rect.y + border + pad_t + v_offset
+                        + line_idx as f32 * advance_h;
                     let caret_h = input_box.font_size * 1.2;
                     // Selection highlight v inputu (anchor != cursor) - docx2 r.44
                     // "nefunguje viditelne oznaceni textu". Polopruhledny modry rect
@@ -5159,11 +5262,17 @@ impl WebView {
                         let a_byte = a_byte.min(value.len());
                         let c_byte = c_byte.min(value.len());
                         if a_byte != c_byte {
+                            // Highlight je single-line aproximace - shape pres
+                            // CELOU value (caret shaped je per-LINE, indexy by
+                            // nesedely).
+                            let (_rf, shaped_full) = crate::browser::editor::shape_text(
+                                &value, input_box.font_size, weight, input_box.italic,
+                                &input_box.font_family, input_box.letter_spacing);
                             let a_char = value[..a_byte].chars().count();
                             let c_char = value[..c_byte].chars().count();
                             let (s_char, e_char) = (a_char.min(c_char), a_char.max(c_char));
-                            let x_s = shaped.x_at_char(s_char);
-                            let x_e = shaped.x_at_char(e_char);
+                            let x_s = shaped_full.x_at_char(s_char);
+                            let x_e = shaped_full.x_at_char(e_char);
                             display_list.push(crate::browser::paint::DisplayCommand::Rect {
                                 x: input_box.rect.x + border + pad_l + x_s,
                                 y: caret_y, w: (x_e - x_s).max(1.0), h: caret_h,
