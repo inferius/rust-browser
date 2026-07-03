@@ -630,10 +630,22 @@ pub fn viewport_cull_bounds() -> Option<(f32, f32)> {
     VIEWPORT_CULL.with(|c| c.get())
 }
 
+/// Layer id boxu: DOM node ptr, jinak synteticke pseudo_id (::before/::after
+/// s transform/opacity = layer bez DOM nodu), jinak 0. Jednotne pro compositor
+/// build + paint scope check + find_box_by_node_id - JEDEN zdroj pravdy.
+pub fn layer_box_id(bx: &LayoutBox) -> usize {
+    bx.node.as_ref()
+        .map(|n| std::rc::Rc::as_ptr(n) as usize)
+        .or(bx.pseudo_id)
+        .unwrap_or(0)
+}
+
 /// Vraci LayoutBox ktery vlastni layer s `layer_id`.
 pub fn find_box_by_node_id(root: &LayoutBox, target_id: usize) -> Option<&LayoutBox> {
     if let Some(n) = &root.node {
         if std::rc::Rc::as_ptr(n) as usize == target_id { return Some(root); }
+    } else if root.pseudo_id == Some(target_id) {
+        return Some(root);
     }
     for ch in &root.children {
         if let Some(f) = find_box_by_node_id(ch, target_id) { return Some(f); }
@@ -675,8 +687,7 @@ pub fn paint_layer_into(
     layer_root_box: &LayoutBox,
     cmds: &mut Vec<DisplayCommand>,
 ) {
-    let layer_id = layer_root_box.node.as_ref()
-        .map(|n| std::rc::Rc::as_ptr(n) as usize).unwrap_or(0);
+    let layer_id = layer_box_id(layer_root_box);
     LAYER_SCOPE.with(|c| c.set(Some(layer_id)));
     paint_box(layer_root_box, cmds, None);
     LAYER_SCOPE.with(|c| c.set(None));
@@ -1876,8 +1887,7 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
     let cur_scope = LAYER_SCOPE.with(|c| c.get());
     if let Some(scope_id) = cur_scope {
         if super::compositor::is_layer_boundary(bx) {
-            let bx_id = bx.node.as_ref()
-                .map(|n| std::rc::Rc::as_ptr(n) as usize).unwrap_or(0);
+            let bx_id = layer_box_id(bx);
             if bx_id != scope_id {
                 return; // skip nested layer - own pass
             }

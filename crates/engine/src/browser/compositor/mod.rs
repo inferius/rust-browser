@@ -574,6 +574,10 @@ fn walk_box(b: &LayoutBox, current: &mut LayerNode, clip: Option<Rect>) {
     if let Some(node) = b.node.as_ref() {
         let id = std::rc::Rc::as_ptr(node) as usize;
         current.content_box_ids.push(id);
+    } else if let Some(pid) = b.pseudo_id {
+        // Pseudo-element box (::before/::after) - synteticke id, aby layer
+        // fingerprint/damage pokryl i pseudo content.
+        current.content_box_ids.push(pid);
     }
     // Overflow clip TOHOTO boxu se aplikuje na deti (vc. sub-layeru v nich).
     // CSS: overflow != visible na jedne ose computuje druhou na auto -> clip
@@ -591,8 +595,10 @@ fn walk_box(b: &LayoutBox, current: &mut LayerNode, clip: Option<Rect>) {
     // Jinak pokracuje v current layer.
     for child in &b.children {
         if is_layer_boundary(child) {
-            let layer_id = child.node.as_ref()
-                .map(|n| std::rc::Rc::as_ptr(n) as usize).unwrap_or(0);
+            // layer_box_id: node ptr / synteticke pseudo_id (::before s
+            // transform) / 0. Drive pseudo layer dostal id 0 -> paint pass ho
+            // pres find_box_by_node_id nenasel -> nikdy se nevykreslil.
+            let layer_id = crate::browser::paint::layer_box_id(child);
             // Layer.root_rect = orig rect (NE AABB-expanded). Compose pres
             // transform pipeline rotuje quad sized orig rect (80x60) pres orig
             // center pivot -> rotated quad shape v page = TIGHT rotated rect's

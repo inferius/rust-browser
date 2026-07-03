@@ -2902,9 +2902,19 @@ impl WebView {
                     }
                     // :active pseudo-class - target stisknute mysi (cleared v MouseUp).
                     // Bez toho :active styly (button click efekt, cursor:grabbing)
-                    // nikdy nematchnou.
-                    crate::browser::cascade::set_active_node(
-                        target_node.as_ref().map(|t| std::rc::Rc::as_ptr(t) as usize));
+                    // nikdy nematchnou. DIRTY hned pri zmene: jinak se pressed stav
+                    // (:active scale) vykreslil az pri dalsim framu z jineho duvodu
+                    // (docx S6 "mouse down/up vizual az pri mouse over").
+                    {
+                        let prev_active = crate::browser::cascade::get_active_node();
+                        let new_active = target_node.as_ref()
+                            .map(|t| std::rc::Rc::as_ptr(t) as usize);
+                        if prev_active != new_active {
+                            response.dirty = true;
+                            self.dirty = true;
+                        }
+                        crate::browser::cascade::set_active_node(new_active);
+                    }
                     // Klik na zavreny <select> -> otevri popup (anchor x=screen,
                     // y=content; sedi s render branch webview.rs find_node_by_ptr).
                     if let Some(target) = target_node.as_ref() {

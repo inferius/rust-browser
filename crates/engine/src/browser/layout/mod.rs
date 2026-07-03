@@ -269,7 +269,7 @@ fn apply_post_children_pseudos(
 
     // Pseudo-element ::after - posledni virtualni child
     if let Some(pseudo_styles) = super::cascade::get_pseudo_styles(pseudo_map, node, "after") {
-        if let Some(pa) = build_pseudo_box(node, pseudo_styles, counters) {
+        if let Some(pa) = build_pseudo_box(node, pseudo_styles, counters, "after") {
             bx.children.push(pa);
         }
     }
@@ -682,6 +682,12 @@ fn apply_default_tag_styles(bx: &mut LayoutBox, tag: &str) {
                     if bx.border_color.is_none() { bx.border_color = Some([118, 118, 118, 255]); }
                     if bx.bg_color.is_none() { bx.bg_color = Some([255, 255, 255, 255]); }
                     if typ == "radio" && bx.border_radius == 0.0 { bx.border_radius = 6.5; }
+                    // Chrome UA: margin 3px 3px 3px 4px - odsazeni textu od
+                    // checkboxu v labelu (docx r.53 "spatne odsazeni").
+                    if bx.margin_top.is_none() { bx.margin_top = Some(3.0); }
+                    if bx.margin_right.is_none() { bx.margin_right = Some(3.0); }
+                    if bx.margin_bottom.is_none() { bx.margin_bottom = Some(3.0); }
+                    if bx.margin_left.is_none() { bx.margin_left = Some(4.0); }
                 }
                 "range" => {
                     // Slider: track + thumb kresli paint. Default 129x15.
@@ -1215,6 +1221,11 @@ pub struct LayoutBox {
     pub loading_lazy: bool,
     /// Reference na puvodni DOM node (pro hit test -> events).
     pub node: Option<Rc<Node>>,
+    /// Synteticke stabilni ID pro pseudo-elementy (::before/::after) - nemaji
+    /// DOM node, ale layer pipeline (transform/opacity na pseudo) potrebuje
+    /// unikatni id pro find_box_by_node_id + layer cache. Derivovano z parent
+    /// node ptr XOR konstanta per pseudo-kind (stabilni pres rebuildy).
+    pub pseudo_id: Option<usize>,
     /// ::placeholder - barva textu pro placeholder (input/textarea).
     pub placeholder_color: Option<[u8; 4]>,
     /// ::selection - barva pozadi vybrane oblasti textu.
@@ -1442,6 +1453,7 @@ impl LayoutBox {
             image_src: None,
             loading_lazy: false,
             node: None,
+            pseudo_id: None,
             placeholder_color: None,
             selection_bg: None,
             selection_color: None,
@@ -4119,7 +4131,7 @@ fn build_box_inner_impl(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &supe
 
     // Pseudo-element ::before - vlozit jako prvni virtualni child
     if let Some(pseudo_styles) = super::cascade::get_pseudo_styles(pseudo_map, node, "before") {
-        if let Some(pb) = build_pseudo_box(node, pseudo_styles, counters) {
+        if let Some(pb) = build_pseudo_box(node, pseudo_styles, counters, "before") {
             bx.children.push(pb);
         }
     }
@@ -4314,7 +4326,7 @@ fn build_box_inner_impl(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &supe
 
 /// Vyrobi LayoutBox pro pseudo-element (::before / ::after) z computed styles.
 /// Content property: "string", attr(name), counter(...) - implementovano: string a attr.
-fn build_pseudo_box(parent_node: &Rc<Node>, styles: &HashMap<String, String>, counters: &HashMap<String, i32>) -> Option<LayoutBox> {
+fn build_pseudo_box(parent_node: &Rc<Node>, styles: &HashMap<String, String>, counters: &HashMap<String, i32>, kind: &str) -> Option<LayoutBox> {
     let content_raw = styles.get("content")?;
     let text = parse_content_value(content_raw, parent_node, counters)?;
     // POZN: prazdny content ("") je VALIDNI generated content - dekorativni
@@ -4324,6 +4336,11 @@ fn build_pseudo_box(parent_node: &Rc<Node>, styles: &HashMap<String, String>, co
 
     let mut bx = LayoutBox::new();
     bx.tag = Some("::pseudo".to_string());
+    // Synteticke layer id: parent ptr XOR kind konstanta. Bez nej pseudo s
+    // transform/opacity dostal layer id 0 -> find_box_by_node_id ho nenasel ->
+    // layer se NIKDY nevykreslil (::before s translateY zmizel; docx S6).
+    let kind_salt: usize = if kind == "after" { 0x5AF7E12B } else { 0xBEF04E77 };
+    bx.pseudo_id = Some((Rc::as_ptr(parent_node) as usize) ^ kind_salt);
     if !text.is_empty() { bx.text = Some(text); }
     // display - bez nej byl pseudo VZDY inline -> width/height/block ignorovane.
     bx.display = match styles.get("display") {
@@ -5014,125 +5031,21 @@ pub fn layout_block(bx: &mut LayoutBox) {
         (left_off, avail)
     };
 
+    // Abs/fixed deti - indexy pro odlozene umisteni (po vypoctu final height).
+    let mut abs_children: Vec<usize> = Vec::new();
     let mut i = 0;
     while i < bx.children.len() {
         let display = bx.children[i].display;
         let float_v = bx.children[i].float_value.clone();
         let clear_v = bx.children[i].clear_value.clone();
 
-        // CSS Position: absolute / fixed - out-of-flow. Treat as block, skip flow
-        // advance. Bez tohoto byl display:inline + position:absolute prvek
-        // (napr. .login-section #lost_pwd_button) zacleneny do inline flow a
-        // jeho intrinsic h=100 nafouklo parent content height.
+        // CSS Position: absolute / fixed - out-of-flow. ODLOZENE umisteni:
+        // containing block height (auto-height parent) je znama az po content
+        // flow -> place_abs_pos_child se vola na konci layout_block. Drive se
+        // umistoval hned = top: 50% resolvoval proti height 0 (pseudo ::before
+        // centrovani; docx S6). Skip flow advance (nenafukuje parent height).
         if matches!(bx.children[i].position, Position::Absolute | Position::Fixed) {
-            if !inline_buffer.is_empty() {
-                cursor_y = flush_inline(bx, &inline_buffer, inner_x, cursor_y, inner_w, &floats);
-                inline_buffer.clear();
-            }
-            // Fixed: CB = viewport, ne parent.
-            let is_fixed = matches!(bx.children[i].position, Position::Fixed);
-            let (vw, vh) = super::cascade::MATH_VIEWPORT.with(|c| *c.borrow());
-            let (cb_x, cb_y, cb_w, cb_h) = if is_fixed && vw > 0.0 && vh > 0.0 {
-                (0.0, 0.0, vw, vh)
-            } else {
-                (inner_x, inner_y, inner_w, bx.rect.height
-                    - bx.padding_top.unwrap_or(bx.padding)
-                    - bx.padding_bottom.unwrap_or(bx.padding)
-                    - 2.0 * bx.border_width)
-            };
-            let child = &mut bx.children[i];
-            // Width: explicit / %; jinak SHRINK-TO-FIT (CSS abs spec): width =
-            // intrinsic max-content clamped na cb_w. cb_w fallback (full) byl
-            // bug -> abs element bez width se roztahl na celou sirku containeru
-            // misto obtaknuti obsahu (pos-tl/tr/bl/br "top:left" se prekryvaly).
-            // Vyjimka: L+R oba inset -> resi inset blok nize (cb_w - l - r).
-            let has_lr = child.offset_left.is_some() && child.offset_right.is_some();
-            let mut shrink_to_fit_w: Option<f32> = None;
-            child.rect.width = if let Some(w) = child.explicit_width {
-                w
-            } else if let Some(p) = child.width_pct {
-                cb_w * p
-            } else if has_lr {
-                cb_w // inset blok prepise na cb_w - l - r
-            } else {
-                let iw = abs_intrinsic_max_content(child).min(cb_w);
-                shrink_to_fit_w = Some(iw);
-                iw
-            };
-            // Drz shrink-to-fit width pres layout_dispatch (jinak block layout
-            // prepise rect.width na full cb_w). Restore po dispatch.
-            if let Some(w) = shrink_to_fit_w {
-                child.explicit_width = Some(w);
-            }
-            if let Some(eh) = child.explicit_height {
-                child.rect.height = eh;
-            } else if let Some(p) = child.height_pct {
-                // height: N% na abs/fixed -> resolvuj proti CB height. Bez toho
-                // photo-box (position:absolute; height:100%) zustal h=0, img
-                // uvnitr cetl parent_h=0 a spadl na advance_h=24.
-                child.rect.height = cb_h * p;
-            }
-            // Resolve % offsets proti CB pred applikaci (CSS spec).
-            if let Some(p) = child.offset_top_pct { child.offset_top = Some(p * cb_h); }
-            if let Some(p) = child.offset_bottom_pct { child.offset_bottom = Some(p * cb_h); }
-            if let Some(p) = child.offset_left_pct { child.offset_left = Some(p * cb_w); }
-            if let Some(p) = child.offset_right_pct { child.offset_right = Some(p * cb_w); }
-            // Inset-based sizing: pri obou L+R / T+B + bez explicit dim, width
-            // resp. height = CB - insets (CSS spec). Bez tohoto cb_w fallback
-            // by daval defaultni sirku a offset_right pak posunul box mimo CB.
-            // Po dispatch by layout_block jinak prepsal rect.height na content
-            // intrinsic - takze ulozime explicit_height aby preserve_grow fired.
-            let inset_w_temp = if child.explicit_width.is_none() {
-                if let (Some(l), Some(r)) = (child.offset_left, child.offset_right) {
-                    let w = (cb_w - l - r).max(0.0);
-                    child.rect.width = w;
-                    child.explicit_width = Some(w);
-                    true
-                } else { false }
-            } else { false };
-            let inset_h_temp = if child.explicit_height.is_none() {
-                if let (Some(t), Some(b)) = (child.offset_top, child.offset_bottom) {
-                    let h = (cb_h - t - b).max(0.0);
-                    child.rect.height = h;
-                    child.explicit_height = Some(h);
-                    true
-                } else { false }
-            } else { false };
-            // Predbezna pozice z left/top - layout_dispatch layoutne obsah
-            // (text/deti) relativne k teto pozici.
-            child.rect.x = cb_x + child.offset_left.unwrap_or(0.0);
-            child.rect.y = cb_y + child.offset_top.unwrap_or(0.0);
-            // Treat display:inline as block for layout (inline OOF rare edge case).
-            let saved_display = child.display;
-            if matches!(child.display, Display::Inline) {
-                child.display = Display::Block;
-            }
-            layout_dispatch(child);
-            child.display = saved_display;
-            // Restore explicit_w/h pokud nastaveny jen pres inset-derived (CSS:
-            // tyto by mely byt computed values bez fallback do user-set rules).
-            if inset_w_temp { child.explicit_width = None; }
-            if inset_h_temp { child.explicit_height = None; }
-            if shrink_to_fit_w.is_some() { child.explicit_width = None; }
-            // Finalni pozice z right/bottom (width/height zname az po dispatch).
-            // SHIFT celeho subtree o delta - jinak by se posunul jen box rect a
-            // text/deti zustaly na predbezne (left/top) pozici (bot:left/right
-            // text byl nahore misto v boxu).
-            let pre_x = bx.children[i].rect.x;
-            let pre_y = bx.children[i].rect.y;
-            let mut fx = pre_x;
-            let mut fy = pre_y;
-            if let Some(r) = bx.children[i].offset_right {
-                fx = cb_x + cb_w - r - bx.children[i].rect.width;
-            }
-            if let Some(b) = bx.children[i].offset_bottom {
-                fy = cb_y + cb_h - b - bx.children[i].rect.height;
-            }
-            let dx = fx - pre_x;
-            let dy = fy - pre_y;
-            if dx.abs() > 0.01 || dy.abs() > 0.01 {
-                shift_subtree(&mut bx.children[i], dx, dy);
-            }
+            abs_children.push(i);
             i += 1;
             continue;
         }
@@ -5392,7 +5305,14 @@ pub fn layout_block(bx: &mut LayoutBox) {
 
     // Auto-vypocet vysky podle children. Asymmetric padding pres _top/_bottom
     // (jinak shorthand `padding`). border_width pridava na obe strany.
-    let content_h = cursor_y - inner_y;
+    let mut content_h = cursor_y - inner_y;
+    // Box s VLASTNIM textem bez children = abs-pos pseudo (::before/::after
+    // nese text primo v bx.text, ne jako text-node dite). Bez fallbacku mel
+    // h=0 -> border zkolaboval na linku a layer texture 1px = pseudo s
+    // transformem neviditelny (docx S6 ">>>" + badge).
+    if content_h <= 0.0 && bx.text.as_deref().map(|t| !t.is_empty()).unwrap_or(false) {
+        content_h = bx.font_size * 1.2;
+    }
     let block_pad_t = bx.padding_top.unwrap_or(bx.padding);
     let block_pad_b = bx.padding_bottom.unwrap_or(bx.padding);
     let bound = content_h + block_pad_t + block_pad_b + 2.0 * bx.border_width;
@@ -5441,6 +5361,135 @@ pub fn layout_block(bx: &mut LayoutBox) {
     // Overflow scroll/clip constraint: drz preset (content pretece, ale box NEROSTE).
     if preset_height_overflow > 0.0 {
         bx.rect.height = preset_height_overflow;
+    }
+
+    // Odlozene umisteni abs/fixed deti - cb_h vyzaduje FINALNI vysku bloku
+    // (auto-height znama az ted). Drive inline behem flow -> top: 50% u
+    // auto-height parenta resolvoval proti 0 (::before centrovani; docx S6).
+    for &ai in &abs_children {
+        place_abs_pos_child(bx, ai, inner_x, inner_y, inner_w);
+    }
+    // Abs deti contribuji do scroll overflow extentu containing blocku
+    // (Chrome: abs child presahujici vpravo = scrollovatelny rozsah).
+    if !abs_children.is_empty() {
+        let mut max_right = bx.inner_content_w;
+        for &ai in &abs_children {
+            let ch = &bx.children[ai];
+            let r = ch.rect.x + ch.rect.width - bx.rect.x;
+            if r > max_right { max_right = r; }
+        }
+        bx.inner_content_w = max_right;
+    }
+}
+
+/// Umisti jedno abs/fixed dite vuci containing blocku (inner_x/y/w rodice +
+/// jeho FINALNI rect.height). Extrahovano z layout_block children loop -
+/// volani odlozeno na konec layout_block aby % offsety (top: 50%) resolvovaly
+/// proti realne vysce auto-height parenta.
+fn place_abs_pos_child(bx: &mut LayoutBox, i: usize, inner_x: f32, inner_y: f32, inner_w: f32) {
+    // Fixed: CB = viewport, ne parent.
+    let is_fixed = matches!(bx.children[i].position, Position::Fixed);
+    let (vw, vh) = super::cascade::MATH_VIEWPORT.with(|c| *c.borrow());
+    let (cb_x, cb_y, cb_w, cb_h) = if is_fixed && vw > 0.0 && vh > 0.0 {
+        (0.0, 0.0, vw, vh)
+    } else {
+        (inner_x, inner_y, inner_w, bx.rect.height
+            - bx.padding_top.unwrap_or(bx.padding)
+            - bx.padding_bottom.unwrap_or(bx.padding)
+            - 2.0 * bx.border_width)
+    };
+    let child = &mut bx.children[i];
+    // Width: explicit / %; jinak SHRINK-TO-FIT (CSS abs spec): width =
+    // intrinsic max-content clamped na cb_w. cb_w fallback (full) byl
+    // bug -> abs element bez width se roztahl na celou sirku containeru
+    // misto obtaknuti obsahu (pos-tl/tr/bl/br "top:left" se prekryvaly).
+    // Vyjimka: L+R oba inset -> resi inset blok nize (cb_w - l - r).
+    let has_lr = child.offset_left.is_some() && child.offset_right.is_some();
+    let mut shrink_to_fit_w: Option<f32> = None;
+    child.rect.width = if let Some(w) = child.explicit_width {
+        w
+    } else if let Some(p) = child.width_pct {
+        cb_w * p
+    } else if has_lr {
+        cb_w // inset blok prepise na cb_w - l - r
+    } else {
+        let iw = abs_intrinsic_max_content(child).min(cb_w);
+        shrink_to_fit_w = Some(iw);
+        iw
+    };
+    // Drz shrink-to-fit width pres layout_dispatch (jinak block layout
+    // prepise rect.width na full cb_w). Restore po dispatch.
+    if let Some(w) = shrink_to_fit_w {
+        child.explicit_width = Some(w);
+    }
+    if let Some(eh) = child.explicit_height {
+        child.rect.height = eh;
+    } else if let Some(p) = child.height_pct {
+        // height: N% na abs/fixed -> resolvuj proti CB height. Bez toho
+        // photo-box (position:absolute; height:100%) zustal h=0, img
+        // uvnitr cetl parent_h=0 a spadl na advance_h=24.
+        child.rect.height = cb_h * p;
+    }
+    // Resolve % offsets proti CB pred applikaci (CSS spec).
+    if let Some(p) = child.offset_top_pct { child.offset_top = Some(p * cb_h); }
+    if let Some(p) = child.offset_bottom_pct { child.offset_bottom = Some(p * cb_h); }
+    if let Some(p) = child.offset_left_pct { child.offset_left = Some(p * cb_w); }
+    if let Some(p) = child.offset_right_pct { child.offset_right = Some(p * cb_w); }
+    // Inset-based sizing: pri obou L+R / T+B + bez explicit dim, width
+    // resp. height = CB - insets (CSS spec). Bez tohoto cb_w fallback
+    // by daval defaultni sirku a offset_right pak posunul box mimo CB.
+    // Po dispatch by layout_block jinak prepsal rect.height na content
+    // intrinsic - takze ulozime explicit_height aby preserve_grow fired.
+    let inset_w_temp = if child.explicit_width.is_none() {
+        if let (Some(l), Some(r)) = (child.offset_left, child.offset_right) {
+            let w = (cb_w - l - r).max(0.0);
+            child.rect.width = w;
+            child.explicit_width = Some(w);
+            true
+        } else { false }
+    } else { false };
+    let inset_h_temp = if child.explicit_height.is_none() {
+        if let (Some(t), Some(b)) = (child.offset_top, child.offset_bottom) {
+            let h = (cb_h - t - b).max(0.0);
+            child.rect.height = h;
+            child.explicit_height = Some(h);
+            true
+        } else { false }
+    } else { false };
+    // Predbezna pozice z left/top - layout_dispatch layoutne obsah
+    // (text/deti) relativne k teto pozici.
+    child.rect.x = cb_x + child.offset_left.unwrap_or(0.0);
+    child.rect.y = cb_y + child.offset_top.unwrap_or(0.0);
+    // Treat display:inline as block for layout (inline OOF rare edge case).
+    let saved_display = child.display;
+    if matches!(child.display, Display::Inline) {
+        child.display = Display::Block;
+    }
+    layout_dispatch(child);
+    child.display = saved_display;
+    // Restore explicit_w/h pokud nastaveny jen pres inset-derived (CSS:
+    // tyto by mely byt computed values bez fallback do user-set rules).
+    if inset_w_temp { child.explicit_width = None; }
+    if inset_h_temp { child.explicit_height = None; }
+    if shrink_to_fit_w.is_some() { child.explicit_width = None; }
+    // Finalni pozice z right/bottom (width/height zname az po dispatch).
+    // SHIFT celeho subtree o delta - jinak by se posunul jen box rect a
+    // text/deti zustaly na predbezne (left/top) pozici (bot:left/right
+    // text byl nahore misto v boxu).
+    let pre_x = bx.children[i].rect.x;
+    let pre_y = bx.children[i].rect.y;
+    let mut fx = pre_x;
+    let mut fy = pre_y;
+    if let Some(r) = bx.children[i].offset_right {
+        fx = cb_x + cb_w - r - bx.children[i].rect.width;
+    }
+    if let Some(b) = bx.children[i].offset_bottom {
+        fy = cb_y + cb_h - b - bx.children[i].rect.height;
+    }
+    let dx = fx - pre_x;
+    let dy = fy - pre_y;
+    if dx.abs() > 0.01 || dy.abs() > 0.01 {
+        shift_subtree(&mut bx.children[i], dx, dy);
     }
 }
 
@@ -5984,17 +6033,20 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
             // +0.5 epsilon: exact-fit nested span (intrinsic width parenta =
             // presny soucet runu) nesmi zalomit kvuli float roundingu.
             let nowrap_el = bx.white_space_nowrap || bx.children[idx].white_space_nowrap;
-            if !nowrap_el && cursor_x + w > line_rx(cursor_y, line_height) + 0.5
+            if !nowrap_el && cursor_x + mar_l_r + w > line_rx(cursor_y, line_height) + 0.5
                 && cursor_x > line_lx(cursor_y, line_height) {
                 cursor_y += line_height;
                 cursor_x = line_lx(cursor_y, line_height);
             }
+            // Inline replaced margin-left/right advance cursor (Chrome UA
+            // checkbox margin 3px 3px 3px 4px = odsazeni textu; docx r.53).
+            cursor_x += mar_l_r;
             bx.children[idx].rect.x = cursor_x;
             bx.children[idx].rect.y = cursor_y;
             bx.children[idx].rect.width = w;
             bx.children[idx].rect.height = h;
             line_height = line_height.max(h);
-            cursor_x += w;
+            cursor_x += w + mar_r_r;
             prev_had_trailing_space = false;
         }
     }
