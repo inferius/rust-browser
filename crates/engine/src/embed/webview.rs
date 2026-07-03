@@ -780,6 +780,24 @@ pub(crate) fn compose_layer_tree_into(
             crate::browser::compositor::LayerReason::PositionFixed);
         let pos_x = layer.root_rect.x - if is_fixed { 0.0 } else { scroll_x };
         let pos_y = layer.root_rect.y - if is_fixed { 0.0 } else { scroll_y };
+        // Ancestor overflow clip -> GPU scissor pro compose teto vrstvy (jinak
+        // transformovany obsah utece z overflow:hidden - marquee translateX).
+        // clip_rect je ve world coords - scroll shift jako pozice vrstvy, pak
+        // physical px + clamp na target dims (wgpu vyzaduje scissor uvnitr
+        // attachmentu). Zero-area => compose fn draw preskoci.
+        let sf_clip = zoom * scale_factor;
+        let scissor = layer.clip_rect.map(|cr| {
+            let sx_eff = if is_fixed { 0.0 } else { scroll_x };
+            let sy_eff = if is_fixed { 0.0 } else { scroll_y };
+            let tw = target_texture.width() as f32;
+            let th = target_texture.height() as f32;
+            let x0 = ((cr.x - sx_eff) * sf_clip).floor().clamp(0.0, tw);
+            let y0 = ((cr.y - sy_eff) * sf_clip).floor().clamp(0.0, th);
+            let x1 = ((cr.x + cr.width - sx_eff) * sf_clip).ceil().clamp(x0, tw);
+            let y1 = ((cr.y + cr.height - sy_eff) * sf_clip).ceil().clamp(y0, th);
+            (x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32)
+        });
+        renderer.set_compose_scissor(scissor);
         // Tile compose path - walk per-tile textures + compose kazdou.
         let sf_compose = zoom * scale_factor;
         let force_tiles_c = std::env::var("RWE_FORCE_TILES").is_ok();
@@ -860,6 +878,8 @@ pub(crate) fn compose_layer_tree_into(
         }
         first = false;
     }
+    // Scissor reset - nesmi leaknout do overlay drawu / dalsiho framu.
+    renderer.set_compose_scissor(None);
     // Submit batched compose encoder = single GPU sync.
     renderer.queue.submit(std::iter::once(compose_encoder.finish()));
     // Po composite: overlay cmds (scrollbar, select popup, devtools...).

@@ -262,6 +262,14 @@ thread_local! {
     /// CSS mix-blend-mode pipeline override pres compose_view_to_view_blend.
     /// 0 = Normal/default (alpha blend pipeline). 1+ = blend mode discriminant.
     static BLEND_MODE_OVERRIDE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// GPU scissor pro compose pass vrstvy (PHYSICAL px, x/y/w/h, uz clampnuty
+    /// callerem na target dims). Nastavuje compose_layer_tree_into pro vrstvy
+    /// s ancestor overflow clipem (LayerNode.clip_rect) - napr. marquee
+    /// translateX anim uvnitr overflow:hidden. Compose fns (plain/transform/
+    /// blend) ho aplikuji na render pass; w/h == 0 => draw SKIP (vse cliple).
+    /// None = bez scissoru (default; nutno resetovat po compose vrstvy).
+    static COMPOSE_SCISSOR: std::cell::Cell<Option<(u32, u32, u32, u32)>> =
+        const { std::cell::Cell::new(None) };
     /// Viewport override pres render_into_tile - draw_segments_into_view_clipped
     /// drive prepisoval uniform na vp_dims (= full WebView viewport) ALE tile
     /// raster potrebuje vp = tile dims. Pri (w, h) > 0 = override aktivni.
@@ -7615,6 +7623,25 @@ impl Renderer {
         self.image_atlas_gen = self.image_atlas_gen.wrapping_add(1);
     }
 
+    /// Nastav / zrus GPU scissor pro nasledujici compose_*_into_encoder cally
+    /// (PHYSICAL px, caller clampuje na target dims). Viz COMPOSE_SCISSOR doc.
+    pub fn set_compose_scissor(&self, scissor: Option<(u32, u32, u32, u32)>) {
+        COMPOSE_SCISSOR.with(|c| c.set(scissor));
+    }
+
+    /// Aplikuj COMPOSE_SCISSOR na render pass. Vraci false kdyz je scissor
+    /// zero-area (= obsah kompletne cliply) -> caller preskoci draw.
+    fn apply_compose_scissor(pass: &mut wgpu::RenderPass) -> bool {
+        match COMPOSE_SCISSOR.with(|c| c.get()) {
+            Some((x, y, w, h)) => {
+                if w == 0 || h == 0 { return false; }
+                pass.set_scissor_rect(x, y, w, h);
+                true
+            }
+            None => true,
+        }
+    }
+
     /// Render display list do per-layer offscreen texture. Vola se per layer pri
     /// D4 per-layer GPU caching. `layer_w/h` = logical layer dims; `view` =
     /// layer texture view; cmds = layer-local coords (origin (0,0) at layer top-left).
@@ -8571,7 +8598,7 @@ impl Renderer {
             })],
             depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None,
         });
-        if vis {
+        if vis && Self::apply_compose_scissor(&mut pass) {
             let mode = BLEND_MODE_OVERRIDE.with(|c| c.get());
             let pipeline = match mode {
                 1 => &self.compose_pipeline_multiply,
@@ -8702,9 +8729,11 @@ impl Renderer {
                 ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store } })],
             depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None,
         });
-        pass.set_pipeline(&self.blend_compose_pipeline);
-        pass.set_bind_group(0, &bg, &[]);
-        pass.draw(0..6, 0..1);
+        if Self::apply_compose_scissor(&mut pass) {
+            pass.set_pipeline(&self.blend_compose_pipeline);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.draw(0..6, 0..1);
+        }
     }
 
     /// CSS mix-blend-mode advanced compose: per-pixel dst sample.
@@ -8883,9 +8912,11 @@ impl Renderer {
             })],
             depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None,
         });
-        pass.set_pipeline(&self.transform_pipeline);
-        pass.set_bind_group(0, &bg, &[]);
-        pass.draw(0..6, 0..1);
+        if Self::apply_compose_scissor(&mut pass) {
+            pass.set_pipeline(&self.transform_pipeline);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.draw(0..6, 0..1);
+        }
     }
 
     fn compose_transform(&self, view: &wgpu::TextureView, x: f32, y: f32, w: f32, h: f32, matrix: &[f32; 16], first: bool) {

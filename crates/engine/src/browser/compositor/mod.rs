@@ -98,6 +98,12 @@ pub struct LayerNode {
     /// Dirty area - bbox toho co se zmenilo od posledniho framu. None = no
     /// damage (cached texture reuse). Some(rect) = re-paint potreba.
     pub damage_rect: Option<super::layout::Rect>,
+    /// Overflow clip od ANCESTOR boxu (world/layout coords, intersekce vsech
+    /// overflow != visible predku). Compose vrstvy nastavi GPU scissor na tento
+    /// rect (scroll-adjusted) - bez toho transformovany obsah (marquee translateX
+    /// anim) utekl z overflow:hidden rodice (CPU clip bezi PRED transformem,
+    /// compose transform PO nem). None = zadny clipping predek.
+    pub clip_rect: Option<super::layout::Rect>,
     /// Tile grid - sub-layer cache units. Damage tracked per tile pres
     /// fingerprint - bez tile granularity by celý layer musel byt re-painted.
     /// Inspired by WebRender Picture cache tile model.
@@ -143,10 +149,11 @@ pub fn extract_layer_tree(layout_root: &LayoutBox) -> LayerNode {
         fingerprint: 0,
         structural_fp: 0,
         damage_rect: None,
+        clip_rect: None,
         tiles: Vec::new(),
     };
     let _p0 = std::time::Instant::now();
-    walk_box(layout_root, &mut root);
+    walk_box(layout_root, &mut root, None);
     root.children.sort_by_key(|l| l.z_index.unwrap_or(0));
     let _p1 = std::time::Instant::now();
     // Spocti fingerprint kazdy layer pres post-walk (children jiz finalized).
@@ -552,12 +559,34 @@ pub fn classify_layer_reason(b: &LayoutBox) -> LayerReason {
 
 /// Recursivne walks LayoutBox a buduje LayerTree.
 /// Box patri do `current` layer pokud nesi nova hranice. Jinak vytvori child layer.
-fn walk_box(b: &LayoutBox, current: &mut LayerNode) {
+/// Prunik dvou rectu; degenerovany (w/h <= 0) vraci zero-size rect na miste
+/// pruniku - compose ho interpretuje jako "vse cliple" (skip draw).
+fn intersect_rects(a: Rect, b: Rect) -> Rect {
+    let x0 = a.x.max(b.x);
+    let y0 = a.y.max(b.y);
+    let x1 = (a.x + a.width).min(b.x + b.width);
+    let y1 = (a.y + a.height).min(b.y + b.height);
+    Rect { x: x0, y: y0, width: (x1 - x0).max(0.0), height: (y1 - y0).max(0.0) }
+}
+
+fn walk_box(b: &LayoutBox, current: &mut LayerNode, clip: Option<Rect>) {
     // Aktualni box content - registruj do current layer.
     if let Some(node) = b.node.as_ref() {
         let id = std::rc::Rc::as_ptr(node) as usize;
         current.content_box_ids.push(id);
     }
+    // Overflow clip TOHOTO boxu se aplikuje na deti (vc. sub-layeru v nich).
+    // CSS: overflow != visible na jedne ose computuje druhou na auto -> clip
+    // obou os pri clips() na kterekoliv. Rect = border box (aproximace padding
+    // boxu; 1px border overlap akceptovan).
+    let child_clip = if b.overflow_x.clips() || b.overflow_y.clips() {
+        Some(match clip {
+            Some(c) => intersect_rects(c, b.rect),
+            None => b.rect,
+        })
+    } else {
+        clip
+    };
     // Pro kazdeho childa: pokud je layer boundary -> novy sub-layer, walks tam.
     // Jinak pokracuje v current layer.
     for child in &b.children {
@@ -601,13 +630,14 @@ fn walk_box(b: &LayoutBox, current: &mut LayerNode) {
                 fingerprint: 0,
                 structural_fp: 0,
                 damage_rect: None,
+                clip_rect: child_clip,
                 tiles: Vec::new(),
             };
-            walk_box(child, &mut sub);
+            walk_box(child, &mut sub, child_clip);
             sub.children.sort_by_key(|l| l.z_index.unwrap_or(0));
             current.children.push(sub);
         } else {
-            walk_box(child, current);
+            walk_box(child, current, child_clip);
         }
     }
 }
@@ -837,6 +867,7 @@ mod tests {
             fingerprint: 0,
             structural_fp: 0,
             damage_rect: None,
+            clip_rect: None,
             tiles: Vec::new(),
         }
     }

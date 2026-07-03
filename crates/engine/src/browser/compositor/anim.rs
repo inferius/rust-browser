@@ -379,6 +379,7 @@ mod tests {
             fingerprint: 0,
             structural_fp: 0,
             damage_rect: None,
+            clip_rect: None,
             tiles: Vec::new(),
         };
         let mut store = CompositorAnimStore::new();
