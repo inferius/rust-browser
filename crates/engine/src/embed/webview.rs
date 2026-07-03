@@ -3864,8 +3864,14 @@ impl WebView {
                         overlay.extend(cv);
                     }
                 }
-                crate::browser::paint::emit_main_scrollbar_overlay(
-                    root, &mut overlay, vw, vh, self.scroll_x, self.scroll_y);
+                // Inner scrollbary clipnout pod sticky topbar (viewport coords
+                // = vyska sticky headeru s top:0).
+                let sb_clip_top = self.sticky_layers.iter()
+                    .filter(|(_, _, top, _, _)| *top < 1.0)
+                    .map(|(_, _, _, _, h)| *h)
+                    .fold(0.0_f32, f32::max);
+                crate::browser::paint::emit_main_scrollbar_overlay_clipped(
+                    root, &mut overlay, vw, vh, self.scroll_x, self.scroll_y, sb_clip_top);
             }
             {
                 let target_view = self.target_view.as_ref().unwrap();
@@ -5330,10 +5336,16 @@ impl WebView {
 
         // 3b. Scrollbar overlay - kdyz content > viewport.
         // PERF: emit AT END display_list aby byl nad page contents.
-        crate::browser::paint::emit_main_scrollbar_overlay(
+        // Inner bary clipnute pod sticky topbar (nesmi jit pres hlavicku).
+        let sb_clip_top = self.sticky_layers.iter()
+            .filter(|(_, _, top, _, _)| *top < 1.0)
+            .map(|(_, _, _, _, h)| *h)
+            .fold(0.0_f32, f32::max);
+        crate::browser::paint::emit_main_scrollbar_overlay_clipped(
             &layout_root, &mut display_list,
             viewport_w, viewport_h,
             self.scroll_x, self.scroll_y,
+            sb_clip_top,
         );
         // Canvas bg (body/html) pokryva CELY viewport (scrollbar gutter +
         // plocha pod kratkym contentem) a NEscrolluje. D4: clear color

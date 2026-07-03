@@ -50,29 +50,34 @@ pub trait Scrollable {
     }
 
     /// Vrati (thumb_y, thumb_h) pro vertical scrollbar v rozsahu track_h px.
-    /// None pokud scrollbar nepotreba.
+    /// None pokud scrollbar nepotreba NEBO neni realne co scrollovat
+    /// (max_scroll < 2px = vlasovy overflow z metrickeho rozdilu vs Chrome -
+    /// thumb by vyplnil cely track = "zlute linky" pri scrollbar-color; Chrome
+    /// v tom stavu kresli track bez draggeru).
     fn thumb_y(&self, track_h: f32) -> Option<(f32, f32)> {
         if !self.needs_scrollbar_y() { return None; }
+        let (_, my) = self.max_scroll();
+        if my < 2.0 { return None; }
         let (_, vh) = self.viewport_size();
         let (_, ch) = self.content_size();
         let (_, sy) = self.scroll_offset();
         // .min(track_h): pri overflow:scroll + obsah se vejde (vh>=ch) by thumb
         // presahl track - clamp aby vyplnil presne track (nic ke scrollovani).
         let thumb_h = (track_h * vh / ch).max(30.0).min(track_h);
-        let (_, my) = self.max_scroll();
         let usable = (track_h - thumb_h).max(0.0);
-        let thumb_y = if my > 0.0 { (sy / my).clamp(0.0, 1.0) * usable } else { 0.0 };
+        let thumb_y = (sy / my).clamp(0.0, 1.0) * usable;
         Some((thumb_y, thumb_h))
     }
     fn thumb_x(&self, track_w: f32) -> Option<(f32, f32)> {
         if !self.needs_scrollbar_x() { return None; }
+        let (mx, _) = self.max_scroll();
+        if mx < 2.0 { return None; }
         let (vw, _) = self.viewport_size();
         let (cw, _) = self.content_size();
         let (sx, _) = self.scroll_offset();
         let thumb_w = (track_w * vw / cw).max(30.0).min(track_w);
-        let (mx, _) = self.max_scroll();
         let usable = (track_w - thumb_w).max(0.0);
-        let thumb_x = if mx > 0.0 { (sx / mx).clamp(0.0, 1.0) * usable } else { 0.0 };
+        let thumb_x = (sx / mx).clamp(0.0, 1.0) * usable;
         Some((thumb_x, thumb_w))
     }
 

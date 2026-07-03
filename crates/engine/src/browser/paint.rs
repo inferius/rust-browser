@@ -414,6 +414,22 @@ pub fn emit_main_scrollbar_overlay(
     viewport_w: f32, viewport_h: f32,
     scroll_x: f32, scroll_y: f32,
 ) {
+    emit_main_scrollbar_overlay_clipped(
+        layout_root, display_list, viewport_w, viewport_h, scroll_x, scroll_y, 0.0);
+}
+
+/// Varianta s clip_top (viewport coords): INNER scrollbary se orizinou pod
+/// sticky topbar (kresli se jako overlay NAD vsim vc. sticky vrstvy - bez
+/// clipu pri scrollu prekryvaly hlavicku, docx "scrollbary jdou pres
+/// hlavicku"). Main viewport scrollbar se NEclipuje (je u okraje okna,
+/// Chrome ho taky kresli pres celou vysku).
+pub fn emit_main_scrollbar_overlay_clipped(
+    layout_root: &LayoutBox,
+    display_list: &mut Vec<DisplayCommand>,
+    viewport_w: f32, viewport_h: f32,
+    scroll_x: f32, scroll_y: f32,
+    clip_top: f32,
+) {
     // Body box - bg (dark detect) + scrollbar-color/width (CSS na body/html
     // styluje viewport scrollbar per CSS Scrollbars L1).
     let body_box = layout_root.children.first().and_then(|html_box| {
@@ -430,7 +446,7 @@ pub fn emit_main_scrollbar_overlay(
         // scrollbar-width: none = zadny viewport scrollbar; inner resi rekurze.
         let (tc, hc) = if body_bg_dark { ([55, 55, 65, 220], [140, 140, 150, 255]) }
                        else { ([210, 210, 215, 220], [120, 120, 130, 255]) };
-        emit_inner_scrollbars(layout_root, display_list, tc, hc, scroll_x, scroll_y);
+        emit_inner_scrollbars(layout_root, display_list, tc, hc, scroll_x, scroll_y, clip_top);
         return;
     }
     let (mut track_col, mut thumb_col) = if body_bg_dark {
@@ -499,7 +515,8 @@ pub fn emit_main_scrollbar_overlay(
     // content > rect. Devtools panels (.dom-tree, .styles-body, .computed-list)
     // pouzivaji nested overflow - bez tohoto se content cut off bez visual hint
     // ze je scrollovatelne.
-    emit_inner_scrollbars(layout_root, display_list, track_col, thumb_col, scroll_x, scroll_y);
+    emit_inner_scrollbars(layout_root, display_list, track_col, thumb_col,
+        scroll_x, scroll_y, clip_top);
 }
 
 fn emit_inner_scrollbars(
@@ -508,6 +525,7 @@ fn emit_inner_scrollbars(
     track_col: [u8; 4],
     thumb_col: [u8; 4],
     scroll_x: f32, scroll_y: f32,
+    clip_top: f32,
 ) {
     use crate::browser::scroll::Scrollable;
     // CSS scrollbar-color: (thumb, track) - override default barev. Driv se
@@ -524,21 +542,30 @@ fn emit_inner_scrollbars(
     // viewport (a viditelny byval jen legacy staticky duplikat v paint_box).
     let vx = bx.rect.x - scroll_x;
     let vy = bx.rect.y - scroll_y;
+    // Clip pod sticky topbar: overlay se kresli NAD sticky vrstvou - cast baru
+    // nad clip_top oriznout (jinak scrollbar "jde pres hlavicku" pri scrollu).
     if needs_y {
         let bar_w = bx.scrollbar_size.max(8.0).min(14.0);
         let bar_x = vx + bx.rect.width - bar_w;
-        let bar_y = vy;
-        let bar_h = bx.rect.height;
-        display_list.push(DisplayCommand::Rect {
-            x: bar_x, y: bar_y, w: bar_w, h: bar_h,
-            color: track_col, radius: 0.0,
-        });
-        if let Some((thumb_off, thumb_h)) = bx.thumb_y(bar_h) {
+        let bar_y = vy.max(clip_top);
+        let bar_h = bx.rect.height - (bar_y - vy);
+        if bar_h > 4.0 {
             display_list.push(DisplayCommand::Rect {
-                x: bar_x + 2.0, y: bar_y + thumb_off + 2.0,
-                w: bar_w - 4.0, h: (thumb_h - 4.0).max(8.0),
-                color: thumb_col, radius: (bar_w - 4.0) * 0.5,
+                x: bar_x, y: bar_y, w: bar_w, h: bar_h,
+                color: track_col, radius: 0.0,
             });
+            if let Some((thumb_off, thumb_h)) = bx.thumb_y(bx.rect.height) {
+                // Thumb v coords plneho tracku (vy) - clip na bar_y.
+                let ty = (vy + thumb_off + 2.0).max(bar_y);
+                let th = ((thumb_h - 4.0).max(8.0) - (ty - (vy + thumb_off + 2.0))).max(0.0);
+                if th > 2.0 {
+                    display_list.push(DisplayCommand::Rect {
+                        x: bar_x + 2.0, y: ty,
+                        w: bar_w - 4.0, h: th,
+                        color: thumb_col, radius: (bar_w - 4.0) * 0.5,
+                    });
+                }
+            }
         }
     }
     if needs_x {
@@ -546,20 +573,24 @@ fn emit_inner_scrollbars(
         let bar_x = vx;
         let bar_y = vy + bx.rect.height - bar_h;
         let bar_w = bx.rect.width - if needs_y { 12.0 } else { 0.0 };
-        display_list.push(DisplayCommand::Rect {
-            x: bar_x, y: bar_y, w: bar_w, h: bar_h,
-            color: track_col, radius: 0.0,
-        });
-        if let Some((thumb_off, thumb_w)) = bx.thumb_x(bar_w) {
+        // Horizontalni bar cely nad clip_top -> skip (pod sticky hlavickou).
+        if bar_y >= clip_top {
             display_list.push(DisplayCommand::Rect {
-                x: bar_x + thumb_off + 2.0, y: bar_y + 2.0,
-                w: (thumb_w - 4.0).max(8.0), h: bar_h - 4.0,
-                color: thumb_col, radius: (bar_h - 4.0) * 0.5,
+                x: bar_x, y: bar_y, w: bar_w, h: bar_h,
+                color: track_col, radius: 0.0,
             });
+            if let Some((thumb_off, thumb_w)) = bx.thumb_x(bar_w) {
+                display_list.push(DisplayCommand::Rect {
+                    x: bar_x + thumb_off + 2.0, y: bar_y + 2.0,
+                    w: (thumb_w - 4.0).max(8.0), h: bar_h - 4.0,
+                    color: thumb_col, radius: (bar_h - 4.0) * 0.5,
+                });
+            }
         }
     }
     for ch in &bx.children {
-        emit_inner_scrollbars(ch, display_list, track_col, thumb_col, scroll_x, scroll_y);
+        emit_inner_scrollbars(ch, display_list, track_col, thumb_col,
+            scroll_x, scroll_y, clip_top);
     }
 }
 
