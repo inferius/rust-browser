@@ -3901,7 +3901,8 @@ fn aspect_ratio_flex_item_definite_height() {
 fn vertical_writing_mode_shrinks_and_stacks_text() {
     // writing-mode:vertical-rl bez explicit width: box shrink-to-fit (NE full
     // viewport width = jinak text positioned vpravo mimo obrazovku = "prazdny
-    // box") + text child char-stacked (upright vertical).
+    // box"). Text child zustava HORIZONTALNI string (BEZ '\n' stackingu) -
+    // paint ho emitne rotovany 90deg pres TransformBegin (Chrome glyf rotace).
     let doc = parse_html(
         r#"<html><body><div class="v">ABC</div></body></html>"#, "");
     let css = parse_stylesheet(".v { writing-mode: vertical-rl; height: 120px; }");
@@ -3915,10 +3916,15 @@ fn vertical_writing_mode_shrinks_and_stacks_text() {
     let v = find(&layout, "v").expect("vertical box");
     // Shrink-to-fit: sirka << viewport (ne ~1024).
     assert!(v.rect.width < 100.0, "vertical box shrink-to-fit, width={}", v.rect.width);
-    // Text child char-stacked (obsahuje \n).
-    fn any_stacked(b: &layout::LayoutBox) -> bool {
-        if let Some(t) = &b.text { if t.contains('\n') { return true; } }
-        b.children.iter().any(any_stacked)
+    // Text child NESMI byt '\n'-stacked (rotace resi paint) a writing_mode
+    // se na nej propaguje (paint pak vi, ze ma rotovat).
+    fn find_text(b: &layout::LayoutBox) -> Option<&layout::LayoutBox> {
+        if b.text.is_some() { return Some(b); }
+        b.children.iter().find_map(find_text)
     }
-    assert!(any_stacked(v), "text child ma byt char-stacked (\n mezi znaky)");
+    let txt = find_text(v).expect("text child");
+    assert!(!txt.text.as_deref().unwrap_or("").contains('\n'),
+        "text ma zustat horizontalni string (rotaci dela paint), got {:?}", txt.text);
+    assert!(txt.writing_mode.is_vertical(),
+        "writing_mode se musi propagovat na text child");
 }

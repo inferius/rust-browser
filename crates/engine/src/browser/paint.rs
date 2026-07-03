@@ -2817,6 +2817,42 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         let text_y = bx.rect.y + border + pad_t + v_offset;
         let text_color = with_alpha(control_color_override
             .or(bx.text_color).unwrap_or([0, 0, 0, 255]));
+        // VERTICAL writing-mode (vertical-rl/lr, sideways-*): Chrome ROTUJE
+        // glyfy o 90 deg (latinka lezi na boku, cte se shora dolu). Emit =
+        // horizontalni text run obaleny rotate(90) transformem; po rotaci
+        // je run svisly, top-aligned v sloupcovem boxu (layout sloupce uz
+        // nachystal - layout_block_vertical). sideways-lr rotuje -90.
+        // Dekorace/stiny pro vertical text zatim neresime (vzacne).
+        if bx.writing_mode.is_vertical() && !text.contains('\n') {
+            let run_w = crate::browser::layout::measure_text_width_weight(
+                text, bx.font_size, bx.effective_weight(), bx.italic, &bx.font_family);
+            let line_h = bx.font_size * 1.2;
+            let ccx = bx.rect.x + bx.rect.width * 0.5;
+            // Top-align: rotovany run zabira svisle run_w px od horni hrany.
+            let ccy = bx.rect.y + run_w.min(bx.rect.height.max(run_w)) * 0.5;
+            let hx = ccx - run_w * 0.5;
+            let hy = ccy - line_h * 0.5;
+            // TransformOp::Rotate bere RADIANY (parse_transform konvertuje).
+            let rad = if matches!(bx.writing_mode,
+                crate::browser::layout::WritingMode::SidewaysLr) {
+                -std::f32::consts::FRAC_PI_2
+            } else {
+                std::f32::consts::FRAC_PI_2
+            };
+            let m = crate::browser::layout::compute_transform_matrix(
+                &[crate::browser::layout::TransformOp::Rotate(rad)], None);
+            cmds.push(DisplayCommand::TransformBegin {
+                x: hx, y: hy, w: run_w, h: line_h, matrix: m,
+            });
+            cmds.push(DisplayCommand::Text {
+                x: hx, y: hy, content: text.clone(), color: text_color,
+                font_size: bx.font_size, bold: bx.bold,
+                font_weight: bx.font_weight, italic: bx.italic,
+                font_family: bx.font_family.clone(),
+                strikethrough: false, underline: false,
+            });
+            cmds.push(DisplayCommand::TransformEnd);
+        } else {
         // Text shadow - vsechny vrstvy v reverse poradi (posledni vrstva nejvic
         // vzadu) pred main text. Blur aproximovan: pri blur>1.5 emit ring 8 kopii
         // na polomeru ~blur*0.5 se snizenou alpha = fake glow/spread (real Gaussian
@@ -2966,6 +3002,7 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
                 radius: 0.0,
             });
         }
+        } // konec else (ne-vertical text emit)
     }
 
     // SVG shapes - emituj pred normal children rekursi (svg children jsou shapes ne LayoutBoxes)

@@ -4689,18 +4689,54 @@ fn layout_block_vertical(bx: &mut LayoutBox) {
                 continue;
             }
             let t = child.text.clone().unwrap_or_default();
-            let line_advance = child.font_size * 1.2;
-            let chars_per_col = ((inner_h / line_advance).floor() as usize).max(1);
-            let chars: Vec<char> = t.chars().collect();
-            if chars.len() <= chars_per_col {
+            // Kapacita sloupce dle MERENE sirky runu (paint rotuje glyfy 90deg
+            // -> svisly rozsah runu = jeho horizontalni sirka). Drive
+            // char-count pres fs*1.2 (upright stacking) = podhad kapacity.
+            let (fs, wgt, ital) = (child.font_size, child.effective_weight(), child.italic);
+            let fam = child.font_family.clone();
+            let measure = |s: &str| measure_text_width_weight(s, fs, wgt, ital, &fam);
+            if measure(&t) <= inner_h {
                 rebuilt.push(child);
                 continue;
             }
-            for chunk in chars.chunks(chars_per_col) {
-                let mut col = child.clone();
-                col.text = Some(chunk.iter().collect());
-                rebuilt.push(col);
+            // Chunk po slovech (word-boundary wrap jako Chrome); slovo delsi
+            // nez sloupec se tvrde zlomi po znacich.
+            let mut cur = String::new();
+            let mut flush = |s: &mut String, out: &mut Vec<LayoutBox>| {
+                if !s.trim().is_empty() {
+                    let mut col = child.clone();
+                    col.text = Some(std::mem::take(s).trim().to_string());
+                    out.push(col);
+                } else {
+                    s.clear();
+                }
+            };
+            for word in t.split_whitespace() {
+                let cand = if cur.is_empty() { word.to_string() } else { format!("{cur} {word}") };
+                if measure(&cand) <= inner_h {
+                    cur = cand;
+                } else {
+                    flush(&mut cur, &mut rebuilt);
+                    if measure(word) <= inner_h {
+                        cur = word.to_string();
+                    } else {
+                        // Tvrdy zlom dlouheho slova po znacich.
+                        let mut piece = String::new();
+                        for ch2 in word.chars() {
+                            piece.push(ch2);
+                            if measure(&piece) > inner_h {
+                                piece.pop();
+                                let mut col = child.clone();
+                                col.text = Some(std::mem::take(&mut piece));
+                                rebuilt.push(col);
+                                piece.push(ch2);
+                            }
+                        }
+                        cur = piece;
+                    }
+                }
             }
+            flush(&mut cur, &mut rebuilt);
         }
         bx.children = rebuilt;
     }
@@ -4709,20 +4745,11 @@ fn layout_block_vertical(bx: &mut LayoutBox) {
     let mut total_w = 0.0_f32;
     for child in bx.children.iter_mut() {
         if matches!(child.display, Display::None) { continue; }
-        // Vertical text approx: text child -> upright char-stacking (kazdy znak na
-        // vlastni radek pres \n). Bez tohoto byl text v ~20px horizontalnim boxu
-        // = wordwrap selhal / clipnuto = prazdny box ("vertikalni text v hajzlu").
-        // Pravy CSS rotuje glyphy, my je skladame upright (validni pro CJK +
-        // citelna aproximace pro latinku).
-        if let Some(t) = child.text.as_ref() {
-            if !t.contains('\n') {
-                let stacked: String = t.chars()
-                    .map(|c| if c == ' ' { '\u{00A0}' } else { c })
-                    .flat_map(|c| [c, '\n'])
-                    .collect();
-                child.text = Some(stacked.trim_end_matches('\n').to_string());
-            }
-        }
+        // Vertical text: text zustava HORIZONTALNI string - paint ho emitne
+        // obaleny rotate(90) transformem (Chrome glyf rotace). Drive se tady
+        // injektovalo '\n' po kazdem znaku (upright stacking aproximace) -
+        // nahrazeno rotovanym renderem, sloupce chunkuje PASS 0 dle merene
+        // sirky runu.
         // Text child block-axis sirka = ~1 znak (font_size); jinak explicit_width
         // nebo 20px default.
         let default_w = if child.text.is_some() { (child.font_size * 1.4).max(14.0) } else { 20.0 };
