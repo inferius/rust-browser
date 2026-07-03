@@ -2,6 +2,40 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`, `debug_utils.md`.
 
+## Session N+49b: KOMPLETNI vycisteni znameho bug backlogu (8 fixu) pred user kolem
+
+Vsechno zname neopravene z HANDOFF/TODO/docx opraveno (krome particles/bytecode
+VM = architektura projekt, ne bug; a zoom-text-blur = neoveritelne synteticky):
+
+- `ca23e6c` **mix-blend pruh dole VYRESEN**: backdrop snapshot kopie 1:1 texel do
+  offscreen_b (config-sized), ale duv normalizovane na TARGET (page tex bez
+  chrome baru, mensi) -> backdrop sample ujizdel s y -> spodek boxu blendoval
+  s obsahem POD nim. Fix: BCParams duv_scale = target/offscreen_b dims.
+- `b7b6845` **resize kurzor** nad grip zonou + behem dragu (ResizeNwse/Ns/Ew dle osy).
+- `bfbe4eb` **select popup dark theme**: barvy z computed stylu selectu (bg/text/
+  border), hover dle luma, selected option accent+bold.
+- `7d1c2f0` **selection nevybira sidebar**: pinned (fixed/sticky) subtrees se pri
+  tazeni v content preskakuji; selection zacata v pinned zustava v nem.
+- `a0ff8c3` **WebGL canvas prezije scroll**: fast-pathy (scroll + anim gate) po
+  re-compose re-runnou webgl frame (stejny bug jako Canvas2D mizeni z N+41).
+  + TODO.md re-triage: filter color-matrix v layer mode OK, rotace corner cuts OK.
+- `c269af5` **writing-mode ROTUJE GLYFY 90 deg** (Chrome parity): text zustava
+  horizontalni string, sloupce chunkovane po slovech dle merene sirky, paint
+  emitne run obaleny TransformBegin(rotate FRAC_PI_2)/End. POZOR:
+  TransformOp::Rotate bere RADIANY.
+- `7d84b88`+`613f20c` **scrollbar sipky + scrollbar-color/width na viewport baru**:
+  Chrome-like arrow buttons (klik = 60px krok), thumb/track mezi sipkami,
+  scrollbar-color/width z body/html. Hit-test (drag/track-jump) synchronizovan.
+- **OVERENO STALE/OK** (nezkoumamat znovu): :focus vs :invalid = SPRAVNE (izolovany
+  test vc. psani - :invalid vyhrava behem focusu; validity bity N+38 to fixly),
+  transition rotate smer = spravne (obraceny uhel na test page byl reverse-
+  transition spring overshoot pri mouse-leave = korektni bezier chovani).
+- Novy harness: **pmtype.ps1** (%TEMP%) - typing pres PostMessage WM_KEYDOWN/
+  VkKeyScan (winit ignoruje posted WM_CHAR!) + -backspace mode, bez focus change.
+  POZOR: synteticke klavesy bez keyboard state = uppercase (harness artefakt).
+
+Stav: 4205 testu pass, vse overeno screenshoty. Dalsi krok = USER TESTOVACI KOLO.
+
 ## Session N+49: vizualni audit 22 sekci + accent-color fix + panic-propagace
 
 ### SHIPPED
