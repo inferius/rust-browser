@@ -2304,12 +2304,16 @@ impl WebView {
                     // mouse pos vs thumb grab offset.
                     let viewport_w = self.viewport_w / self.zoom.max(0.01);
                     let viewport_h = self.viewport_h / self.zoom.max(0.01);
+                    // Geometrie thumb/track = emit_main_scrollbar_overlay (sipky
+                    // na koncich, track [bar_w, vh-bar_w]).
                     if let (Some(grab_y), Some(layout)) = (self.v_scrollbar_drag, &self.last_layout_root) {
                         let total_h = layout.rect.height;
                         if total_h > viewport_h {
-                            let thumb_h = (viewport_h * viewport_h / total_h).max(40.0);
-                            let track_h = viewport_h - thumb_h;
-                            let new_thumb_y = (y - grab_y).max(0.0).min(track_h);
+                            let bar_w = 12.0_f32;
+                            let track_len = (viewport_h - 2.0 * bar_w).max(1.0);
+                            let thumb_h = (track_len * viewport_h / total_h).max(30.0).min(track_len);
+                            let track_h = (track_len - thumb_h).max(1.0);
+                            let new_thumb_y = (y - grab_y - bar_w).max(0.0).min(track_h);
                             let max_scroll = total_h - viewport_h;
                             let new_scroll = (new_thumb_y / track_h) * max_scroll;
                             self.scroll_y = new_scroll;
@@ -2322,9 +2326,11 @@ impl WebView {
                     if let (Some(grab_x), Some(layout)) = (self.h_scrollbar_drag, &self.last_layout_root) {
                         let total_w = layout.rect.width;
                         if total_w > viewport_w {
-                            let thumb_w = (viewport_w * viewport_w / total_w).max(40.0);
-                            let track_w = viewport_w - thumb_w;
-                            let new_thumb_x = (x - grab_x).max(0.0).min(track_w);
+                            let bar_w = 12.0_f32;
+                            let track_len = (viewport_w - 2.0 * bar_w).max(1.0);
+                            let thumb_w = (track_len * viewport_w / total_w).max(30.0).min(track_len);
+                            let track_w = (track_len - thumb_w).max(1.0);
+                            let new_thumb_x = (x - grab_x - bar_w).max(0.0).min(track_w);
                             let max_scroll_x = total_w - viewport_w;
                             let new_scroll = (new_thumb_x / track_w) * max_scroll_x;
                             self.scroll_x = new_scroll;
@@ -2650,38 +2656,59 @@ impl WebView {
                     if let Some(layout) = &self.last_layout_root {
                         let total_h = layout.rect.height;
                         let total_w = layout.rect.width;
-                        // Vertical scrollbar - thumb drag nebo track jump.
-                        if total_h > viewport_h && x >= viewport_w - 12.0 && x < viewport_w {
-                            let thumb_h = (viewport_h * viewport_h / total_h).max(40.0);
+                        // Geometrie MUSI sedet s emit_main_scrollbar_overlay
+                        // (sipky na koncich, track mezi nimi, bar_w = 12).
+                        let bar_w = 12.0_f32;
+                        // Vertical scrollbar - sipka step / thumb drag / track jump.
+                        if total_h > viewport_h && x >= viewport_w - bar_w && x < viewport_w {
                             let max_scroll = (total_h - viewport_h).max(1.0);
-                            let thumb_y = (self.scroll_y / max_scroll) * (viewport_h - thumb_h);
-                            if y >= thumb_y && y < thumb_y + thumb_h {
-                                // Klik na thumb -> drag (instantni, bez smooth).
-                                self.v_scrollbar_drag = Some(y - thumb_y);
+                            const ARROW_STEP: f32 = 60.0;
+                            if y < bar_w || y >= viewport_h - bar_w {
+                                // Sipka nahoru / dolu - radkovy krok (Chrome ~40-60px).
+                                let delta = if y < bar_w { -ARROW_STEP } else { ARROW_STEP };
+                                let ns = (self.scroll_y + delta).clamp(0.0, max_scroll);
+                                self.scroll_y = ns;
+                                self.scroll_target_y = ns;
                             } else {
-                                // Klik na track mimo thumb -> page jump.
-                                // y nad thumb = scroll up viewport_h, pod = down.
-                                let delta = if y < thumb_y { -viewport_h } else { viewport_h };
-                                let new_scroll = (self.scroll_y + delta).clamp(0.0, max_scroll);
-                                self.scroll_y = new_scroll;
-                                self.scroll_target_y = new_scroll;
+                                let track_len = (viewport_h - 2.0 * bar_w).max(1.0);
+                                let thumb_h = (track_len * viewport_h / total_h).max(30.0).min(track_len);
+                                let thumb_y = bar_w + (self.scroll_y / max_scroll).clamp(0.0, 1.0) * (track_len - thumb_h);
+                                if y >= thumb_y && y < thumb_y + thumb_h {
+                                    // Klik na thumb -> drag (instantni, bez smooth).
+                                    self.v_scrollbar_drag = Some(y - thumb_y);
+                                } else {
+                                    // Klik na track mimo thumb -> page jump.
+                                    let delta = if y < thumb_y { -viewport_h } else { viewport_h };
+                                    let ns = (self.scroll_y + delta).clamp(0.0, max_scroll);
+                                    self.scroll_y = ns;
+                                    self.scroll_target_y = ns;
+                                }
                             }
                             response.dirty = true;
                             self.dirty = true;
                             return response;
                         }
-                        // Horizontal scrollbar - thumb drag nebo track jump.
-                        if total_w > viewport_w && y >= viewport_h - 12.0 && y < viewport_h {
-                            let thumb_w = (viewport_w * viewport_w / total_w).max(40.0);
+                        // Horizontal scrollbar - sipka step / thumb drag / track jump.
+                        if total_w > viewport_w && y >= viewport_h - bar_w && y < viewport_h {
                             let max_scroll_x = (total_w - viewport_w).max(1.0);
-                            let thumb_x = (self.scroll_x / max_scroll_x) * (viewport_w - thumb_w);
-                            if x >= thumb_x && x < thumb_x + thumb_w {
-                                self.h_scrollbar_drag = Some(x - thumb_x);
+                            const ARROW_STEP: f32 = 60.0;
+                            if x < bar_w || x >= viewport_w - bar_w {
+                                let delta = if x < bar_w { -ARROW_STEP } else { ARROW_STEP };
+                                let ns = (self.scroll_x + delta).clamp(0.0, max_scroll_x);
+                                self.scroll_x = ns;
+                                self.scroll_target_x = ns;
                             } else {
-                                let delta = if x < thumb_x { -viewport_w } else { viewport_w };
-                                let new_scroll = (self.scroll_x + delta).clamp(0.0, max_scroll_x);
-                                self.scroll_x = new_scroll;
-                                self.scroll_target_x = new_scroll;
+                                let track_len = (viewport_w - 2.0 * bar_w).max(1.0);
+                                let thumb_w = (track_len * viewport_w / total_w).max(30.0).min(track_len);
+                                let thumb_x = bar_w + (self.scroll_x / max_scroll_x).clamp(0.0, 1.0) * (track_len - thumb_w);
+                                if x >= thumb_x && x < thumb_x + thumb_w {
+                                    self.h_scrollbar_drag = Some(x - thumb_x);
+                                } else {
+                                    let delta = if x < thumb_x { -viewport_w } else { viewport_w };
+                                    let ns = (self.scroll_x + delta).clamp(0.0, max_scroll_x);
+                                    self.scroll_x = ns;
+                                    self.scroll_target_x = ns;
+                                }
                             }
                             response.dirty = true;
                             self.dirty = true;

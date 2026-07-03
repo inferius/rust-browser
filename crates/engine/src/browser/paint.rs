@@ -414,50 +414,86 @@ pub fn emit_main_scrollbar_overlay(
     viewport_w: f32, viewport_h: f32,
     scroll_x: f32, scroll_y: f32,
 ) {
-    // Body bg detect pro track/thumb barvy.
-    let body_bg_dark = layout_root.children.first().and_then(|html_box| {
+    // Body box - bg (dark detect) + scrollbar-color/width (CSS na body/html
+    // styluje viewport scrollbar per CSS Scrollbars L1).
+    let body_box = layout_root.children.first().and_then(|html_box| {
         html_box.children.iter().find(|c| c.tag.as_deref() == Some("body"))
-    }).and_then(|body| body.bg_color)
+    });
+    let body_bg_dark = body_box.and_then(|body| body.bg_color)
         .map(|c| (c[0] as u32 + c[1] as u32 + c[2] as u32) < 384)
         .unwrap_or(false);
-    let (track_col, thumb_col) = if body_bg_dark {
-        ([55, 55, 65, 220], [140, 140, 150, 255])
+    let sb_color = body_box.and_then(|b| b.scrollbar_color)
+        .or_else(|| layout_root.children.first().and_then(|h| h.scrollbar_color));
+    let sb_width = body_box.map(|b| b.scrollbar_width.as_str())
+        .filter(|w| !w.is_empty()).unwrap_or("auto");
+    if sb_width == "none" {
+        // scrollbar-width: none = zadny viewport scrollbar; inner resi rekurze.
+        let (tc, hc) = if body_bg_dark { ([55, 55, 65, 220], [140, 140, 150, 255]) }
+                       else { ([210, 210, 215, 220], [120, 120, 130, 255]) };
+        emit_inner_scrollbars(layout_root, display_list, tc, hc, scroll_x, scroll_y);
+        return;
+    }
+    let (mut track_col, mut thumb_col) = if body_bg_dark {
+        ([55u8, 55, 65, 220], [140u8, 140, 150, 255])
     } else {
-        ([210, 210, 215, 220], [120, 120, 130, 255])
+        ([210u8, 210, 215, 220], [120u8, 120, 130, 255])
+    };
+    if let Some((thumb, track)) = sb_color {
+        thumb_col = thumb;
+        track_col = track;
+    }
+    let bar_w = if sb_width == "thin" { 8.0_f32 } else { 12.0_f32 };
+    // Sipka (Chrome-like button) na konci tracku: track kratsi o 2x bar_w,
+    // trojuhelnik barvou thumbu. Geometrie MUSI sedet s hit-testem ve
+    // webview (main_scrollbar_metrics) - drag i arrow click steping.
+    let arrow = |dl: &mut Vec<DisplayCommand>, cx: f32, cy: f32, dx: f32, dy: f32, col: [u8; 4]| {
+        let s = bar_w * 0.28;
+        // Trojuhelnik smerem (dx, dy) - spicka na cx+dx*s, zakladna kolmo.
+        let tip = (cx + dx * s, cy + dy * s);
+        let b1 = (cx - dx * s - dy * s, cy - dy * s - dx * s);
+        let b2 = (cx - dx * s + dy * s, cy - dy * s + dx * s);
+        dl.push(DisplayCommand::ClippedRect { color: col, points: vec![tip, b1, b2] });
     };
     let total_h = layout_root.rect.height;
     if total_h > viewport_h {
-        let bar_w = 12.0_f32;
         let bar_x = viewport_w - bar_w;
         display_list.push(DisplayCommand::Rect {
             x: bar_x, y: 0.0, w: bar_w, h: viewport_h,
             color: track_col, radius: 0.0,
         });
-        let thumb_h = (viewport_h * viewport_h / total_h).max(40.0);
+        // Track mezi sipkami.
+        let track_top = bar_w;
+        let track_len = (viewport_h - 2.0 * bar_w).max(1.0);
+        let thumb_h = (track_len * viewport_h / total_h).max(30.0).min(track_len);
         let max_scroll = (total_h - viewport_h).max(1.0);
-        let thumb_y = (scroll_y / max_scroll) * (viewport_h - thumb_h);
+        let thumb_y = track_top + (scroll_y / max_scroll).clamp(0.0, 1.0) * (track_len - thumb_h);
         display_list.push(DisplayCommand::Rect {
-            x: bar_x + 2.0, y: thumb_y + 2.0,
-            w: bar_w - 4.0, h: thumb_h - 4.0,
+            x: bar_x + 2.0, y: thumb_y,
+            w: bar_w - 4.0, h: thumb_h,
             color: thumb_col, radius: (bar_w - 4.0) * 0.5,
         });
+        arrow(display_list, bar_x + bar_w * 0.5, bar_w * 0.5, 0.0, -1.0, thumb_col);
+        arrow(display_list, bar_x + bar_w * 0.5, viewport_h - bar_w * 0.5, 0.0, 1.0, thumb_col);
     }
     let total_w = layout_root.rect.width;
     if total_w > viewport_w {
-        let bar_h = 12.0_f32;
-        let bar_y = viewport_h - bar_h;
+        let bar_y = viewport_h - bar_w;
         display_list.push(DisplayCommand::Rect {
-            x: 0.0, y: bar_y, w: viewport_w, h: bar_h,
+            x: 0.0, y: bar_y, w: viewport_w, h: bar_w,
             color: track_col, radius: 0.0,
         });
-        let thumb_w = (viewport_w * viewport_w / total_w).max(40.0);
+        let track_left = bar_w;
+        let track_len = (viewport_w - 2.0 * bar_w).max(1.0);
+        let thumb_w = (track_len * viewport_w / total_w).max(30.0).min(track_len);
         let max_scroll_x = (total_w - viewport_w).max(1.0);
-        let thumb_x = (scroll_x / max_scroll_x) * (viewport_w - thumb_w);
+        let thumb_x = track_left + (scroll_x / max_scroll_x).clamp(0.0, 1.0) * (track_len - thumb_w);
         display_list.push(DisplayCommand::Rect {
-            x: thumb_x + 2.0, y: bar_y + 2.0,
-            w: thumb_w - 4.0, h: bar_h - 4.0,
-            color: thumb_col, radius: (bar_h - 4.0) * 0.5,
+            x: thumb_x, y: bar_y + 2.0,
+            w: thumb_w, h: bar_w - 4.0,
+            color: thumb_col, radius: (bar_w - 4.0) * 0.5,
         });
+        arrow(display_list, bar_w * 0.5, bar_y + bar_w * 0.5, -1.0, 0.0, thumb_col);
+        arrow(display_list, viewport_w - bar_w * 0.5, bar_y + bar_w * 0.5, 1.0, 0.0, thumb_col);
     }
     // Inner scrollbar overlay - kazdy nested element s overflow:auto/scroll +
     // content > rect. Devtools panels (.dom-tree, .styles-body, .computed-list)
