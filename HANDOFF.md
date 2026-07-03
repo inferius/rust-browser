@@ -2,6 +2,94 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`, `debug_utils.md`.
 
+## Session N+50: docx-2 systematicky pruchod (uzivateluv report "neni spraveno nic")
+
+Uzivatel dodal E:\Data\Downloads\chyby-rbro.docx (extrakt text:
+%TEMP%\chyby_rbro_img.txt, obrazky %TEMP%\chyby_media\). POZOR: obrazky v docx
+jsou STALE (pre-fix buildy), text aktualnejsi - kazdou polozku nutno REPRODUKOVAT
+na aktualnim buildu, ne verit obrazkum.
+
+### SHIPPED (8 commitu, vse overeno screenshoty + 4205 testu pass)
+
+- `6457496` **CENTRALNI FIX - DOM verze bumpy pro detached natives**: classList
+  add/remove/toggle bumpal PRIMO jen base dom_version Rc<Cell> -> po splitu
+  counteru (da8b846, 4.6.) cascade cache (dom_style_version) NEinvalidovala =
+  scroll-spy .active se neprebarvil, IO toggle "jen jednou", DnD dragover styl
+  az pri dropu, mousemove-zone el.style zmeny neviditelne. style proxy
+  (el.style.x=y, cssText, setProperty/removeProperty) nebumpal VUBEC NIC.
+  Fix: DomVersionCells bundle (bump_all pro class = meni matching;
+  bump_style_only pro inline style values) + update_style_attr vraci changed
+  (no-op sety neinvaliduji). + IO eval i behem scroll fast-path framu.
+  TENTO JEDEN FIX vyresil vetsi cast "JS nic nedela" polozek docx.
+- `43f7432` **pseudo ::before/::after abs-pos komplet** (docx S6): (a) odlozene
+  umisteni abs/fixed deti na KONEC layout_block (place_abs_pos_child) - % offsety
+  drive resolvovaly proti height 0; (b) pseudo box s vlastnim textem dostava
+  content_h = fs*1.2 (drive h=0 -> border=cara, layer texture 1px); (c) synteticke
+  pseudo_id (parent ptr XOR kind salt) - pseudo s transform/opacity mel layer id 0,
+  find_box_by_node_id ho nenasel -> NIKDY se nevykreslil (">>>" zmizel);
+  layer_box_id() helper sjednocuje. (d) checkbox/radio Chrome UA margin
+  3px 3px 3px 4px + inline replaced margin advance v flush_inline (r.53 odsazeni).
+  (e) MouseDown dirty pri :active zmene (press vizual hned).
+- `32b0050` **multi-stop linear gradient v PX prostoru** (docx r.25): repeating-
+  linear pruhy zrcadlove + spatny uhel (aspect skew z normalized [0,1]^2
+  projekce) + prazdne rohy (stopy jen t=[0,1], rohy az 1.21). Fix: CSS gradient
+  line v px (dir=(sinA,-cosA), L=|w sinA|+|h cosA|), 2-pass SH clip, krajni pasy
+  extenduji pres rohy, repeating expanze [-0.25,1.25]. 2-stop shader path byl
+  pixel-verified spravny.
+- `440206e` **ellipse clip-path = polygon teselace** (docx r.29): SDF radius
+  min(rx,ry) delal pilulku. 48-bod polygon pres eff_clip normalizaci v paint_box
+  (ClippedRect/ClippedGradient s edge AA). Circle zustava SDF. + px-space
+  projekce i pro push_gradient/push_clipped_linear_gradient.
+- `44e56fe` **Tab focus traversal + textarea multiline caret** (docx r.40-41):
+  Tab/Shift+Tab pres focusables v DOM poradi (blur/focus eventy, caret na konec,
+  scroll-into-view, :focus-visible pres set_focus_from_keyboard). Textarea caret
+  = radek+sloupec (drive x pres celou hodnotu vc \n na 1. radku; Enter caretem
+  nehnul, resize ho posunul). hash_validity -> form_control_invalid (number
+  min/max v cache klici).
+- `c383d07` **edge AA transform compose + hladka wavy** (docx r.23): TRANSFORM
+  shader fs 1px feather (fwidth, uv_box-relativni; binding 2 +FRAGMENT
+  visibility!). Wavy = sinusovka pres slanted ClippedRect segmenty (drive zigzag
+  Rectu = schody).
+- `133c03b` **resize grip priorita + shell routing dle event Y**: grip check PRED
+  inner-scrollbar hit-testem (bar zona prekryva grip roh). Shell dispatch_input
+  routuje Down/Up/Move/Scroll dle Y z eventu (drive self.mouse_y z posledniho
+  CursorMoved - down bez move sel do chrome pane).
+- `8b5fbc2` (zacatek session) S11 inner scrollbar: zadny thumb pri vlasovem
+  overflow (<2px) + clip pod sticky topbar.
+
+### OVERENO NA AKTUALNIM BUILDU (docx polozky co uz byly fixnute drive)
+- S13 center box tmavy (ne bily) OK; aspect-ratio vysky dle pomeru OK; blob
+  asymetricky (average aproximace eliptickych rohu) OK; marquee vertikalne
+  ~centrovan; conic quadrant = Chrome (2 tmave kvadranty SPRAVNE); S14 SVG
+  dema (gear/mask/dashoffset/wave) OK; mouse zone + DnD + IO recolor funguje
+  (centralni fix); :has() checkbox klik/label klik/barvy vc. odskrtnuti OK;
+  typewriter pise; scroll-spy nav sleduje scroll.
+
+### ZBYVA (dalsi kolo)
+- **CQ container resize grip nechyta** (S19, docx r.51): find_resize_grip vraci
+  None i pri zdanlive spravnych coords - overit rect vs vizualni grip pozici
+  (dump .cq-container rect + RWE_RESIZE_DBG). CQ-resize FPS na mem HW 240 (cap),
+  user hlasi 14 - nutno overit na user HW po oprave gripu.
+- **CQ section growth** (docx r.52 + user request): pri roztazeni containeru
+  mimo ram se ma zvetsit cela .test-section (vsechny sekce = sirka stranky).
+- **wm sloupce**: vertical-rl span se lame do 2 sloupcu (text 115px > inner_h
+  94px), Chrome ma 1 sloupec - flex intrinsic pro vertical text (est_h z
+  taffy_compliance char*10 aprox). Kosmeticke ("temer dobre, vetsi mezera").
+- **Text kvalita vs Chrome** (docx r.6 "text divny/mensi"): font rendering tema
+  (hinting/gamma/LCD). Velke, samostatne.
+- **Perf na user HW**: hover S1 (user 60FPS), obecny pohyb, tabulka pulsuje na
+  hover, pulse/SVG anim plynulost - na mem HW vse 240 (cap), nemeritelne;
+  po user kole zmerit s RWE_PROF na jeho vysledcich.
+- Docx r.64 "IO inner text" + r.6 text: povazovano za vyresene centralnim fixem
+  - pri user kole overit.
+
+### Harness pozn.
+- pmtype.ps1 rozsiren o `-vk 0xNN [-shift] [-count N]` (Enter=0x0D, Tab=0x09).
+- Ceska klavesnice: cislice pres VkKeyScan = shift kombinace, "200" se nevlozi
+  (harness artefakt, ne bug enginu).
+- Scratchpad repro: spy_test.html (scroll-spy), pseudo_test2.html (pseudo
+  varianty A-D), grad_test.html (gradient smery), mm_test.html (mousemove).
+
 ## Session N+49b: KOMPLETNI vycisteni znameho bug backlogu (8 fixu) pred user kolem
 
 Vsechno zname neopravene z HANDOFF/TODO/docx opraveno (krome particles/bytecode
