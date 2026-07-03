@@ -3838,6 +3838,50 @@ impl WebView {
                 };
                 set_layer_root_y(&mut tree, id, target_y);
             }
+            // IntersectionObserver eval i behem scroll fast-path framu. IO drive
+            // bezel JEN ve full pipeline -> pri cistem scrollu (vsechny framy
+            // fast-path) se scroll-spy nav aktualizoval az "kdyz se neco triggne"
+            // (prvni full frame z jineho duvodu). Recty se pri cistem scrollu
+            // nemeni (content coords) - staci last_layout_root + novy viewport.
+            // JS callback pripadne zmutuje DOM (nav .active) -> dirty -> full
+            // paint dalsi frame prekresli.
+            let has_io = self.interpreter.as_ref()
+                .map(|i| !i.intersection_observers.borrow().is_empty())
+                .unwrap_or(false);
+            if has_io {
+                if let Some(root) = self.last_layout_root.as_ref() {
+                    fn collect_rects_sf(bx: &crate::browser::layout::LayoutBox,
+                                        ox: f32, oy: f32,
+                                        out: &mut std::collections::HashMap<usize, (f32, f32, f32, f32)>) {
+                        if let Some(n) = &bx.node {
+                            let id = std::rc::Rc::as_ptr(n) as usize;
+                            out.insert(id, (bx.rect.x - ox, bx.rect.y - oy, bx.rect.width, bx.rect.height));
+                        }
+                        let cox = ox + bx.scroll_offset_x;
+                        let coy = oy + bx.scroll_offset_y;
+                        for ch in &bx.children { collect_rects_sf(ch, cox, coy, out); }
+                    }
+                    let mut rect_map: std::collections::HashMap<usize, (f32, f32, f32, f32)> =
+                        std::collections::HashMap::new();
+                    collect_rects_sf(root, 0.0, 0.0, &mut rect_map);
+                    let vw = self.viewport_w / self.zoom.max(0.01);
+                    let vh = self.viewport_h / self.zoom.max(0.01);
+                    let viewport_rect = (self.scroll_x, self.scroll_y, vw, vh);
+                    let ver_before = self.interpreter.as_ref().map(|i| i.dom_version()).unwrap_or(0);
+                    if let Some(interp) = self.interpreter.as_mut() {
+                        interp.fire_intersection_observers(
+                            |id| rect_map.get(&id).copied(),
+                            viewport_rect,
+                        );
+                    }
+                    // IO callback zmutoval DOM (nav .active apod.) -> dirty, aby
+                    // dalsi frame (RAF/anim tick) udelal full paint se zmenou.
+                    let ver_after = self.interpreter.as_ref().map(|i| i.dom_version()).unwrap_or(0);
+                    if ver_after != ver_before {
+                        self.dirty = true;
+                    }
+                }
+            }
             // Re-emit overlay (scrollbar thumb + canvas ops - oboje zavisi na
             // scroll_y). Canvas ops jsou overlay; bez re-emitu by canvas behem
             // scroll fast-path framu ZMIZEL a objevil se az pri full paintu

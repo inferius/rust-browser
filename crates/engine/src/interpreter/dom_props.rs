@@ -7,6 +7,38 @@ use std::collections::HashMap;
 use super::{JsValue, JsObject};
 use super::helpers::native;
 
+/// Bundle DOM version counteru interpreteru pro detached natives (classList,
+/// style proxy). Native closures nemaji pristup k Interpreter &self, takze
+/// bumpaji primo pres sdilene Rc<Cell>. MUSI zrcadlit semantiku
+/// Interpreter::bump_dom_version* metod (mod.rs) - drive classList bumpal jen
+/// base counter, takze po splitu counteru (dom_style_version) cascade cache
+/// NEinvalidovala = classList.add('active') se vizualne neprojevil.
+#[derive(Clone)]
+pub(crate) struct DomVersionCells {
+    pub base: Rc<std::cell::Cell<u64>>,
+    pub style: Rc<std::cell::Cell<u64>>,
+    pub layout: Rc<std::cell::Cell<u64>>,
+    pub matchv: Rc<std::cell::Cell<u64>>,
+}
+
+impl DomVersionCells {
+    /// = Interpreter::bump_dom_version() - match-relevantni mutace (class zmeny
+    /// meni selector matching -> full cascade invalidate).
+    pub(crate) fn bump_all(&self) {
+        self.base.set(self.base.get().wrapping_add(1));
+        self.style.set(self.style.get().wrapping_add(1));
+        self.layout.set(self.layout.get().wrapping_add(1));
+        self.matchv.set(self.matchv.get().wrapping_add(1));
+    }
+    /// = Interpreter::bump_dom_version_style_only() - inline style VALUE zmeny
+    /// (nemeni matching, per-element cascade cache prezije = incremental walk).
+    pub(crate) fn bump_style_only(&self) {
+        self.base.set(self.base.get().wrapping_add(1));
+        self.style.set(self.style.get().wrapping_add(1));
+        self.layout.set(self.layout.get().wrapping_add(1));
+    }
+}
+
 /// Vrati style objekt s persistentnim ulozenim - cache pres Weak v interp.
 /// Pri opakovanem volani vrati stejnou Rc instanci, takze setter v JS:
 ///   el.style.display = 'none'
@@ -16,6 +48,7 @@ use super::helpers::native;
 pub(crate) fn get_or_create_style_object(
     cache: &Rc<RefCell<HashMap<usize, Weak<RefCell<JsObject>>>>>,
     node: Rc<crate::browser::dom::NodeData>,
+    versions: DomVersionCells,
 ) -> JsValue {
     let key = Rc::as_ptr(&node) as usize;
     // Try lookup
@@ -27,7 +60,7 @@ pub(crate) fn get_or_create_style_object(
         }
     }
     // Create new + insert
-    let obj_rc = build_style_object(Rc::clone(&node));
+    let obj_rc = build_style_object(Rc::clone(&node), versions);
     cache.borrow_mut().insert(key, Rc::downgrade(&obj_rc));
     // Cleanup stale entries (Weak::strong_count==0) - lazy GC
     cache.borrow_mut().retain(|_, w| w.strong_count() > 0);
@@ -61,7 +94,10 @@ fn refresh_style_from_attr(obj: &Rc<RefCell<JsObject>>, node: &Rc<crate::browser
     obj.borrow_mut().set("cssText".into(), JsValue::Str(style_str));
 }
 
-fn build_style_object(node: Rc<crate::browser::dom::NodeData>) -> Rc<RefCell<JsObject>> {
+fn build_style_object(
+    node: Rc<crate::browser::dom::NodeData>,
+    versions: DomVersionCells,
+) -> Rc<RefCell<JsObject>> {
     let obj_rc = Rc::new(RefCell::new(JsObject::new()));
     // Internal: drzime Rc na node pro setter sync (eval_expr.rs)
     obj_rc.borrow_mut().set("__style_node__".into(), JsValue::DomNode(Rc::clone(&node)));
@@ -71,12 +107,16 @@ fn build_style_object(node: Rc<crate::browser::dom::NodeData>) -> Rc<RefCell<JsO
     {
         let n = Rc::clone(&node);
         let o_weak = Rc::downgrade(&obj_rc);
+        let vers = versions.clone();
         obj_rc.borrow_mut().set("setProperty".into(), native("style.setProperty", move |args| {
             let mut it = args.into_iter();
             let prop = it.next().map(|v| v.to_string()).unwrap_or_default();
             let val  = it.next().map(|v| v.to_string()).unwrap_or_default();
-            update_style_attr(&n, &prop, &val);
+            let changed = update_style_attr(&n, &prop, &val);
             if let Some(o) = o_weak.upgrade() { refresh_style_from_attr(&o, &n); }
+            // Inline style value zmena -> style+layout bump (cascade cache miss),
+            // matching se nemeni. Drive ZADNY bump = zmena vizualne nevidena.
+            if changed { vers.bump_style_only(); }
             Ok(JsValue::Undefined)
         }));
     }
@@ -101,6 +141,7 @@ fn build_style_object(node: Rc<crate::browser::dom::NodeData>) -> Rc<RefCell<JsO
     {
         let n = Rc::clone(&node);
         let o_weak = Rc::downgrade(&obj_rc);
+        let vers = versions.clone();
         obj_rc.borrow_mut().set("removeProperty".into(), native("style.removeProperty", move |args| {
             let prop = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
             let style = n.attr("style").unwrap_or_default();
@@ -118,6 +159,7 @@ fn build_style_object(node: Rc<crate::browser::dom::NodeData>) -> Rc<RefCell<JsO
             }).collect();
             n.set_attr("style", &new_pairs.join("; "));
             if let Some(o) = o_weak.upgrade() { refresh_style_from_attr(&o, &n); }
+            vers.bump_style_only();
             Ok(JsValue::Str(removed))
         }));
     }
@@ -155,7 +197,9 @@ fn build_style_object(node: Rc<crate::browser::dom::NodeData>) -> Rc<RefCell<JsO
 
 /// Update nebo pridat prop do node "style" atributu (kebab nebo camel - oba
 /// se pak smapuji pri reparse). Volame z setteru `el.style.display = ...`.
-pub(crate) fn update_style_attr(node: &Rc<crate::browser::dom::NodeData>, prop: &str, val: &str) {
+/// Vraci true pokud se attr realne zmenil - caller pak bumpa style verzi
+/// (no-op set stejne hodnoty per-frame nesmi invalidovat cascade cache).
+pub(crate) fn update_style_attr(node: &Rc<crate::browser::dom::NodeData>, prop: &str, val: &str) -> bool {
     // Convert camelCase -> kebab-case pri pridani do attr
     let kebab = camel_to_kebab(prop);
     let style = node.attr("style").unwrap_or_default();
@@ -177,7 +221,12 @@ pub(crate) fn update_style_attr(node: &Rc<crate::browser::dom::NodeData>, prop: 
     if !found && !val.is_empty() {
         new_pairs.push(format!("{kebab}: {val}"));
     }
-    node.set_attr("style", &new_pairs.join("; "));
+    let new_style = new_pairs.join("; ");
+    let changed = new_style != style;
+    if changed {
+        node.set_attr("style", &new_style);
+    }
+    changed
 }
 
 pub(crate) fn camel_to_kebab(s: &str) -> String {
@@ -198,23 +247,22 @@ pub(crate) fn camel_to_kebab(s: &str) -> String {
 /// Methods: add/remove/toggle/contains/replace/item, forEach, value, length,
 /// indexed access ([0], [1], ...), Symbol.iterator.
 ///
-/// dom_version Rc shared with Interpreter - mutations bump counter aby cascade
-/// cache invalidate. Bez tohoto classList.add nezpusobil re-render (style_map
-/// caché vrátí stale entry pro .selected/.active class swaps).
+/// DomVersionCells shared with Interpreter - class mutace bump VSECHNY countery
+/// (bump_all = match+style+layout+base), protoze class meni selector matching.
+/// Drive bumpal jen base dom_version -> po splitu counteru cascade cache
+/// (dom_style_version) NEinvalidovala = scroll-spy .active se neprebarvil.
 pub(crate) fn create_class_list(
     node: Rc<crate::browser::dom::NodeData>,
-    dom_version: Rc<std::cell::Cell<u64>>,
+    versions: DomVersionCells,
 ) -> JsValue {
     let obj_rc = Rc::new(RefCell::new(JsObject::new()));
     // Marker pro identifikaci tokenu listu
     obj_rc.borrow_mut().set("__dom_token_list__".into(), JsValue::Bool(true));
     obj_rc.borrow_mut().set("__token_list_node__".into(),
         JsValue::DomNode(Rc::clone(&node)));
-    let bump = move |dv: &Rc<std::cell::Cell<u64>>| dv.set(dv.get().wrapping_add(1));
     {
         let n = Rc::clone(&node);
-        let dv = Rc::clone(&dom_version);
-        let bump = bump.clone();
+        let vers = versions.clone();
         obj_rc.borrow_mut().set("add".into(), native("classList.add", move |args| {
             let class = n.attr("class").unwrap_or_default();
             let mut classes: Vec<String> = class.split_whitespace().map(String::from).collect();
@@ -225,15 +273,14 @@ pub(crate) fn create_class_list(
             }
             if changed {
                 n.set_attr("class", &classes.join(" "));
-                bump(&dv);
+                vers.bump_all();
             }
             Ok(JsValue::Undefined)
         }));
     }
     {
         let n = Rc::clone(&node);
-        let dv = Rc::clone(&dom_version);
-        let bump = bump.clone();
+        let vers = versions.clone();
         obj_rc.borrow_mut().set("remove".into(), native("classList.remove", move |args| {
             let class = n.attr("class").unwrap_or_default();
             let mut classes: Vec<String> = class.split_whitespace().map(String::from).collect();
@@ -244,15 +291,14 @@ pub(crate) fn create_class_list(
             }
             if classes.len() != pre_len {
                 n.set_attr("class", &classes.join(" "));
-                bump(&dv);
+                vers.bump_all();
             }
             Ok(JsValue::Undefined)
         }));
     }
     {
         let n = Rc::clone(&node);
-        let dv = Rc::clone(&dom_version);
-        let bump = bump.clone();
+        let vers = versions.clone();
         obj_rc.borrow_mut().set("toggle".into(), native("classList.toggle", move |args| {
             let mut it = args.into_iter();
             let name = it.next().map(|v| v.to_string()).unwrap_or_default();
@@ -275,7 +321,7 @@ pub(crate) fn create_class_list(
             }
             if want != has {
                 n.set_attr("class", &classes.join(" "));
-                bump(&dv);
+                vers.bump_all();
             }
             Ok(JsValue::Bool(want))
         }));
@@ -293,6 +339,7 @@ pub(crate) fn create_class_list(
     // existuje, nahradi ho newToken (preserve poradi); vrati Bool zmena.
     {
         let n = Rc::clone(&node);
+        let vers = versions.clone();
         obj_rc.borrow_mut().set("replace".into(), native("classList.replace", move |args| {
             let mut it = args.into_iter();
             let old = it.next().map(|v| v.to_string()).unwrap_or_default();
@@ -309,6 +356,7 @@ pub(crate) fn create_class_list(
             }
             if replaced {
                 n.set_attr("class", &classes.join(" "));
+                vers.bump_all();
             }
             Ok(JsValue::Bool(replaced))
         }));

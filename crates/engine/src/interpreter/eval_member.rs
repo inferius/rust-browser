@@ -628,7 +628,7 @@ impl Interpreter {
                     }
                     // classList - vraci JsObject s methods (add/remove/toggle/contains)
                     "classList" => {
-                        return Ok(dom_props::create_class_list(Rc::clone(&n), Rc::clone(&self.dom_version)));
+                        return Ok(dom_props::create_class_list(Rc::clone(&n), self.version_cells()));
                     }
                     // dataset - vraci JsObject se vsemi data-* atributy
                     "dataset" => {
@@ -637,7 +637,7 @@ impl Interpreter {
                     // style - CSSStyleDeclaration object (cached, persistuje pri setteru)
                     "style" => {
                         return Ok(dom_props::get_or_create_style_object(
-                            &self.style_cache, Rc::clone(&n),
+                            &self.style_cache, Rc::clone(&n), self.version_cells(),
                         ));
                     }
                     // offsetWidth/Height/Left/Top - rect z layout_lookup (rounded).

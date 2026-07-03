@@ -1097,6 +1097,17 @@ impl Interpreter {
         self.dom_match_version.get()
     }
 
+    /// Bundle version cells pro detached natives (classList, style proxy) -
+    /// native closures nemaji &self, bumpaji pres sdilene Rc<Cell> clones.
+    pub(crate) fn version_cells(&self) -> dom_props::DomVersionCells {
+        dom_props::DomVersionCells {
+            base: Rc::clone(&self.dom_version),
+            style: Rc::clone(&self.dom_style_version),
+            layout: Rc::clone(&self.dom_layout_version),
+            matchv: Rc::clone(&self.dom_match_version),
+        }
+    }
+
     /// Bump content + LAYOUT verzi, ne style. Pro textContent/value - meni
     /// velikost textu (re-layout) ale neovlivnuje kaskadu (krome vzacneho
     /// :empty). Cascade cache (dom_style_version) prezije = no re-cascade per

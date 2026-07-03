@@ -711,6 +711,8 @@ impl Interpreter {
                             let node_val = o.borrow().props.get("__token_list_node__").cloned();
                             if let Some(JsValue::DomNode(n)) = node_val {
                                 n.set_attr("class", &val.to_string());
+                                // Class zmena = matching-relevantni -> full bump.
+                                self.bump_dom_version();
                                 o.borrow_mut().props.insert("value".into(), val);
                                 return Ok(());
                             }
@@ -725,14 +727,23 @@ impl Interpreter {
                             let style_node = o.borrow().props.get("__style_node__").cloned();
                             if let Some(JsValue::DomNode(n)) = style_node {
                                 let value_str = val.to_string();
-                                super::dom_props::update_style_attr(&n, &key, &value_str);
+                                // Inline style value zmena -> style+layout bump (cascade
+                                // cache miss), matching nezmenen. Drive ZADNY bump =
+                                // el.style.x = y se vizualne neprojevil (stale cascade).
+                                if super::dom_props::update_style_attr(&n, &key, &value_str) {
+                                    self.bump_dom_version_style_only();
+                                }
                             }
                         }
                         // cssText specialni - prepise cely style
                         if key == "cssText" {
                             let style_node = o.borrow().props.get("__style_node__").cloned();
                             if let Some(JsValue::DomNode(n)) = style_node {
-                                n.set_attr("style", &val.to_string());
+                                let new_style = val.to_string();
+                                if n.attr("style").unwrap_or_default() != new_style {
+                                    n.set_attr("style", &new_style);
+                                    self.bump_dom_version_style_only();
+                                }
                             }
                         }
                         o.borrow_mut().props.insert(key, val);
