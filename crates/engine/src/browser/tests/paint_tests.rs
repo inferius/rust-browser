@@ -1744,21 +1744,27 @@ fn main_scrollbar_emits_when_layout_overflows_viewport() {
     let pre_len = cmds.len();
     paint::emit_main_scrollbar_overlay(&layout_root, &mut cmds, 800.0, 600.0, 0.0, 0.0);
     let post_len = cmds.len();
-    // Emit pridava 2 Rects: track + thumb na konci. Canvas bg uz NEemittuje
+    // Emit pridava 4 cmds: track Rect + thumb Rect + 2 sipky (ClippedRect
+    // trojuhelniky, Chrome-like arrow buttons). Canvas bg uz NEemittuje
     // (D4 clear color / monolithic insert resi caller pres canvas_background()
     // - insert(0) tady rozbijel d4_overlay_start indexing).
-    assert_eq!(post_len - pre_len, 2,
-        "expected 2 Rects (track + thumb), got {} ({} -> {})", post_len - pre_len, pre_len, post_len);
+    assert_eq!(post_len - pre_len, 4,
+        "expected track + thumb + 2 arrows, got {} ({} -> {})", post_len - pre_len, pre_len, post_len);
     // canvas_background() vraci body bg pro caller.
     let bg = paint::canvas_background(&layout_root);
     assert_eq!(bg, Some([255, 255, 255, 255]), "canvas bg ma byt body #fff, got {:?}", bg);
-    // Track = predposledni, thumb = posledni. Track right edge = viewport_w.
-    let track = &cmds[post_len - 2];
+    // Poradi: track Rect, thumb Rect, 2x arrow ClippedRect. Track right edge
+    // = viewport_w.
+    let track = &cmds[post_len - 4];
     if let DisplayCommand::Rect { x, w, .. } = track {
         assert!((*x + *w - 800.0).abs() < 1.0, "track right edge {} != viewport_w 800", *x + *w);
     } else {
         panic!("expected Rect for scrollbar track, got {:?}", track);
     }
+    assert!(matches!(&cmds[post_len - 2], DisplayCommand::ClippedRect { .. }),
+        "predposledni cmd ma byt arrow ClippedRect");
+    assert!(matches!(&cmds[post_len - 1], DisplayCommand::ClippedRect { .. }),
+        "posledni cmd ma byt arrow ClippedRect");
 }
 
 #[test]
