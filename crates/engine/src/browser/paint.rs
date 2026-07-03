@@ -3055,19 +3055,32 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
                     }
                 }
                 "wavy" => {
-                    // Approx: zigzag s krokem ~6px
-                    let step = 4.0;
-                    let amp = 2.0;
+                    // Hladka sinusovka pres slanted quad segmenty - ClippedRect
+                    // ma polygon edge AA. Drive zigzag horizontalnich Rectu po
+                    // 4px = zubata schodovita linka (docx r.23 "zubate linky,
+                    // je to vektor, ma byt hladke jako v Chrome").
+                    let amp = thickness.max(1.5);
+                    let wavelength = (thickness * 4.0).max(6.0);
+                    let seg = 2.0_f32;
+                    let half_t = (thickness * 0.5).max(0.75);
+                    let y_mid = base_y + amp;
+                    let wave = |px: f32| -> f32 {
+                        y_mid + amp * ((px - text_x) / wavelength
+                            * std::f32::consts::TAU).sin()
+                    };
                     let mut x = text_x;
-                    let mut up = true;
                     while x < text_x + text_w {
-                        let y = if up { base_y } else { base_y + amp };
-                        cmds.push(DisplayCommand::Rect {
-                            x, y, w: step, h: thickness,
-                            color: dec_color, radius: 0.0,
+                        let x2 = (x + seg).min(text_x + text_w);
+                        let y1 = wave(x);
+                        let y2 = wave(x2);
+                        cmds.push(DisplayCommand::ClippedRect {
+                            color: dec_color,
+                            points: vec![
+                                (x,  y1 - half_t), (x2, y2 - half_t),
+                                (x2, y2 + half_t), (x,  y1 + half_t),
+                            ],
                         });
-                        x += step;
-                        up = !up;
+                        x = x2;
                     }
                 }
                 _ /* solid */ => {

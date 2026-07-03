@@ -145,7 +145,17 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VOut {
 
 @fragment
 fn fs_main(in: VOut) -> @location(0) vec4<f32> {
-    return textureSample(src_tex, src_smp, in.uv);
+    let c = textureSample(src_tex, src_smp, in.uv);
+    // Edge AA: ~1px feather na okrajich quadu (fwidth v UV prostoru,
+    // relativne k uv_box sub-regionu). Bez toho ma rotovany layer quad
+    // tvrde zubate hrany (docx r.23 "zubate hrany natocenych ctverecku").
+    // Pro axis-aligned translate je feather ~1 texel = vizualne neutralni.
+    let fw = fwidth(in.uv);
+    let ex = smoothstep(tp.uv_box.x, tp.uv_box.x + fw.x, in.uv.x)
+           * (1.0 - smoothstep(tp.uv_box.z - fw.x, tp.uv_box.z, in.uv.x));
+    let ey = smoothstep(tp.uv_box.y, tp.uv_box.y + fw.y, in.uv.y)
+           * (1.0 - smoothstep(tp.uv_box.w - fw.y, tp.uv_box.w, in.uv.y));
+    return c * ex * ey;
 }
 "#;
 

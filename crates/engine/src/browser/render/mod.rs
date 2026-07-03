@@ -6076,7 +6076,10 @@ impl Renderer {
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
-                    binding: 2, visibility: wgpu::ShaderStages::VERTEX,
+                    // VERTEX i FRAGMENT: fs_main cte tp.uv_box pro edge AA
+                    // feather (zubate hrany rotovanych layeru; docx r.23).
+                    binding: 2, visibility: wgpu::ShaderStages::VERTEX
+                        .union(wgpu::ShaderStages::FRAGMENT),
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false, min_binding_size: None,
