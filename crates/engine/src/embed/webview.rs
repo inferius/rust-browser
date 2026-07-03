@@ -5102,7 +5102,13 @@ impl WebView {
                     // PER-ELEMENT ::selection: kazdy hit nese selection_bg/color
                     // sveho boxu. Scoped `.foo::selection` se drzi jen ve .foo.
                     let mut hits: Vec<(f32, f32, f32, f32, Option<[u8; 4]>, Option<[u8; 4]>)> = Vec::new();
-                    collect_text_lines(&layout_root, start.0, start.1, end.0, end.1, &mut hits);
+                    // Selection zacata v pinned (fixed/sticky) subtree -> sbirej
+                    // JEN v nem; jinak pinned subtrees preskoc (sidebar/topbar
+                    // se nevybiraji pri tazeni pres content - Chrome parity).
+                    match find_pinned_subtree(&layout_root, a.0, a.1) {
+                        Some(pin) => collect_text_lines(pin, start.0, start.1, end.0, end.1, false, &mut hits),
+                        None => collect_text_lines(&layout_root, start.0, start.1, end.0, end.1, true, &mut hits),
+                    }
                     // CHROME-STYLE selection painting:
                     // 1) SYTY highlight (plna alpha; Chrome default #3297FD).
                     // 2) Text se PREBARVI kontrastni barvou - ale JEN vybrane
@@ -6053,11 +6059,37 @@ fn populate_layout_rects(
     }
 }
 
+/// Najde nejhlubsi FIXED/STICKY subtree obsahujici bod (content coords).
+/// Pouziti: selection zacata v pinned oblasti (sidebar/topbar) se omezi na ni;
+/// jinak se pinned subtrees ze selection VYNECHAJI (Chrome: tazeni pres
+/// content nevybira fixed/sticky navigaci co se s nim jen vizualne prekryva).
+fn find_pinned_subtree<'a>(
+    b: &'a crate::browser::layout::LayoutBox,
+    x: f32, y: f32,
+) -> Option<&'a crate::browser::layout::LayoutBox> {
+    for ch in &b.children {
+        if let Some(p) = find_pinned_subtree(ch, x, y) { return Some(p); }
+    }
+    let pinned = matches!(b.position,
+        crate::browser::layout::Position::Fixed | crate::browser::layout::Position::Sticky);
+    let inside = x >= b.rect.x && x < b.rect.x + b.rect.width
+        && y >= b.rect.y && y < b.rect.y + b.rect.height;
+    if pinned && inside { Some(b) } else { None }
+}
+
 fn collect_text_lines(
     b: &crate::browser::layout::LayoutBox,
     sx: f32, sy: f32, ex: f32, ey: f32,
+    skip_pinned: bool,
     out: &mut Vec<(f32, f32, f32, f32, Option<[u8; 4]>, Option<[u8; 4]>)>,
 ) {
+    // Selection band je Y-pasmo pres celou sirku - fixed/sticky bloky (sidebar,
+    // topbar) do nej spadnou i kdyz tazeni probiha v content area ("vybira i
+    // menu"). Pri skip_pinned je preskocime cele.
+    if skip_pinned && matches!(b.position,
+        crate::browser::layout::Position::Fixed | crate::browser::layout::Position::Sticky) {
+        return;
+    }
     if let Some(text) = &b.text {
         // line_start_x musi pouzit pad_l + border (stejny jako paint.rs
         // text_x = bx.rect.x + pad_l + align_offset). Bez tohoto byla
@@ -6114,7 +6146,7 @@ fn collect_text_lines(
         }
     }
     for ch in &b.children {
-        collect_text_lines(ch, sx, sy, ex, ey, out);
+        collect_text_lines(ch, sx, sy, ex, ey, skip_pinned, out);
     }
 }
 
