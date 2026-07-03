@@ -2715,6 +2715,25 @@ impl WebView {
                             return response;
                         }
                     }
+                    // Resize grip (CSS resize) MA PRIORITU pred inner scrollbar
+                    // hit-testem - grip roh (16x16 vpravo dole) se prekryva s
+                    // bar zonou (pravy sloupec boxu). Drive inner-bar zkonzumoval
+                    // down v gripu -> CQ resize demo nešlo chytit (docx r.51).
+                    {
+                        let gx = x + self.scroll_x;
+                        let gy = y + self.scroll_y;
+                        let grip_hit_early = self.last_layout_root.as_ref()
+                            .and_then(|root| find_resize_grip(root, gx, gy));
+                        if let Some((node, w, h, axis)) = grip_hit_early {
+                            if std::env::var("RWE_RESIZE_DBG").is_ok() {
+                                eprintln!("[RESIZE] grip grab content=({:.0},{:.0}) axis={}", gx, gy, axis);
+                            }
+                            self.resize_drag = Some((node, gx, gy, w, h, axis));
+                            response.dirty = true;
+                            self.dirty = true;
+                            return response;
+                        }
+                    }
                     // Inner scrollbar thumb/track drag - walk path k nejhlubsimu
                     // scrollable boxu pod kurzorem. Bar je vpravo dole rect.
                     use crate::browser::scroll::Scrollable;

@@ -1181,8 +1181,17 @@ html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #
             return self.webview.as_mut()
                 .map(|wv| wv.handle_input(event)).unwrap_or_default();
         }
-        let in_chrome = self.point_in_chrome(self.mouse_y);
-        let in_dev = !in_chrome && self.point_in_devtools(self.mouse_y);
+        // Route dle Y z EVENTU (fallback last mouse_y pro non-pozicni eventy).
+        // Drive vzdy self.mouse_y (posledni CursorMoved) - down/up/scroll bez
+        // predchoziho move (napr. testovaci PostMessage) sel do spatneho pane.
+        let event_y = match &event {
+            InputEvent::MouseMove { y, .. } | InputEvent::MouseDown { y, .. }
+            | InputEvent::MouseUp { y, .. } | InputEvent::Scroll { y, .. } => Some(*y),
+            _ => None,
+        };
+        let ref_y = event_y.unwrap_or(self.mouse_y);
+        let in_chrome = self.point_in_chrome(ref_y);
+        let in_dev = !in_chrome && self.point_in_devtools(ref_y);
         let y_off = if in_chrome { 0.0 }
                     else if in_dev { self.devtools_y_offset() }
                     else { self.chrome_h };  // page area starts at chrome_h
