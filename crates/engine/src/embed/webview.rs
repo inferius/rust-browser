@@ -5216,6 +5216,19 @@ impl WebView {
                     let options: Vec<std::rc::Rc<crate::browser::dom::Node>> = select_node.children.borrow()
                         .iter().filter(|c| c.tag_name().as_deref() == Some("option")).cloned().collect();
                     let popup_h = opt_h * options.len() as f32;
+                    // Barvy popupu z computed stylu SELECTU (dark stranka = dark
+                    // popup, Chrome parity) - drive hardcoded bily/svetly = "popup
+                    // sviti" na dark theme. Fallbacky = puvodni svetle schema.
+                    let sel_bx = crate::browser::paint::find_box_by_node_id(&layout_root, select_id);
+                    let bg = sel_bx.and_then(|b| b.bg_color).unwrap_or([255, 255, 255, 255]);
+                    let bg = [bg[0], bg[1], bg[2], 255u8]; // popup vzdy opaque
+                    let fg = sel_bx.and_then(|b| b.text_color).unwrap_or([40, 40, 50, 255]);
+                    let border = sel_bx.and_then(|b| b.border_color).unwrap_or([200, 200, 210, 255]);
+                    let accent = sel_bx.and_then(|b| b.accent_color);
+                    let bg_dark = (bg[0] as u32 + bg[1] as u32 + bg[2] as u32) < 384;
+                    // Hover radek: svetle/tmave prosvetleni dle luma pozadi.
+                    let hover_col: [u8; 4] = if bg_dark { [255, 255, 255, 28] } else { [230, 240, 255, 255] };
+                    let sel_col = accent.unwrap_or(if bg_dark { [140, 190, 255, 255] } else { [26, 115, 232, 255] });
                     if popup_h > 0.0 {
                         display_list.push(crate::browser::paint::DisplayCommand::Shadow {
                             x: popup_x, y: popup_y, w: anchor_w, h: popup_h,
@@ -5224,11 +5237,11 @@ impl WebView {
                         });
                         display_list.push(crate::browser::paint::DisplayCommand::Rect {
                             x: popup_x, y: popup_y, w: anchor_w, h: popup_h,
-                            color: [255, 255, 255, 255], radius: 4.0,
+                            color: bg, radius: 4.0,
                         });
                         display_list.push(crate::browser::paint::DisplayCommand::Border {
                             x: popup_x, y: popup_y, w: anchor_w, h: popup_h,
-                            width: 1.0, color: [200, 200, 210, 255],
+                            width: 1.0, color: border,
                         });
                     }
                     for (idx, opt) in options.iter().enumerate() {
@@ -5238,15 +5251,17 @@ impl WebView {
                         if hovered {
                             display_list.push(crate::browser::paint::DisplayCommand::Rect {
                                 x: popup_x, y: opt_y, w: anchor_w, h: opt_h,
-                                color: [230, 240, 255, 255], radius: 0.0,
+                                color: hover_col, radius: 0.0,
                             });
                         }
+                        // Aktualne vybrana option: accent barva textu (Chrome-like zvyrazneni).
+                        let is_selected = opt.attributes.borrow().contains_key("selected");
                         let txt = opt.text_content().trim().to_string();
                         display_list.push(crate::browser::paint::DisplayCommand::Text {
                             x: popup_x + pad_l, y: opt_y + 6.0,
                             content: txt,
-                            color: [40, 40, 50, 255],
-                            font_size: 14.0, bold: false, font_weight: 400,
+                            color: if is_selected { sel_col } else { fg },
+                            font_size: 14.0, bold: is_selected, font_weight: if is_selected { 700 } else { 400 },
                             italic: false,
                             font_family: String::new(),
                             strikethrough: false, underline: false,
