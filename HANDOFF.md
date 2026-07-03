@@ -42,10 +42,19 @@ reload za klidu (0 za 14s x N). Pod instrumentaci nereprodukovatelne (0/30+).
 Pravdepodobne sum test harness (SetForegroundWindow valka pmclick/cap3 s dev
 prostredim). Fix 0d12b53 zaruci, ze REALNY panic uz nebude vypadat stejne.
 
-### ZBYVA - zname deep items (nemenilo se)
-mix-blend pruh dole (GPU compose backdrop region), writing-mode glyf rotace,
-marquee overflow leak (GPU transform obsah vs CPU clip - text viditelne
-pretejka vlevo od marquee boxu), select option popup styling, scrollbar sipky.
+### SHIPPED navic: `3528089` GPU scissor overflow clip (marquee leak VYRESEN)
+LayerNode.clip_rect (ancestor overflow clip, world coords, intersekce) +
+COMPOSE_SCISSOR thread-local aplikovany vsemi 3 compose cestami (plain/
+transform/blend). Marquee text uz nepretejka mimo overflow:hidden box (overeno
+staticky + anim + scroll; fast-pathy funguji - clip zije v layer tree).
+POZN pro mix-blend pruh: scissor ho NEFIXNE - pruh je UVNITR dst_box quadu
+(src_uv sampluje mimo layer texturu ~10px na spodku = raw pink). Chce fix
+UV/geometrie v compose_blend_layer_batch, ne clip.
+
+### ZBYVA - zname deep items
+mix-blend pruh dole (GPU compose src_uv/geometrie, viz pozn. vyse), writing-mode
+glyf rotace, select option popup styling, scrollbar sipky + ::-webkit-scrollbar
+styling, particles 26 FPS (interpreter O(n^2) hot-path -> bytecode VM smer).
 
 ## Session N+48: IN-PLACE LAYOUT (PLAN B) - 2 SHIPPED commity (move misto clone)
 
