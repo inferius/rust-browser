@@ -10,20 +10,13 @@ Konvence:
 
 ---
 
-## Rendering bugs (session N+24)
+## Rendering bugs (session N+24; re-triage N+49b)
 
-- [ ] **Filter color matrix pri D4 layer mode**
-  Quick fix bypass offscreen + barvy = text sharp ale ztracene barevne efekty
-  (sepia/hue-rotate/grayscale). Full fix vyzaduje per-LAYER offscreen RT alloc
-  (= namisto config-sized shared offscreen, alloc tex matching layer dims).
-  Hook v `Renderer::draw_to_offscreen` + `compose_offscreen` musi accept layer
-  ctx + alloc.
+- [x] **Filter color matrix pri D4 layer mode** - OVERENO OK na aktualnim buildu
+  (sekce 08: sepia/hue-rotate/grayscale/invert/saturate vsechny barevne spravne).
 
-- [ ] **Transform 2D corner cuts pres rotace**
-  Pri rotated quad mimo axis-aligned layer.root_rect bbox dochazi clip. Layer
-  texture sized = pre-transform bbox. Rotated content extends past, hrany
-  uriznute. Fix: rozsirit layer.root_rect na transformed AABB (= orig * sqrt(2)
-  pri 45deg). Compose ma cely content + rotate.
+- [x] **Transform 2D corner cuts pres rotace** - OVERENO OK (hover rotate(45deg)
+  + spin keyframes: rohy cele, zadny clip; compose rotuje cely quad textury).
 
 - [ ] **Animation text missing (.anim-box slide first item)**
   Slide animation rect.x menu kazdy frame. Damage=Some -> layer re-raster.
@@ -42,11 +35,10 @@ Konvence:
   viewport_w/zoom = correct mensi. Mozna body width set NEFRAGMENTNIM
   viewport_w (pre-zoom value).
 
-- [ ] **WebGL canvas empty (white square)**
-  test.html WebGL section pres canvas.getContext("webgl") + clearColor + clear.
-  webgl_states populated po JS run. run_webgl_frame iteruje canvas tags ale
-  user vidi prazdny canvas. Diagnose: walk_webgl reaches canvas? draw_queue
-  contains Clear? run_webgl_frame writes to right target?
+- [x] **WebGL canvas empty (white square)** - FIXED N+49b: kreslil se (run_webgl_
+  frame OK), ale scroll/anim fast-path re-compose z textur ho prepsal (stejny
+  bug jako Canvas2D mizeni, N+41 fixnul jen 2D). Ted oba fast-pathy delaji
+  webgl re-run po compose. Overeno: canvas modry po scrollu.
 
 - [ ] **Zoom text blur (regular raster path)**
   LCD threshold zvysen 24 -> 96 (=vsechny common fs vc. zoomed pres LCD).

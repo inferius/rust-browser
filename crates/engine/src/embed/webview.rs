@@ -3715,6 +3715,17 @@ impl WebView {
                         self.scroll_x, self.scroll_y, self.zoom, self.scale_factor,
                         &self.last_overlay_cmds,
                     );
+                    // WebGL canvas re-draw po re-compose (viz scroll fast-path -
+                    // jinak WebGL canvas behem anim-only framu zmizel).
+                    if let Some(interp) = self.interpreter.as_ref() {
+                        let states_rc = interp.webgl_states.clone();
+                        let states = states_rc.borrow();
+                        if !states.is_empty() {
+                            if let Some(root) = self.last_layout_root.as_ref() {
+                                let _ = renderer.run_webgl_frame(root, target_view, &*states, self.scroll_y);
+                            }
+                        }
+                    }
                 }
                 self.last_layer_tree = Some(tree);
                 if std::env::var("RWE_GATE_DBG").is_ok() {
@@ -3838,6 +3849,19 @@ impl WebView {
                     self.scroll_x, self.scroll_y, self.zoom, self.scale_factor,
                     &overlay,
                 );
+                // WebGL canvas re-draw: run_webgl_frame kresli PO compose primo
+                // do target_view - re-compose z textur ho prepsal. Bez re-runu
+                // WebGL canvas behem fast-path framu ZMIZEL (stejny vzor jako
+                // canvas ops re-emit vyse; Canvas2D fixnut v N+41, WebGL ne).
+                if let Some(interp) = self.interpreter.as_ref() {
+                    let states_rc = interp.webgl_states.clone();
+                    let states = states_rc.borrow();
+                    if !states.is_empty() {
+                        if let Some(root) = self.last_layout_root.as_ref() {
+                            let _ = renderer.run_webgl_frame(root, target_view, &*states, self.scroll_y);
+                        }
+                    }
+                }
             }
             self.last_overlay_cmds = overlay;
             self.last_layer_tree = Some(tree);
