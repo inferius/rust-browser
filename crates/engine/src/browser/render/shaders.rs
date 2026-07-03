@@ -288,8 +288,12 @@ struct BCParams {
     src_uv: vec4<f32>,    // layer texture uv region (u0,v0,u1,v1)
     blend_mode: u32,
     opacity: f32,
-    _pad0: f32,
-    _pad1: f32,
+    // Scale duv (backdrop UV): target_dims / offscreen_b_dims. Backdrop snapshot
+    // se kopiruje 1:1 texel do offscreen_b, ale ta muze byt VETSI nez target
+    // (config/window vs page textura bez chrome baru) -> duv normalizovane na
+    // target by cetlo posunuty obsah (offset roste s y = "pruh dole" kde box
+    // blendoval s pozadi POD nim misto sveho backdropu). duv * scale = texel 1:1.
+    duv_scale: vec2<f32>,
 };
 @group(0) @binding(0) var src_tex: texture_2d<f32>;
 @group(0) @binding(1) var src_smp: sampler;
@@ -315,8 +319,9 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VOut {
     var o: VOut;
     o.clip = vec4<f32>(px, py, 0.0, 1.0);
     o.suv = vec2<f32>(mix(p.src_uv.x, p.src_uv.z, b.x), mix(p.src_uv.y, p.src_uv.w, b.y));
-    // Backdrop uv = pozice fragmentu na obrazovce (NDC -> 0..1, Y flip).
-    o.duv = vec2<f32>((px + 1.0) * 0.5, (1.0 - py) * 0.5);
+    // Backdrop uv = pozice fragmentu na obrazovce (NDC -> 0..1, Y flip),
+    // skalovane na texel-space offscreen_b (viz duv_scale doc).
+    o.duv = vec2<f32>((px + 1.0) * 0.5 * p.duv_scale.x, (1.0 - py) * 0.5 * p.duv_scale.y);
     return o;
 }
 

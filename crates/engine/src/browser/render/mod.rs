@@ -8696,13 +8696,21 @@ impl Renderer {
         let (vp_w, vp_h) = self.vp_dims();
         let (cdata, vis) = build_compose_uniform_box(&identity, x, y, w, h, 0.0, 0.0, 1.0, 1.0, vp_w, vp_h);
         if !vis { return; }
-        // BCParams: dst_box[4] + src_uv[4] + mode u32 + opacity f32 + 2 pad = 48 B.
+        // BCParams: dst_box[4] + src_uv[4] + mode u32 + opacity f32 + duv_scale vec2 = 48 B.
         let mut buf = [0u8; 48];
         // dst_box = cdata[20..24], src_uv = cdata[24..28]
         for i in 0..4 { buf[i*4..i*4+4].copy_from_slice(&cdata[20+i].to_le_bytes()); }
         for i in 0..4 { buf[16+i*4..16+i*4+4].copy_from_slice(&cdata[24+i].to_le_bytes()); }
         buf[32..36].copy_from_slice(&(mode as u32).to_le_bytes());
         buf[36..40].copy_from_slice(&opacity.clamp(0.0, 1.0).to_le_bytes());
+        // duv_scale = target/offscreen_b: backdrop kopie je 1:1 texel, ale
+        // offscreen_b muze byt vetsi (config/window) nez dst (page textura bez
+        // chrome baru) -> bez scale by duv cetlo posunuty backdrop (offset roste
+        // s y = raw pruh na spodku blend boxu, blendoval s obsahem POD sebou).
+        let dsx = dst_texture.width() as f32 / self.offscreen_tex_b.width().max(1) as f32;
+        let dsy = dst_texture.height() as f32 / self.offscreen_tex_b.height().max(1) as f32;
+        buf[40..44].copy_from_slice(&dsx.to_le_bytes());
+        buf[44..48].copy_from_slice(&dsy.to_le_bytes());
         let ubuf = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("blend_compose_uniform_batch"),
             size: 48,
