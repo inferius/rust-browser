@@ -39,8 +39,12 @@ pub(crate) fn resolve_gradient_stops_for_box(
         if period > 1e-4 && period < 1.0 {
             let base = stops.clone();
             let mut out: Vec<(f32, [u8; 4])> = Vec::new();
-            let mut k = 0usize;
-            while first_o + (k as f32) * period < 1.0 && out.len() < 96 {
+            // Rozsah [-0.25, 1.25]: u diagonalnich os presahuji rohy boxu
+            // t=[0,1] (gradient line endpointy jsou bliz nez rohy) - bez
+            // zapornych/1+ period by rohy zustaly bez pruhu (multi-stop emit
+            // extenduje jen krajni pasy = solid barva misto pokracovani vzoru).
+            let mut k: i32 = -((0.25 / period).ceil() as i32);
+            while first_o + (k as f32) * period < 1.25 && out.len() < 128 {
                 for (o, c) in &base {
                     out.push((o + (k as f32) * period, *c));
                 }

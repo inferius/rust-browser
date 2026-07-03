@@ -755,6 +755,11 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
                     use crate::browser::paint::GradientKind;
                     match kind {
                         GradientKind::Linear { angle_deg } => {
+                            if std::env::var("RWE_GRAD_DBG").is_ok() {
+                                let f: Vec<f32> = stops_f.iter().take(4).map(|s| s.0).collect();
+                                eprintln!("[GRAD-EMIT] angle={} n={} box=({},{},{}x{}) first4={:?}",
+                                    angle_deg, stops_f.len(), x, y, w, h, f);
+                            }
                             if stops_f.len() > 2 {
                                 push_multi_stop_linear_gradient(&mut verts, *x, *y, *w, *h, *angle_deg, &stops_f, *radius);
                             } else {

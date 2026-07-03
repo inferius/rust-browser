@@ -5,7 +5,7 @@
 //! 5=multi-stop, 6=radial, 7=conic, 8=blurred, atd.
 
 use super::Vertex;
-use super::polygon::{polygon_signed_area, clip_unit_square_to_axis_range};
+use super::polygon::{polygon_signed_area, clip_polygon};
 
 pub(super) fn push_rect_rounded(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
                      color: [f32; 4], radius: f32) {
@@ -410,52 +410,75 @@ pub(super) fn push_conic_gradient(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f3
 pub(super) fn push_multi_stop_linear_gradient(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
                                     angle_deg: f32, stops: &[(f32, [f32; 4])], radius: f32) {
     if stops.len() < 2 { return; }
-    // CSS edge clamp: pred prvnim stopem = solid prvni barva, za poslednim = solid
-    // posledni. Band loop nize fillne jen [first_off, last_off]; bez syntetickych
-    // edge stopu na 0/1 by oblasti mimo (napr. hard-stop "color 33% 66%" kde
-    // prvni stop > 0) zustaly TRANSPARENTNI. Prepend/append jen kdyz chybi
-    // (normalni gradient first@0/last@1 = beze zmeny).
-    let owned: Vec<(f32, [f32; 4])> = {
-        let first = stops[0];
-        let last = stops[stops.len() - 1];
-        if first.0 > 0.0 || last.0 < 1.0 {
-            let mut v = Vec::with_capacity(stops.len() + 2);
-            if first.0 > 0.0 { v.push((0.0, first.1)); }
-            v.extend_from_slice(stops);
-            if last.0 < 1.0 { v.push((1.0, last.1)); }
-            v
-        } else {
-            stops.to_vec()
-        }
-    };
-    let stops: &[(f32, [f32; 4])] = &owned;
+    // CSS gradient line v PX prostoru: dir = (sin A, -cos A) pri y-down,
+    // delka L = |w sinA| + |h cosA|, t=0/1 = endpointy line okolo stredu.
+    // Drive projekce v NORMALIZOVANEM [0,1]^2 prostoru - na ne-ctvercovem
+    // boxu sikma osa (45deg pruhy vysly ~31deg + zrcadlove; repeating-linear
+    // nesedel s Chrome, docx r.25).
+    let a_rad = angle_deg.to_radians();
+    let dirx = a_rad.sin();
+    let diry = -a_rad.cos();
     let hw = w * 0.5;
     let hh = h * 0.5;
     let cx_full = x + hw;
     let cy_full = y + hh;
-    let rad = (angle_deg - 90.0).to_radians();
-    let dx = rad.cos();
-    let dy = rad.sin();
-    // Projekce normalizovaneho bodu (nx, ny) v [0,1]^2 na osu - 0.5
-    let proj_centered = |p: (f32, f32)| (p.0 - 0.5) * dx + (p.1 - 0.5) * dy;
-    let project_norm = |p: (f32, f32)| proj_centered(p) + 0.5;
-    let map_to_screen = |np: (f32, f32)| (x + np.0 * w, y + np.1 * h);
+    let l = ((w * dirx).abs() + (h * diry).abs()).max(1e-3);
+    // Projekce px bodu -> t (0..1 = gradient line endpointy).
+    let project_t = |px: f32, py: f32| ((px - cx_full) * dirx + (py - cy_full) * diry) / l + 0.5;
+    // t rozsah pres rohy boxu: u diagonalnich os presahuje [0,1] (rohy jsou
+    // dal nez endpointy line). Krajni pasy se extenduji na t_min/t_max, aby
+    // rohy nezustaly nepokryte (drive transparentni trojuhelniky v rozich).
+    let box_pts = [(x, y), (x + w, y), (x + w, y + h), (x, y + h)];
+    let mut t_min = f32::MAX;
+    let mut t_max = f32::MIN;
+    for (px, py) in box_pts {
+        let t = project_t(px, py);
+        t_min = t_min.min(t);
+        t_max = t_max.max(t);
+    }
+    // Edge clamp: pred prvnim stopem solid prvni barva, za poslednim solid
+    // posledni (CSS spec) - synteticke stopy na t_min/t_max.
+    let owned: Vec<(f32, [f32; 4])> = {
+        let first = stops[0];
+        let last = stops[stops.len() - 1];
+        let mut v = Vec::with_capacity(stops.len() + 2);
+        if first.0 > t_min { v.push((t_min, first.1)); }
+        v.extend_from_slice(stops);
+        if last.0 < t_max { v.push((t_max, last.1)); }
+        v
+    };
+    let stops: &[(f32, [f32; 4])] = &owned;
 
     for seg in 0..stops.len() - 1 {
-        let s_a = stops[seg].0.clamp(0.0, 1.0);
-        let s_b = stops[seg + 1].0.clamp(0.0, 1.0);
+        let s_a = stops[seg].0.max(t_min);
+        let s_b = stops[seg + 1].0.min(t_max);
         if s_b <= s_a + 1e-6 { continue; }
         let c_a = stops[seg].1;
         let c_b = stops[seg + 1].1;
-        let poly = clip_unit_square_to_axis_range(dx, dy, s_a, s_b);
+        // Clip box rect na pas t in [s_a, s_b] v px prostoru - 2 pruchody
+        // Sutherland-Hodgman (kazda hranice pasu zvlast; kombinovany predikat
+        // by ztratil hrany protinajici obe hranice naraz).
+        let clip_at = |poly: &[(f32, f32)], thresh: f32, keep_above: bool| -> Vec<(f32, f32)> {
+            clip_polygon(poly, |p| {
+                let t = project_t(p.0, p.1);
+                if keep_above { t >= thresh - 1e-4 } else { t <= thresh + 1e-4 }
+            }, |a, b| {
+                let ta = project_t(a.0, a.1);
+                let tb = project_t(b.0, b.1);
+                let denom = tb - ta;
+                let f = if denom.abs() < 1e-9 { 0.0 } else { (thresh - ta) / denom };
+                (a.0 + f * (b.0 - a.0), a.1 + f * (b.1 - a.1))
+            })
+        };
+        let poly = clip_at(&box_pts, s_a, true);
+        let poly = clip_at(&poly, s_b, false);
         if poly.len() < 3 { continue; }
         // Triangulace fan z poly[0]
         for i in 1..poly.len() - 1 {
             let triplet = [poly[0], poly[i], poly[i + 1]];
-            for &np in &triplet {
-                let t_global = project_norm(np);
+            for &(px, py) in &triplet {
+                let t_global = project_t(px, py);
                 let t_local = ((t_global - s_a) / (s_b - s_a)).clamp(0.0, 1.0);
-                let (px, py) = map_to_screen(np);
                 verts.push(Vertex {
                     pos: [px, py],
                     color: c_a,

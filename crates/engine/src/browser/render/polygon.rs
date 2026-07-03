@@ -97,6 +97,9 @@ pub fn triangulate_polygon(points: &[(f32, f32)]) -> Vec<((f32, f32), (f32, f32)
     triangles
 }
 
+// Ex-helper multi-stop linear gradientu - nahrazen px-space clipem primo v
+// primitives.rs (normalized-space projekce mela aspect skew). Ponechan pro testy.
+#[allow(dead_code)]
 pub(super) fn clip_unit_square_to_axis_range(dx: f32, dy: f32, t_min: f32, t_max: f32) -> Vec<(f32, f32)> {
     let mut poly = vec![(0.0_f32, 0.0_f32), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
     let project = move |p: (f32, f32)| (p.0 - 0.5) * dx + (p.1 - 0.5) * dy;
