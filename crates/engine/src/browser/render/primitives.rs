@@ -263,14 +263,14 @@ pub(super) fn push_gradient(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: 
     let hh = h * 0.5;
     let cx = x + hw;
     let cy = y + hh;
-    let rad = (angle_deg - 90.0).to_radians();
-    let dir_x = rad.cos();
-    let dir_y = rad.sin();
+    // PX-space projekce (CSS gradient line) - viz push_multi_stop_linear_gradient.
+    // Bilinearni interpolace uv.x pres quad je pro linearni fci exaktni.
+    let a_rad = angle_deg.to_radians();
+    let dir_x = a_rad.sin();
+    let dir_y = -a_rad.cos();
+    let l = ((w * dir_x).abs() + (h * dir_y).abs()).max(1e-3);
     let project = |px: f32, py: f32| -> f32 {
-        let lx = (px - cx) / w + 0.5;
-        let ly = (py - cy) / h + 0.5;
-        let proj = (lx - 0.5) * dir_x + (ly - 0.5) * dir_y;
-        (proj + 0.5).clamp(0.0, 1.0)
+        (((px - cx) * dir_x + (py - cy) * dir_y) / l + 0.5).clamp(0.0, 1.0)
     };
     let mk = |px: f32, py: f32| -> Vertex {
         Vertex {
@@ -307,14 +307,15 @@ pub(super) fn push_clipped_linear_gradient(
     let hh = gh * 0.5;
     let cx = gx + hw;
     let cy = gy + hh;
-    let rad = (angle_deg - 90.0).to_radians();
-    let dir_x = rad.cos();
-    let dir_y = rad.sin();
+    // PX-space projekce (CSS gradient line: dir=(sinA,-cosA) y-down, delka
+    // L=|w sinA|+|h cosA|) - normalizovana [0,1]^2 projekce mela aspect skew
+    // na ne-ctvercovych boxech (viz push_multi_stop_linear_gradient).
+    let a_rad = angle_deg.to_radians();
+    let dir_x = a_rad.sin();
+    let dir_y = -a_rad.cos();
+    let l = ((gw * dir_x).abs() + (gh * dir_y).abs()).max(1e-3);
     let project = |px: f32, py: f32| -> f32 {
-        let lx = (px - cx) / gw + 0.5;
-        let ly = (py - cy) / gh + 0.5;
-        let proj = (lx - 0.5) * dir_x + (ly - 0.5) * dir_y;
-        (proj + 0.5).clamp(0.0, 1.0)
+        (((px - cx) * dir_x + (py - cy) * dir_y) / l + 0.5).clamp(0.0, 1.0)
     };
     let mk = |px: f32, py: f32| -> Vertex {
         Vertex {

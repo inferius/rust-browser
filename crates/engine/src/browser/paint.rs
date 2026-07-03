@@ -2088,6 +2088,24 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
     // radius. Polygon zatim no-op.
     let (clip_x, clip_y, clip_w, clip_h, clip_radius) = compute_clip_rect(bx);
 
+    // Ellipse clip -> POLYGON teselace (48 segmentu, pct prostor). SDF
+    // rounded-rect s radius=min(rx,ry) delal z elipsy PILULKU (rovne hrany
+    // na delsi ose; docx r.29). Polygon cesta ma edge AA jako star/triangle.
+    // Circle zustava na SDF (rx==ry -> presny kruh, levnejsi).
+    let ellipse_poly: Option<crate::browser::layout::ClipPath> = match &bx.clip_path {
+        Some(crate::browser::layout::ClipPath::Ellipse { cx_pct, cy_pct, rx_pct, ry_pct }) => {
+            const N: usize = 48;
+            let pts: Vec<(f32, f32)> = (0..N).map(|i| {
+                let th = i as f32 / N as f32 * std::f32::consts::TAU;
+                (cx_pct + rx_pct * th.cos(), cy_pct + ry_pct * th.sin())
+            }).collect();
+            Some(crate::browser::layout::ClipPath::Polygon(pts))
+        }
+        _ => None,
+    };
+    let eff_clip: &Option<crate::browser::layout::ClipPath> =
+        if ellipse_poly.is_some() { &ellipse_poly } else { &bx.clip_path };
+
     let with_alpha = |c: [u8; 4]| -> [u8; 4] {
         let a = ((c[3] as u16 * alpha_mul as u16) / 255) as u8;
         let after_alpha = [c[0], c[1], c[2], a];
@@ -2338,7 +2356,7 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         // Solid color pozadi (jen na poslednim/spodnim layeru, parser to zajistuje).
         // Pouziva clip_x/y/w/h/radius stejne jako stara bg_color cesta (circle/ellipse/inset).
         if let Some(bg) = layer.color {
-            if let Some(crate::browser::layout::ClipPath::Polygon(pct_pts)) = &bx.clip_path {
+            if let Some(crate::browser::layout::ClipPath::Polygon(pct_pts)) = eff_clip {
                 let abs_pts: Vec<(f32, f32)> = pct_pts.iter().map(|(xp, yp)| {
                     (bx.rect.x + bx.rect.width * xp, bx.rect.y + bx.rect.height * yp)
                 }).collect();
@@ -2363,7 +2381,7 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
             // clip-path: polygon + LINEAR gradient -> ClippedGradient (gradient
             // clipnuty na tvar polygonu). Pro radial/conic + polygon zatim full
             // box (chybi clipped varianta). Resi az PO tom co se vyhodnotil clip.
-            let poly_clip_linear = match (&bx.clip_path, &g.kind) {
+            let poly_clip_linear = match (eff_clip, &g.kind) {
                 (Some(ClipPath::Polygon(pp)), BgGradientKind::Linear { angle_deg })
                     if g.stops.len() >= 2 && pp.len() >= 3 => Some((pp.clone(), *angle_deg)),
                 _ => None,
@@ -2420,10 +2438,11 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
                     }
                 }
             }
-            // clip-path circle/ellipse/inset -> emit gradient do clip rectu +
-            // clip_radius (rounded-rect SDF = kruh/elipsa/zmenseny rect).
-            let is_poly = matches!(&bx.clip_path, Some(ClipPath::Polygon(_)));
-            let (gx, gy, gw, gh, grad_radius) = if bx.clip_path.is_some() && !is_poly {
+            // clip-path circle/inset -> emit gradient do clip rectu +
+            // clip_radius (rounded-rect SDF = kruh/zmenseny rect). Ellipse jde
+            // polygon cestou (eff_clip).
+            let is_poly = matches!(eff_clip, Some(ClipPath::Polygon(_)));
+            let (gx, gy, gw, gh, grad_radius) = if eff_clip.is_some() && !is_poly {
                 (clip_x, clip_y, clip_w, clip_h, clip_radius)
             } else {
                 (bx.rect.x, bx.rect.y, bx.rect.width, bx.rect.height, bx.border_radius)
@@ -2482,7 +2501,7 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         use crate::browser::layout::{BgGradientKind, ClipPath};
         // clip-path: polygon + LINEAR gradient -> ClippedGradient (gradient
         // clipnuty na tvar polygonu, gradient se pocita per-pixel z world pos).
-        let poly_clip_linear = match (&bx.clip_path, &g.kind) {
+        let poly_clip_linear = match (eff_clip, &g.kind) {
             (Some(ClipPath::Polygon(pp)), BgGradientKind::Linear { angle_deg })
                 if g.stops.len() >= 2 && pp.len() >= 3 => Some((pp.clone(), *angle_deg)),
             _ => None,
@@ -2517,9 +2536,10 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
             }
         };
         let eff_stops = resolve_gradient_stops_for_box(g, bx.rect.width, bx.rect.height);
-        // clip-path circle/ellipse/inset -> emit do clip rectu + clip_radius.
-        let is_poly = matches!(&bx.clip_path, Some(ClipPath::Polygon(_)));
-        let (gx, gy, gw, gh, grad_radius) = if bx.clip_path.is_some() && !is_poly {
+        // clip-path circle/inset -> emit do clip rectu + clip_radius (ellipse
+        // jde polygon cestou pres eff_clip).
+        let is_poly = matches!(eff_clip, Some(ClipPath::Polygon(_)));
+        let (gx, gy, gw, gh, grad_radius) = if eff_clip.is_some() && !is_poly {
             (clip_x, clip_y, clip_w, clip_h, clip_radius)
         } else {
             (bx.rect.x, bx.rect.y, bx.rect.width, bx.rect.height, bx.border_radius)
@@ -2534,7 +2554,7 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
     } else if let Some(bg) = bx.bg_color.filter(|_| !bg_color_handled_by_layers) {
         // Polygon clip-path: emit ClippedRect misto Rect.
         // Renderer aplikuje fan triangulation (convex polygon assumption).
-        if let Some(crate::browser::layout::ClipPath::Polygon(pct_pts)) = &bx.clip_path {
+        if let Some(crate::browser::layout::ClipPath::Polygon(pct_pts)) = eff_clip {
             let abs_pts: Vec<(f32, f32)> = pct_pts.iter().map(|(xp, yp)| {
                 (bx.rect.x + bx.rect.width * xp, bx.rect.y + bx.rect.height * yp)
             }).collect();
